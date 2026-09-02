@@ -64,6 +64,7 @@ describe("POST /api/wait/[token]", () => {
         "x-source": "ci",
         authorization: "Bearer nope",
         cookie: "session=nope",
+        "x-clerk-auth-status": "signed-out",
       }),
       context(),
     );
@@ -80,6 +81,7 @@ describe("POST /api/wait/[token]", () => {
     expect(payload.headers).toMatchObject({ "content-type": "application/json", "x-source": "ci" });
     expect(payload.headers).not.toHaveProperty("authorization");
     expect(payload.headers).not.toHaveProperty("cookie");
+    expect(payload.headers).not.toHaveProperty("x-clerk-auth-status");
   });
 
   it("keeps a non-JSON body as text, and an empty body as null", async () => {

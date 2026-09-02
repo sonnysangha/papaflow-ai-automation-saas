@@ -28,7 +28,8 @@ function headersOf(request: Request): Record<string, string> {
   const headers: Record<string, string> = {};
   request.headers.forEach((value, key) => {
     const name = key.toLowerCase();
-    if (!DROPPED_HEADERS.has(name)) headers[name] = value;
+    // `x-clerk-*` are clerkMiddleware's internal proxy→route headers, not the caller's.
+    if (!DROPPED_HEADERS.has(name) && !name.startsWith("x-clerk-")) headers[name] = value;
   });
   return headers;
 }

@@ -5,7 +5,7 @@ import { getStep, markStep } from "@/lib/engine-client";
 import { featuresForPlan } from "@/lib/plans";
 import { redact } from "@/lib/redact";
 import { openFresh } from "@/lib/vault";
-import { ConnectorError } from "@/nodes/define";
+import { ConnectorError, type AnyNodeDef } from "@/nodes/define";
 import { NODES } from "@/nodes/registry";
 import { resolveTemplates } from "@/nodes/templates";
 import { hookTokenFor, type NodeInput, type NodeResult } from "@/workflows/types";
@@ -26,42 +26,46 @@ import { hookTokenFor, type NodeInput, type NodeResult } from "@/workflows/types
 export async function runNode(input: NodeInput): Promise<NodeResult> {
   "use step";
 
-  const { nodeId, nodeType, executionId, orgId, planSlug, node, outputs, trigger, item } = input;
+  const { nodeId, nodeType, executionId, orgId, planSlug, node, outputs, trigger, item, iteration } =
+    input;
   // Only available inside a real step invocation; `attempt` counts from 1 and rises with retries.
   const { attempt } = getStepMetadata();
 
-  console.log("runNode:start", { executionId, nodeId, nodeType, attempt });
+  console.log("runNode:start", { executionId, nodeId, nodeType, attempt, iteration });
 
   try {
     const def = NODES[nodeType];
     // A graph referencing a node type this deployment does not have will never work: no retries.
     if (!def) throw new FatalError(`Unknown node type: ${nodeType}`);
 
-    const stored = await getStep(executionId, nodeId);
+    // The template context, built once: the run's outputs keyed by node key plus the two reserved
+    // roots — `trigger` (the payload that started the run) and `$item` (the element this pass of a
+    // Loop is on). A template that is exactly one reference keeps the raw type it points at, so
+    // this is also how a node input becomes an object or a number.
+    const context = { ...outputs, trigger: trigger.payload, $item: item };
+
+    // One row per node *per iteration*: a Loop body node that already succeeded on pass 1 must not
+    // hand pass 2 that answer (CLAUDE.md rule 7 still holds — it is the same node, a different step).
+    const stored = await getStep(executionId, nodeId, iteration);
     if (stored?.status === "success") {
-      // Replay: the work is done and the row proves it. `control` is recomputed rather than stored
-      // because it is a pure function of the output and the node definition.
+      // Replay: the work is done and the row proves it. `control` and `items` are recomputed rather
+      // than stored, because both are pure functions of the output, the inputs and the definition —
+      // and a Loop that came back from its own row still has to know what it was iterating.
       return {
         nodeId,
         output: stored.output,
         handle: stored.handle ?? null,
         control: def.control?.(stored.output),
+        ...expansion(def, node.data.inputs, context),
       };
     }
 
-    await markStep({ executionId, orgId, nodeId, nodeType, status: "running", attempt });
+    await markStep({ executionId, orgId, nodeId, nodeType, status: "running", attempt, iteration });
 
     let inputs: unknown;
     try {
-      // `{{ key.path }}` first, schema second. The context is the run's outputs keyed by node key
-      // plus the two reserved roots — `trigger` (the payload that started the run) and `$item` (the
-      // current element, once Loop exists). A template that is exactly one reference keeps the raw
-      // type it points at, so this is also how a node input becomes an object or a number.
-      const { value, warnings } = resolveTemplates(node.data.inputs, {
-        ...outputs,
-        trigger: trigger.payload,
-        $item: item,
-      });
+      // `{{ key.path }}` first, schema second.
+      const { value, warnings } = resolveTemplates(node.data.inputs, context);
       inputs = def.inputs.parse(value);
 
       // Layer three of the plan gate (CLAUDE.md rule 3): the sidebar dims what the org cannot use
@@ -83,7 +87,8 @@ export async function runNode(input: NodeInput): Promise<NodeResult> {
       // The address this node can be resumed at, whether or not it turns out to want one: a node
       // that posts its own buttons (Approval) has to put the token in them, and it only learns
       // that it is suspending by returning `control` — after `run` has already sent the message.
-      const hookToken = hookTokenFor(executionId, nodeId);
+      // Inside a Loop body it is per-pass: two waiting rows may not share a token.
+      const hookToken = hookTokenFor(executionId, nodeId, iteration);
 
       const output: unknown = def.outputs.parse(
         await def.run({ inputs, credential, orgId, executionId, nodeId, hookToken }),
@@ -112,9 +117,14 @@ export async function runNode(input: NodeInput): Promise<NodeResult> {
         // Unresolved paths are configuration mistakes, not failures: the node ran with `""` where
         // the template was, and the row carries the explanation to the canvas.
         warnings,
+        iteration,
       });
 
-      return { nodeId, output, handle, control };
+      // A Loop hands back the list it is iterating: the orchestrator needs the items themselves,
+      // and this is the one place they exist without being copied into a step argument.
+      const items = def.expand?.(inputs);
+
+      return { nodeId, output, handle, control, ...(items ? { items } : {}) };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await markStep({
@@ -126,12 +136,33 @@ export async function runNode(input: NodeInput): Promise<NodeResult> {
         attempt,
         input: redact(inputs),
         error: message,
+        iteration,
       });
       throw asStepError(error, message);
     }
   } finally {
     console.log("runNode:end", { executionId, nodeId, nodeType, attempt });
   }
+}
+
+/**
+ * The `{ items }` a Loop returns on the replay path, or `{}` for every other node.
+ *
+ * The list is not on the step row — the row holds the node's output, and a Loop's output is its
+ * `results` — so a step that short-circuits on an already-successful row has to work it out again.
+ * It can: `expand` is pure, and the template context on a replay is the same one that produced the
+ * row in the first place, so the same items come back. A definition that has no `expand` (every
+ * node but Loop) contributes nothing, and the returned object stays exactly `NodeResult`.
+ */
+function expansion(
+  def: AnyNodeDef,
+  raw: Record<string, unknown>,
+  context: Record<string, unknown>,
+): { items?: unknown[] } {
+  if (!def.expand) return {};
+
+  const { value } = resolveTemplates(raw, context);
+  return { items: def.expand(def.inputs.parse(value)) };
 }
 
 /**

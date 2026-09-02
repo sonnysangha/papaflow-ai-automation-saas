@@ -15,9 +15,15 @@ export type Trigger = { type: string; payload: unknown };
 export type RunInput = { executionId: string; orgId: string; planSlug: string; graph: RunGraph; trigger: Trigger };
 // `outputs` is keyed by node key, and `trigger`/`item` are the two reserved template roots: the
 // step resolves `node.data.inputs` against `{ ...outputs, trigger: trigger.payload, $item: item }`.
-export type NodeInput = { nodeId: string; nodeType: string; executionId: string; orgId: string; planSlug: string; node: RunNode; outputs: Record<string, unknown>; trigger: Trigger; item?: unknown };
+// `iteration` is the 0-based pass a Loop is on: it is part of the step's identity (one `steps` row
+// per node *per iteration*), which is what stops the idempotency guard in `runNode` from handing
+// pass 2 the output pass 1 stored. Nodes outside a loop body leave it undefined.
+export type NodeInput = { nodeId: string; nodeType: string; executionId: string; orgId: string; planSlug: string; node: RunNode; outputs: Record<string, unknown>; trigger: Trigger; item?: unknown; iteration?: number };
 export type Control = { kind: "sleep"; ms: number } | { kind: "hook" } | undefined;
-export type NodeResult = { nodeId: string; output: unknown; handle: string | null; control: Control };
+// `items` is only set by a node that expands the run (Loop): the normalised list the orchestrator
+// iterates. It rides on the step's *return* value rather than its arguments, so nothing has to
+// carry a copy of the data into every body step (CLAUDE.md rule 1: step arguments are recorded).
+export type NodeResult = { nodeId: string; output: unknown; handle: string | null; control: Control; items?: unknown[] };
 export type HookPayload = Record<string, unknown>;
 
 /**
@@ -29,6 +35,10 @@ export type HookPayload = Record<string, unknown>;
  * It lives here because both sides need it and this module has no imports: `"use workflow"` code
  * may not reach into `lib/`, which is where the Node-only resume half lives.
  */
-export function hookTokenFor(executionId: string, nodeId: string): string {
-  return `${executionId}:${nodeId}`;
+export function hookTokenFor(executionId: string, nodeId: string, iteration?: number): string {
+  // A node on a loop body suspends once per pass, and each pass needs an address of its own —
+  // `steps.by_hookToken` is a unique lookup, so two waiting rows may never share a token.
+  return iteration === undefined
+    ? `${executionId}:${nodeId}`
+    : `${executionId}:${nodeId}:${iteration}`;
 }

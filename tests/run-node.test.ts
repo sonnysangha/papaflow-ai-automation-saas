@@ -541,3 +541,123 @@ describe("runNode templates", () => {
     expect(markStepMock.mock.calls[1][0]).toMatchObject({ status: "failed" });
   });
 });
+
+/**
+ * A node on a Loop body runs once per item, so "the step row for this node" is no longer enough to
+ * identify it: `iteration` is part of the row's address. Without that, the guard above — which is
+ * what makes a step safe to re-run (CLAUDE.md rule 7) — would hand pass 2 the answer pass 1 stored.
+ */
+describe("runNode inside a loop body", () => {
+  const onItem = (rest: Partial<NodeInput>) =>
+    nodeInput({ url: "https://api.example.com/{{ $item.id }}" }, rest);
+
+  it("looks up, and writes, the row for this pass", async () => {
+    await runNode(onItem({ item: { id: "b" }, iteration: 1 }));
+
+    expect(getStepMock).toHaveBeenCalledWith("exec_1", "n1", 1);
+    expect(markStepMock.mock.calls[0][0]).toMatchObject({ status: "running", iteration: 1 });
+    expect(markStepMock.mock.calls[1][0]).toMatchObject({ status: "success", iteration: 1 });
+  });
+
+  it("does not short-circuit a later pass with an earlier one's output", async () => {
+    // The row for pass 0 exists and succeeded; pass 1 has no row yet, and must actually run.
+    getStepMock.mockImplementation(async (_executionId, _nodeId, iteration) =>
+      iteration === 0 ? storedStep({ status: "success", output: { ok: false } }) : null,
+    );
+
+    const first = await runNode(onItem({ item: { id: "a" }, iteration: 0 }));
+    const second = await runNode(onItem({ item: { id: "b" }, iteration: 1 }));
+
+    expect(first.output).toEqual({ ok: false });
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls[0][0].inputs.url).toBe("https://api.example.com/b");
+    expect(second.output).toEqual({ ok: true });
+  });
+
+  it("still returns the stored output when this very pass already succeeded", async () => {
+    getStepMock.mockResolvedValue(storedStep({ status: "success", output: { ok: true } }));
+
+    const result = await runNode(onItem({ item: { id: "a" }, iteration: 2 }));
+
+    expect(run).not.toHaveBeenCalled();
+    expect(result.output).toEqual({ ok: true });
+  });
+
+  it("gives each pass a hook token of its own", async () => {
+    installNode({ control: () => ({ kind: "hook" }) });
+
+    await runNode(onItem({ item: { id: "a" }, iteration: 3 }));
+
+    // `steps.by_hookToken` is a unique lookup: two waiting rows may not share an address.
+    expect(run.mock.calls[0][0]).toMatchObject({ hookToken: "exec_1:n1:3" });
+    expect(markStepMock.mock.calls[1][0]).toMatchObject({
+      status: "waiting",
+      hookToken: "exec_1:n1:3",
+      iteration: 3,
+    });
+  });
+
+  it("records a failed pass against its own row", async () => {
+    run.mockRejectedValue(new ConnectorError("Not found", 404));
+
+    await runNode(onItem({ item: { id: "a" }, iteration: 1 })).catch(() => undefined);
+
+    expect(markStepMock.mock.calls[1][0]).toMatchObject({ status: "failed", iteration: 1 });
+  });
+});
+
+/**
+ * The Loop hand-off: a node that expands the run returns the list it is iterating alongside its
+ * output, because the orchestrator cannot ask a step for anything else.
+ */
+describe("runNode expansion", () => {
+  /** A stand-in Loop: `items` in, a count out, the list on the side. */
+  function installLoop(): void {
+    installNode({
+      inputs: z.object({ items: z.any() }),
+      outputs: z.object({ count: z.number() }),
+      expand: (inputs: { items: unknown[] }) => inputs.items,
+      run: vi.fn(async (ctx: RunContext<{ items: unknown[] }>) => ({
+        count: ctx.inputs.items.length,
+      })),
+    });
+  }
+
+  it("returns the items a node expands into, resolved from the run's outputs", async () => {
+    installLoop();
+
+    const result = await runNode(
+      nodeInput(
+        { items: "{{ http_request_1.body }}" },
+        { outputs: { http_request_1: { body: [{ id: 1 }, { id: 2 }] } } },
+      ),
+    );
+
+    expect(result.items).toEqual([{ id: 1 }, { id: 2 }]);
+    expect(result.output).toEqual({ count: 2 });
+  });
+
+  it("recomputes them for a replay that came back off its own step row", async () => {
+    installLoop();
+    // The row holds the loop's *output*, never the list — so the guard has to work it out again,
+    // or the body would run zero times after a retry.
+    getStepMock.mockResolvedValue(storedStep({ status: "success", output: { count: 2 } }));
+
+    const result = await runNode(
+      nodeInput(
+        { items: "{{ http_request_1.body }}" },
+        { outputs: { http_request_1: { body: [{ id: 1 }, { id: 2 }] } } },
+      ),
+    );
+
+    expect(markStepMock).not.toHaveBeenCalled();
+    expect(result.output).toEqual({ count: 2 });
+    expect(result.items).toEqual([{ id: 1 }, { id: 2 }]);
+  });
+
+  it("leaves `items` off every node that does not expand", async () => {
+    const result = await runNode(nodeInput({ url: "https://api.example.com/things" }));
+
+    expect(result.items).toBeUndefined();
+  });
+});

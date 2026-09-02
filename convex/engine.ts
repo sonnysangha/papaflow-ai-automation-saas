@@ -120,9 +120,19 @@ export const setRunId = mutation({
   },
 });
 
-/** The stored step for a node, so a replayed step can return its output instead of re-running it. */
+/**
+ * The stored step for a node, so a replayed step can return its output instead of re-running it.
+ *
+ * `iteration` is part of the address, not a filter: a node on a Loop body has one row per pass, and
+ * asking without one means "the row for a node that runs once".
+ */
 export const getStep = query({
-  args: { secret: v.string(), executionId: v.id("executions"), nodeId: v.string() },
+  args: {
+    secret: v.string(),
+    executionId: v.id("executions"),
+    nodeId: v.string(),
+    iteration: v.optional(v.number()),
+  },
   returns: v.union(schema.doc("steps"), v.null()),
   handler: async (ctx, { secret, ...args }): Promise<Doc<"steps"> | null> => {
     guard(secret);

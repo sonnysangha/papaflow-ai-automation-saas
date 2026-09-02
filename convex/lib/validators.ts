@@ -68,6 +68,8 @@ export const stepMarkArgs = {
   warnings: v.optional(v.array(v.string())),
   handle: v.optional(v.string()),
   hookToken: v.optional(v.string()),
+  /** The Loop pass this row belongs to; absent for a node that runs once. Part of its identity. */
+  iteration: v.optional(v.number()),
 } as const;
 
 /** One execution row, as the engine creates it at run start. */

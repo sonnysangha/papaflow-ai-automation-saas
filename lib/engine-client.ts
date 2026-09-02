@@ -84,12 +84,17 @@ export async function setRunId(executionId: string, runId: string): Promise<void
   });
 }
 
-export async function getStep(executionId: string, nodeId: string): Promise<StoredStep> {
+export async function getStep(
+  executionId: string,
+  nodeId: string,
+  iteration?: number,
+): Promise<StoredStep> {
   const { client, secret } = engineClient();
   return await client.query(api.engine.getStep, {
     secret,
     executionId: executionRef(executionId),
     nodeId,
+    iteration,
   });
 }
 

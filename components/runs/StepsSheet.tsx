@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
@@ -66,6 +66,24 @@ function stepLabel(step: Step): string {
   return NODES[step.nodeType]?.name ?? step.nodeType;
 }
 
+/**
+ * How many rows each node has in this run — one, unless it is on a Loop body, where it has one per
+ * pass. Used as the denominator of "Set · 2/3", so a run still going shows the passes so far.
+ */
+function passCounts(steps: readonly Step[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const step of steps) {
+    if (step.iteration === undefined) continue;
+    counts[step.nodeId] = (counts[step.nodeId] ?? 0) + 1;
+  }
+  return counts;
+}
+
+/** `2/3` for the second of three passes over a loop body; nothing for a node that runs once. */
+function passLabel(step: Step, passes: number): string | null {
+  return step.iteration === undefined ? null : `${step.iteration + 1}/${Math.max(passes, 1)}`;
+}
+
 function JsonBlock({ label, value }: { label: string; value: unknown }) {
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-1">
@@ -119,9 +137,10 @@ function StepDetail({ step }: { step: Step }) {
   );
 }
 
-function StepRows({ step }: { step: Step }) {
+function StepRows({ step, passes }: { step: Step; passes: number }) {
   const [open, setOpen] = useState(false);
   const detailId = `step-detail-${step._id}`;
+  const pass = passLabel(step, passes);
 
   return (
     <>
@@ -142,6 +161,11 @@ function StepRows({ step }: { step: Step }) {
         </TableCell>
         <TableCell>
           <span className="font-medium">{stepLabel(step)}</span>
+          {pass ? (
+            <span className="ml-2 text-xs text-muted-foreground tabular-nums" title="Loop pass">
+              · {pass}
+            </span>
+          ) : null}
           <span className="ml-2 font-mono text-xs text-muted-foreground" title={step.nodeId}>
             {step.nodeId.slice(0, 8)}
           </span>
@@ -191,6 +215,8 @@ export function StepsSheet({
   onClosed,
 }: StepsSheetProps) {
   const steps = useQuery(api.steps.byExecution, { executionId });
+  // One pass count per node, computed once for the whole table rather than per row.
+  const passes = useMemo(() => passCounts(steps ?? []), [steps]);
 
   return (
     <Sheet
@@ -204,7 +230,7 @@ export function StepsSheet({
         <SheetHeader>
           <SheetTitle>Run steps</SheetTitle>
           <SheetDescription>
-            {summary ?? "One row per node, oldest first."}
+            {summary ?? "One row per node, oldest first; a loop body has one per pass."}
           </SheetDescription>
         </SheetHeader>
 
@@ -235,7 +261,7 @@ export function StepsSheet({
               </TableHeader>
               <TableBody>
                 {steps.map((step) => (
-                  <StepRows key={step._id} step={step} />
+                  <StepRows key={step._id} step={step} passes={passes[step.nodeId] ?? 0} />
                 ))}
               </TableBody>
             </Table>

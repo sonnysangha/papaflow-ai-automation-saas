@@ -9,8 +9,30 @@ import schema from "./schema";
 /** Statuses that end a step: they stamp `finishedAt`. Every other status clears it again. */
 const TERMINAL: ReadonlySet<StepStatus> = new Set<StepStatus>(["success", "failed", "skipped"]);
 
-/** The one step row for a node in a run, or null. `by_execution_node` makes this a point lookup. */
+/**
+ * The one step row for a node in a run, or null. `by_execution_node` makes this a point lookup.
+ *
+ * A node runs once, so "the row for this node" is normally unambiguous — except on a Loop body,
+ * where the same node runs once per item. `iteration` is therefore part of the key rather than a
+ * detail on the row: pass 2 looks up pass 2, and a node outside a loop looks up the row whose
+ * `iteration` is absent (`undefined` is a value the index stores and matches like any other).
+ */
 async function stepFor(
+  ctx: QueryCtx,
+  executionId: Id<"executions">,
+  nodeId: string,
+  iteration?: number,
+): Promise<Doc<"steps"> | null> {
+  return await ctx.db
+    .query("steps")
+    .withIndex("by_execution_node", (q) =>
+      q.eq("executionId", executionId).eq("nodeId", nodeId).eq("iteration", iteration),
+    )
+    .unique();
+}
+
+/** Whether this node has any row in this run at all, whichever pass wrote it. */
+async function anyStepFor(
   ctx: QueryCtx,
   executionId: Id<"executions">,
   nodeId: string,
@@ -18,7 +40,7 @@ async function stepFor(
   return await ctx.db
     .query("steps")
     .withIndex("by_execution_node", (q) => q.eq("executionId", executionId).eq("nodeId", nodeId))
-    .unique();
+    .first();
 }
 
 /**
@@ -33,9 +55,14 @@ async function executionInOrg(ctx: QueryCtx, executionId: Id<"executions">, orgI
 
 /** The stored step, which `runNode` reads to short-circuit a replayed step (CLAUDE.md rule 7). */
 export const get = internalQuery({
-  args: { executionId: v.id("executions"), nodeId: v.string() },
+  args: {
+    executionId: v.id("executions"),
+    nodeId: v.string(),
+    iteration: v.optional(v.number()),
+  },
   returns: v.union(schema.doc("steps"), v.null()),
-  handler: async (ctx, { executionId, nodeId }) => await stepFor(ctx, executionId, nodeId),
+  handler: async (ctx, { executionId, nodeId, iteration }) =>
+    await stepFor(ctx, executionId, nodeId, iteration),
 });
 
 /**
@@ -78,10 +105,11 @@ export const byHookToken = internalQuery({
 });
 
 /**
- * Upsert of the one row per execution+node. A step is written at least twice (running → success)
- * and re-runs on retry, so this patches in place: `startedAt` is kept from the first insert and
- * only the fields the caller actually sent are written (a `running` mark never wipes the output of
- * the attempt before it).
+ * Upsert of the one row per execution+node+iteration. A step is written at least twice
+ * (running → success) and re-runs on retry, so this patches in place: `startedAt` is kept from the
+ * first insert and only the fields the caller actually sent are written (a `running` mark never
+ * wipes the output of the attempt before it). A Loop body node sends an `iteration`, and each pass
+ * therefore gets a row of its own rather than overwriting the last one.
  */
 export const mark = internalMutation({
   args: stepMarkArgs,
@@ -92,7 +120,7 @@ export const mark = internalMutation({
 
     const now = Date.now();
     const finishedAt = TERMINAL.has(status) ? now : undefined;
-    const existing = await stepFor(ctx, executionId, nodeId);
+    const existing = await stepFor(ctx, executionId, nodeId, args.iteration);
 
     if (!existing) {
       return await ctx.db.insert("steps", {
@@ -108,6 +136,7 @@ export const mark = internalMutation({
         warnings: args.warnings,
         handle: args.handle,
         hookToken: args.hookToken,
+        iteration: args.iteration,
         startedAt: now,
         finishedAt,
       });
@@ -115,6 +144,7 @@ export const mark = internalMutation({
 
     // `undefined` in a patch removes the field, so optional values are only included when sent —
     // except `finishedAt`, which is meant to be cleared when a finished step goes back to running.
+    // `iteration` is never patched: it is part of the key this row was found by.
     const patch: Partial<Doc<"steps">> = { nodeType, status, attempt, finishedAt };
     if (args.input !== undefined) patch.input = args.input;
     if (args.output !== undefined) patch.output = args.output;
@@ -149,7 +179,8 @@ export const markSkipped = internalMutation({
     const now = Date.now();
     let inserted = 0;
     for (const nodeId of new Set(nodeIds)) {
-      if (await stepFor(ctx, executionId, nodeId)) continue;
+      // Any row at all: a loop body node that ran has one per pass, and none of them is `skipped`.
+      if (await anyStepFor(ctx, executionId, nodeId)) continue;
       await ctx.db.insert("steps", {
         orgId,
         executionId,

@@ -132,9 +132,17 @@ export function Editor({
 
   // One entry per node the latest run touched: the status the ring shows, the branch handle the
   // canvas dims the other edges from, and the output the variable picker reads real paths off.
+  //
+  // A node on a Loop body has one row per pass, so the canvas paints the latest of them: the ring
+  // follows the item being worked on rather than freezing on the first one. Rows arrive in creation
+  // order, and `iteration` breaks the tie explicitly.
   const runByNode = useMemo(() => {
     const byNode: Record<string, RunNodeState> = {};
+    const passes: Record<string, number> = {};
     for (const step of steps ?? []) {
+      const pass = step.iteration ?? 0;
+      if (byNode[step.nodeId] && pass < passes[step.nodeId]) continue;
+      passes[step.nodeId] = pass;
       byNode[step.nodeId] = { status: step.status, handle: step.handle, output: step.output };
     }
     return byNode;

@@ -14,6 +14,7 @@ import { llmNode } from "./ai/llm";
 import { categoryOrder } from "./categories";
 import type { AnyNodeDef, NodeCategory } from "./define";
 import { conditionNode } from "./logic/condition";
+import { loopNode } from "./logic/loop";
 import { setNode } from "./logic/set";
 import { switchNode } from "./logic/switch";
 import { waitNode } from "./logic/wait";
@@ -37,6 +38,7 @@ const DEFINITIONS: readonly AnyNodeDef[] = [
   setNode,
   waitNode,
   waitForWebhookNode,
+  loopNode,
   llmNode,
   extractNode,
   classifyNode,

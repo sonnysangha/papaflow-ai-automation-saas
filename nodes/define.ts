@@ -50,6 +50,16 @@ export interface NodeDef<I extends z.ZodType = z.ZodType, O extends z.ZodType = 
   /** Condition/Switch return the id of the edge handle to follow. */
   handle?: (out: z.infer<O>) => string | null;
   control?: (out: z.infer<O>) => Control;
+  /**
+   * The items this node expands the run into — Loop, and nothing else so far.
+   *
+   * A node's `run` is one step and a step cannot contain other steps, so a node that repeats part
+   * of the graph can only describe the repetition: `runNode` calls this with the resolved inputs
+   * and returns the list alongside the output, and `runGraph` runs the body once per item with
+   * `{{ $item }}` bound to it. Pure and cheap — it is recomputed rather than stored, so a replayed
+   * step that short-circuits on its own step row still knows what it was iterating.
+   */
+  expand?: (inputs: z.infer<I>) => unknown[];
   run: (ctx: RunContext<z.infer<I>>) => Promise<z.infer<O>>;
 }
 

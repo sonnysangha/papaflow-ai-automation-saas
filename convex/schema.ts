@@ -71,12 +71,17 @@ export default defineSchema({
     warnings: v.optional(v.array(v.string())),
     handle: v.optional(v.string()),
     hookToken: v.optional(v.string()),
+    // The 0-based pass a Loop body node is on, absent for every node that runs once. It is part of
+    // the row's identity: `by_execution_node` includes it, so pass 2 gets its own row instead of
+    // overwriting pass 1 — and so `runNode`'s "already succeeded" guard cannot short-circuit an
+    // iteration with the previous one's output.
+    iteration: v.optional(v.number()),
     parentStepId: v.optional(v.id("steps")),
     startedAt: v.number(),
     finishedAt: v.optional(v.number()),
   })
     .index("by_execution", ["executionId"])
-    .index("by_execution_node", ["executionId", "nodeId"])
+    .index("by_execution_node", ["executionId", "nodeId", "iteration"])
     .index("by_org", ["orgId"])
     .index("by_hookToken", ["hookToken"]),
 

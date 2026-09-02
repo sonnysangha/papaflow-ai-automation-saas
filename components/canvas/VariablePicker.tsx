@@ -16,6 +16,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { cn } from "@/lib/utils";
 import { outputPaths, type OutputPath } from "@/nodes/paths";
 import { NODES } from "@/nodes/registry";
+import { loopFor } from "@/workflows/graph";
 
 import { upstreamNodeIds, type WorkflowNodeType } from "./graph-io";
 import { pathsFromValue } from "./paths-from-value";
@@ -64,8 +65,9 @@ function prefixed(root: string, paths: VariableEntry[]): VariableEntry[] {
 
 /**
  * What the picker offers for one node: every ancestor's output, nearest first, plus the reserved
- * `trigger` root. Each group leads with the node itself (`{{ key }}` is the whole output) and then
- * its paths — the ones its `outputs` schema declares, followed by the ones the latest run showed.
+ * roots — `trigger` always, and `$item` when this node sits on a Loop body. Each group leads with
+ * the node itself (`{{ key }}` is the whole output) and then its paths — the ones its `outputs`
+ * schema declares, followed by the ones the latest run showed.
  */
 export function buildVariableGroups({
   nodeId,
@@ -93,6 +95,20 @@ export function buildVariableGroups({
         { path: upstream.data.key, type: "object", observed: false },
         ...prefixed(upstream.data.key, paths),
       ],
+    });
+  }
+
+  // `$item` is the other reserved root, and unlike `trigger` it only exists somewhere: on the body
+  // of a Loop, where every node runs once per element. `loopFor` is the same pure helper the
+  // orchestrator uses to decide what a body is, so the picker offers `{{ $item }}` exactly where
+  // the run will resolve it.
+  // No sub-paths: the item is whatever the loop's list holds, and no step row records it — the
+  // author knows its shape, and `{{ $item.name }}` can be typed on from here.
+  if (loopFor({ nodes: Object.fromEntries(byId), edges }, nodeId)) {
+    groups.push({
+      key: "$item",
+      label: "Loop item",
+      entries: [{ path: "$item", type: "any", observed: false }],
     });
   }
 

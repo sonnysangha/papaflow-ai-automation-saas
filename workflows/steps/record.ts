@@ -48,10 +48,11 @@ export async function recordResume(
   nodeId: string,
   output: unknown,
   handle?: string | null,
+  iteration?: number,
 ): Promise<void> {
   "use step";
 
-  const stored = await getStep(executionId, nodeId);
+  const stored = await getStep(executionId, nodeId, iteration);
   // The row is written before the workflow ever suspends, so its absence is a bug, not a race.
   if (!stored) throw new FatalError(`no step row to resume for node ${nodeId}`);
 
@@ -64,5 +65,35 @@ export async function recordResume(
     attempt: stored.attempt,
     output,
     handle: handle ?? stored.handle ?? undefined,
+    iteration,
+  });
+}
+
+/**
+ * Closes a Loop with what its iterations actually produced.
+ *
+ * A Loop's `run` can only report how many items it found — the passes happen afterwards, in the
+ * orchestrator, one body step at a time — so its step row is written twice: `{ results: [], count }`
+ * when the node ran, and this once the body has finished. Downstream templates read the second one
+ * (`{{ loop_1.results }}`), and the runs drawer shows a Loop that explains itself.
+ */
+export async function recordLoop(
+  executionId: string,
+  nodeId: string,
+  output: { results: unknown[]; count: number },
+): Promise<void> {
+  "use step";
+
+  const stored = await getStep(executionId, nodeId);
+  if (!stored) throw new FatalError(`no step row to close for loop ${nodeId}`);
+
+  await markStep({
+    executionId,
+    orgId: stored.orgId,
+    nodeId,
+    nodeType: stored.nodeType,
+    status: "success",
+    attempt: stored.attempt,
+    output,
   });
 }

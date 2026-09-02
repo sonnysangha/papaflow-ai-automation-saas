@@ -271,6 +271,123 @@ describe("api.engine", () => {
     expect(retried[0].output).toEqual({ status: 200 });
   });
 
+  test("a loop body node gets one row per pass, and getStep addresses them separately", async () => {
+    const { t, workflowId } = await setup();
+    const executionId = await createExecution({ t, workflowId });
+
+    // Three passes of the same node, exactly as `runNode` writes them inside a Loop.
+    for (const iteration of [0, 1, 2]) {
+      await t.mutation(api.engine.markStep, {
+        secret: SECRET,
+        executionId,
+        orgId: ORG,
+        nodeId: "body",
+        nodeType: "logic.set",
+        status: "success",
+        attempt: 1,
+        output: { item: iteration },
+        iteration,
+      });
+    }
+
+    const rows = await t.run(async (ctx) => await ctx.db.query("steps").collect());
+    expect(rows).toHaveLength(3);
+    expect(rows.map((row) => row.iteration)).toEqual([0, 1, 2]);
+
+    // Each pass is its own address: this is what stops `runNode`'s guard from handing pass 2 the
+    // answer pass 1 stored.
+    const second = await t.query(api.engine.getStep, {
+      secret: SECRET,
+      executionId,
+      nodeId: "body",
+      iteration: 1,
+    });
+    expect(second).toMatchObject({ status: "success", output: { item: 1 }, iteration: 1 });
+
+    // …and a pass that has not happened yet has no row, however many earlier ones there are.
+    expect(
+      await t.query(api.engine.getStep, {
+        secret: SECRET,
+        executionId,
+        nodeId: "body",
+        iteration: 3,
+      }),
+    ).toBeNull();
+
+    // The same pass marked again patches its own row rather than adding a fourth.
+    await t.mutation(api.engine.markStep, {
+      secret: SECRET,
+      executionId,
+      orgId: ORG,
+      nodeId: "body",
+      nodeType: "logic.set",
+      status: "running",
+      attempt: 2,
+      iteration: 1,
+    });
+    const patched = await t.run(async (ctx) => await ctx.db.query("steps").collect());
+    expect(patched).toHaveLength(3);
+    expect(patched.find((row) => row.iteration === 1)).toMatchObject({
+      status: "running",
+      attempt: 2,
+    });
+  });
+
+  test("a node without an iteration is a different row from any of its passes", async () => {
+    const { t, workflowId } = await setup();
+    const executionId = await createExecution({ t, workflowId });
+
+    for (const iteration of [undefined, 0]) {
+      await t.mutation(api.engine.markStep, {
+        secret: SECRET,
+        executionId,
+        orgId: ORG,
+        nodeId: "n2",
+        nodeType: "http.request",
+        status: "success",
+        attempt: 1,
+        output: { iteration: iteration ?? null },
+        iteration,
+      });
+    }
+
+    const rows = await t.run(async (ctx) => await ctx.db.query("steps").collect());
+    expect(rows).toHaveLength(2);
+
+    // Asking without one means "the row for a node that runs once", not "the first row".
+    const once = await t.query(api.engine.getStep, { secret: SECRET, executionId, nodeId: "n2" });
+    expect(once).toMatchObject({ output: { iteration: null } });
+    expect(once?.iteration).toBeUndefined();
+  });
+
+  test("markSkipped leaves a node alone when any pass of it ran", async () => {
+    const { t, workflowId } = await setup();
+    const executionId = await createExecution({ t, workflowId });
+
+    await t.mutation(api.engine.markStep, {
+      secret: SECRET,
+      executionId,
+      orgId: ORG,
+      nodeId: "body",
+      nodeType: "logic.set",
+      status: "success",
+      attempt: 1,
+      iteration: 0,
+    });
+
+    await t.mutation(api.engine.markSkipped, {
+      secret: SECRET,
+      executionId,
+      orgId: ORG,
+      nodeIds: ["body", "never"],
+    });
+
+    const rows = await t.run(async (ctx) => await ctx.db.query("steps").collect());
+    expect(rows).toHaveLength(2);
+    expect(rows.find((row) => row.nodeId === "body")?.status).toBe("success");
+    expect(rows.find((row) => row.nodeId === "never")?.status).toBe("skipped");
+  });
+
   test("getStep is null before the first mark, and markStep is scoped to the execution's org", async () => {
     const { t, workflowId } = await setup();
     const executionId = await createExecution({ t, workflowId });

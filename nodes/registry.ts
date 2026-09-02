@@ -9,6 +9,7 @@ import { conditionNode } from "./logic/condition";
 import { setNode } from "./logic/set";
 import { switchNode } from "./logic/switch";
 import { toJsonSchema, type JsonSchema } from "./schema";
+import { formTriggerNode } from "./triggers/form";
 import { manualTrigger } from "./triggers/manual";
 import { stripeEventTriggerNode } from "./triggers/stripe-event";
 import { telegramMessageTriggerNode } from "./triggers/telegram-message";
@@ -18,6 +19,7 @@ import { webhookTriggerNode } from "./triggers/webhook";
 const DEFINITIONS: readonly AnyNodeDef[] = [
   manualTrigger,
   webhookTriggerNode,
+  formTriggerNode,
   telegramMessageTriggerNode,
   stripeEventTriggerNode,
   conditionNode,

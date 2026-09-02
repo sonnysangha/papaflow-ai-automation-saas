@@ -33,12 +33,13 @@ describe("node registry", () => {
 
   it("builds a catalogue for a plan's features", () => {
     const catalogue = nodeCatalogue(["core_connectors"]);
-    expect(catalogue).toHaveLength(12);
+    expect(catalogue).toHaveLength(13);
     expect(catalogue.map((entry) => entry.type).sort()).toEqual([
       "ai.classify",
       "ai.extract",
       "ai.llm",
       "email.send",
+      "form.trigger",
       "http.request",
       "logic.condition",
       "logic.set",
@@ -77,6 +78,7 @@ describe("node registry", () => {
       "trigger",
       "trigger",
       "trigger",
+      "trigger",
       "logic",
       "logic",
       "logic",
@@ -90,7 +92,7 @@ describe("node registry", () => {
 
   it("still allows nodes whose requiresFeature is null when the org has no features", () => {
     const catalogue = nodeCatalogue([]);
-    expect(catalogue).toHaveLength(12);
+    expect(catalogue).toHaveLength(13);
     for (const entry of catalogue) {
       expect(entry.requiresFeature).toBeNull();
       expect(entry.allowed).toBe(true);

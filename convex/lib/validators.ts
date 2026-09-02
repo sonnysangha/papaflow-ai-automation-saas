@@ -16,6 +16,38 @@ export type StepStatus = typeof stepStatusValidator.type;
 export type Trigger = typeof triggerValidator.type;
 
 /**
+ * The AES-256-GCM envelope `lib/vault.ts` produces (`{ v, keyId, iv, tag, ct }`, all base64), as
+ * stored on `connections.secret`. Convex never sees the plaintext: sealing happens in Node before
+ * the row is written and opening happens inside a `"use step"` (CLAUDE.md rules 1 and 2).
+ */
+export const sealedValidator = schema.tables.connections.validator.fields.secret;
+export const connectionKindValidator = schema.tables.connections.validator.fields.kind;
+export const connectionStatusValidator = schema.tables.connections.validator.fields.status;
+
+export type Sealed = typeof sealedValidator.type;
+export type ConnectionKind = typeof connectionKindValidator.type;
+export type ConnectionStatus = typeof connectionStatusValidator.type;
+
+/**
+ * One connection row as `/api/connections` creates it — everything except the secret.
+ *
+ * The secret cannot be part of this: it is sealed with AAD `${orgId}:${connectionId}`, so it can
+ * only be written once the row exists and its id is known. `create` therefore inserts a placeholder
+ * and `patchSecret` fills it in.
+ */
+export const connectionCreateArgs = {
+  orgId: v.string(),
+  createdBy: v.string(),
+  provider: v.string(),
+  kind: connectionKindValidator,
+  label: v.string(),
+  hint: v.string(),
+  /** Connector-supplied, non-secret: `{ models, fetchedAt, … }`. Projected through `safeMeta`. */
+  meta: v.any(),
+  requiresFeature: v.optional(v.string()),
+} as const;
+
+/**
  * One step upsert. `api.engine.markStep` takes exactly these plus `secret`, and hands them to
  * `internal.steps.mark`; declaring them once means the two can never drift apart.
  *

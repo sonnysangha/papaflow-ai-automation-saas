@@ -1,5 +1,6 @@
 import { ConvexHttpClient } from "convex/browser";
-import type { FunctionArgs, FunctionReference, FunctionReturnType } from "convex/server";
+import type { FunctionArgs, FunctionReturnType } from "convex/server";
+import { FatalError } from "workflow";
 import { start } from "workflow/api";
 
 import { api } from "@/convex/_generated/api";
@@ -131,35 +132,102 @@ export async function finishExecution(
  * (`orgId` is half the AAD) and to decide whether it is usable. `lib/vault.ts#openFresh` is the only
  * caller — nothing else should ever hold a sealed secret (CLAUDE.md rule 1).
  */
-export type ConnectionSealed = {
-  orgId: string;
-  provider: string;
-  kind: string;
-  secret: Sealed;
-  expiresAt?: number;
-  status: "active" | "needs_reconnect" | "revoked";
-};
+export type ConnectionSealed = NonNullable<
+  FunctionReturnType<typeof api.engine.getConnectionSealed>
+>;
+
+/** One `createConnection` call: everything about a connection except the secret. */
+export type CreateConnectionInput = Omit<
+  FunctionArgs<typeof api.engine.createConnection>,
+  "secret"
+>;
+
+/** `active` | `needs_reconnect` | `revoked`, taken from the table's own union. */
+export type ConnectionStatus = FunctionArgs<typeof api.engine.setConnectionStatus>["status"];
+
+/** Ids cross a route or step boundary as plain strings; Convex wants its branded ids back. */
+function connectionRef(connectionId: string): Id<"connections"> {
+  return connectionId as Id<"connections">;
+}
 
 /**
- * TODO(phase4-task3): `convex/engine.ts` does not export `getConnectionSealed` yet, so the generated
- * `api.engine` has no such member and the reference is described here instead. Delete this type and
- * the cast below the moment the Convex query lands; the wrapper's signature does not change.
+ * The sealed credential row for a connection. Secret-checked on the Convex side, like the rest.
+ *
+ * A deleted connection is a `FatalError`: a step cannot retry its way to a credential the user
+ * removed, and neither can the retest route.
  */
-type EngineApi = typeof api.engine & {
-  getConnectionSealed: FunctionReference<
-    "query",
-    "public",
-    { secret: string; connectionId: string },
-    ConnectionSealed
-  >;
-};
-
-/** The sealed credential row for a connection. Secret-checked on the Convex side, like the rest. */
 export async function getConnectionSealed(connectionId: string): Promise<ConnectionSealed> {
   const { client, secret } = engineClient();
-  return await client.query((api.engine as EngineApi).getConnectionSealed, {
+  const row = await client.query(api.engine.getConnectionSealed, {
     secret,
-    connectionId,
+    connectionId: connectionRef(connectionId),
+  });
+
+  if (!row) throw new FatalError("Connection not found");
+  return row;
+}
+
+/** Inserts the row so its id can become half of the AAD the secret is sealed with. */
+export async function createConnection(args: CreateConnectionInput): Promise<Id<"connections">> {
+  const { client, secret } = engineClient();
+  return await client.mutation(api.engine.createConnection, { secret, ...args });
+}
+
+/** Stores the sealed credential (and activates the row). `sealed` is ciphertext. */
+export async function patchConnectionSecret(args: {
+  connectionId: string;
+  orgId: string;
+  sealed: Sealed;
+}): Promise<void> {
+  const { client, secret } = engineClient();
+  await client.mutation(api.engine.patchConnectionSecret, {
+    secret,
+    connectionId: connectionRef(args.connectionId),
+    orgId: args.orgId,
+    sealed: args.sealed,
+  });
+}
+
+/** Merges non-secret facts (the model list, a workspace name) into the row's `meta`. */
+export async function updateConnectionMeta(args: {
+  connectionId: string;
+  orgId: string;
+  meta: Record<string, unknown>;
+}): Promise<void> {
+  const { client, secret } = engineClient();
+  await client.mutation(api.engine.updateConnectionMeta, {
+    secret,
+    connectionId: connectionRef(args.connectionId),
+    orgId: args.orgId,
+    meta: args.meta,
+  });
+}
+
+/** Records the verdict of a credential test, or a provider's 401. */
+export async function setConnectionStatus(args: {
+  connectionId: string;
+  orgId: string;
+  status: ConnectionStatus;
+}): Promise<void> {
+  const { client, secret } = engineClient();
+  await client.mutation(api.engine.setConnectionStatus, {
+    secret,
+    connectionId: connectionRef(args.connectionId),
+    orgId: args.orgId,
+    status: args.status,
+  });
+}
+
+/** Deletes a connection. Convex re-checks `orgId` against the row before it goes. */
+export async function removeConnection(args: {
+  connectionId: string;
+  orgId: string;
+}): Promise<void> {
+  const { client, secret } = engineClient();
+  await client.mutation(api.engine.removeConnection, {
+    secret,
+    connectionId: connectionRef(args.connectionId),
+    orgId: args.orgId,
   });
 }
 

@@ -4,7 +4,15 @@ import { limitsForPlan } from "../lib/plans";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internalQuery, mutation, query } from "./_generated/server";
-import { executionCreateArgs, executionStatusValidator, stepMarkArgs } from "./lib/validators";
+import {
+  connectionCreateArgs,
+  connectionKindValidator,
+  connectionStatusValidator,
+  executionCreateArgs,
+  executionStatusValidator,
+  sealedValidator,
+  stepMarkArgs,
+} from "./lib/validators";
 import schema from "./schema";
 import { graphValidator } from "./workflows";
 
@@ -160,6 +168,137 @@ export const finishExecution = mutation({
   handler: async (ctx, { secret, ...args }) => {
     guard(secret);
     await ctx.runMutation(internal.executions.finish, args);
+    return null;
+  },
+});
+
+/* -------------------------------------------------------------------------------------------------
+ * Connections.
+ *
+ * Credentials are sealed in Node (`lib/vault.ts`) before they reach Convex and opened again inside a
+ * `"use step"`, so the whole lifecycle happens outside a user session: the create route, the retest
+ * route and `openFresh` all arrive here with `ENGINE_SECRET`. `connections.ts` keeps the internal
+ * halves, and the projected queries a browser may call.
+ * ---------------------------------------------------------------------------------------------- */
+
+/** The sealed row a step gets back, or null when the connection has been deleted. */
+type ConnectionSealed = {
+  orgId: string;
+  provider: string;
+  kind: Doc<"connections">["kind"];
+  secret: Doc<"connections">["secret"];
+  expiresAt?: number;
+  status: Doc<"connections">["status"];
+} | null;
+
+/**
+ * Deliberately not `schema.doc("connections")`: a step needs the ciphertext, the org that is half
+ * of its AAD and enough to refuse a dead connection — not the label, meta or `createdBy`.
+ */
+const connectionSealedResult = v.union(
+  v.object({
+    orgId: v.string(),
+    provider: v.string(),
+    kind: connectionKindValidator,
+    secret: sealedValidator,
+    expiresAt: v.optional(v.number()),
+    status: connectionStatusValidator,
+  }),
+  v.null(),
+);
+
+/**
+ * Inserts a connection and returns its id. The row is not usable yet: the secret can only be sealed
+ * once this id exists (the AAD is `${orgId}:${connectionId}`), so `patchConnectionSecret` follows.
+ */
+export const createConnection = mutation({
+  args: { secret: v.string(), ...connectionCreateArgs },
+  returns: v.id("connections"),
+  handler: async (ctx, { secret, ...args }): Promise<Id<"connections">> => {
+    guard(secret);
+    return await ctx.runMutation(internal.connections.create, args);
+  },
+});
+
+/** Stores the sealed credential and activates the row. `sealed` is ciphertext, never plaintext. */
+export const patchConnectionSecret = mutation({
+  args: {
+    secret: v.string(),
+    connectionId: v.id("connections"),
+    orgId: v.string(),
+    sealed: sealedValidator,
+  },
+  returns: v.null(),
+  handler: async (ctx, { secret, ...args }) => {
+    guard(secret);
+    await ctx.runMutation(internal.connections.patchSecret, args);
+    return null;
+  },
+});
+
+/**
+ * The sealed credential for one connection — the only way a secret leaves Convex, and the reason
+ * this whole file is guarded. `lib/vault.ts#openFresh` is the only caller (CLAUDE.md rule 1).
+ */
+export const getConnectionSealed = query({
+  args: { secret: v.string(), connectionId: v.id("connections") },
+  returns: connectionSealedResult,
+  handler: async (ctx, { secret, connectionId }): Promise<ConnectionSealed> => {
+    guard(secret);
+
+    const row = await ctx.runQuery(internal.connections.getSealed, { connectionId });
+    if (!row) return null;
+
+    return {
+      orgId: row.orgId,
+      provider: row.provider,
+      kind: row.kind,
+      secret: row.secret,
+      expiresAt: row.expiresAt,
+      status: row.status,
+    };
+  },
+});
+
+/** Merges connector-discovered, non-secret facts into `meta` (the model list, a workspace name). */
+export const updateConnectionMeta = mutation({
+  args: {
+    secret: v.string(),
+    connectionId: v.id("connections"),
+    orgId: v.string(),
+    meta: v.any(),
+  },
+  returns: v.null(),
+  handler: async (ctx, { secret, ...args }) => {
+    guard(secret);
+    await ctx.runMutation(internal.connections.updateMeta, args);
+    return null;
+  },
+});
+
+/** Marks a connection `active`, `needs_reconnect` or `revoked` after a test or a provider 401. */
+export const setConnectionStatus = mutation({
+  args: {
+    secret: v.string(),
+    connectionId: v.id("connections"),
+    orgId: v.string(),
+    status: connectionStatusValidator,
+  },
+  returns: v.null(),
+  handler: async (ctx, { secret, ...args }) => {
+    guard(secret);
+    await ctx.runMutation(internal.connections.setStatus, args);
+    return null;
+  },
+});
+
+/** Deletes a connection, once its `orgId` has been re-checked against the row. */
+export const removeConnection = mutation({
+  args: { secret: v.string(), connectionId: v.id("connections"), orgId: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { secret, ...args }) => {
+    guard(secret);
+    await ctx.runMutation(internal.connections.remove, args);
     return null;
   },
 });

@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as connections from "../connections.js";
 import type * as engine from "../engine.js";
 import type * as executions from "../executions.js";
 import type * as lib_auth from "../lib/auth.js";
@@ -25,6 +26,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  connections: typeof connections;
   engine: typeof engine;
   executions: typeof executions;
   "lib/auth": typeof lib_auth;

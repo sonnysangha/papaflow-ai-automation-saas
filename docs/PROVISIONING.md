@@ -47,3 +47,9 @@ Decoded in the app after the Clerk Convex integration was activated and `clerk c
 - **Slack:** the connection needs the app's *Signing Secret* (Basic Information) in the optional field; then set Interactivity & Shortcuts → Request URL to the interactivity URL shown on the connection row (`/api/events/slack/<connectionId>`). The bot needs `chat:write` and must be in the channel.
 - **Discord:** the bot connection stores the app's *Public Key* (General Information); set Interactions Endpoint URL to `/api/events/discord/<connectionId>` from the connection row. Discord's save-time PING and bad-signature probes are answered by the route.
 - Local checks need a public origin (Vercel preview URL or a tunnel); the routes are verified without credentials by `tests/approval-routes.test.ts` and the signed-curl recipe in `docs/superpowers/plans/2026-09-02-phase-08-control.md`.
+
+## Billing (done 2026-09-03 via CLI)
+- `clerk enable billing --for orgs --yes --no-skills` → `billing.organization_enabled: true`; Clerk auto-created the default org plan `free_org` ("Free").
+- `clerk config patch --json '<features + plans>' --yes` (JSON in `docs/research/clerk.md` → COMMANDS) created features `core_connectors, pro_connectors, ai_agent, ai_builder, schedules, run_history_30d, shared_connections, audit_log, priority_runs` and plans `pro` ($29/mo, $24 annual-monthly, 7-day trial) and `team` ($99/mo). `clerk api /billing/plans` confirms the slugs and feature lists. Note: patching plans before billing is enabled fails with `missing_name` because `free_org` does not exist yet — enable first.
+- Dev checkout runs on Clerk's shared test gateway; no Stripe account is needed until `clerk deploy`.
+- **Dashboard-only stop point:** Subscription plans → Plans for Organizations → Team → *Seat-based* (custom limit / cost per seat / included seats). No config-schema key exists for seats.

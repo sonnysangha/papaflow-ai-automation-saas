@@ -1,9 +1,18 @@
-import { SignUp } from "@clerk/nextjs";
+import type { Metadata } from "next";
+
+import { AuthShell } from "@/components/marketing/AuthShell";
+import { SignUpCard } from "@/components/marketing/ClerkCards";
+
+export const metadata: Metadata = {
+  title: "Create an account — PapaFlow",
+  description:
+    "Create a PapaFlow workspace: three workflows and a hundred runs a month, free.",
+};
 
 export default function SignUpPage() {
   return (
-    <div className="flex flex-1 items-center justify-center bg-background px-6 py-16">
-      <SignUp />
-    </div>
+    <AuthShell title="Draw a workflow today, forget about it by Friday.">
+      <SignUpCard />
+    </AuthShell>
   );
 }

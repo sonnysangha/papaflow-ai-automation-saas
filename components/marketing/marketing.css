@@ -1,0 +1,71 @@
+/*
+ * Tokens the public pages own, on top of the shadcn tokens in `app/globals.css`.
+ *
+ * They live here rather than in `@theme` because they are marketing-only: the product UI stays
+ * strictly neutral, and the one accent below is spent on exactly two things — the wire that
+ * carries a run from node to node, and the primary call to action. Nothing under `app/(app)/`
+ * reads a `--pf-*` variable, so declaring them on the root is inert there; they have to sit on
+ * the root rather than on a wrapper because Base UI portals its popups out to `<body>`.
+ *
+ * The accent is a teal deliberately clear of the four status hues the canvas already uses
+ * (amber = running, emerald = success, red = failed, blue = waiting), so an accent wire is never
+ * mistaken for a run state.
+ */
+
+:root {
+  --pf-accent: oklch(0.5 0.1 205);
+  --pf-accent-surface: oklch(0.5 0.1 205);
+  --pf-accent-contrast: oklch(0.99 0 0);
+  --pf-accent-soft: color-mix(in oklch, oklch(0.5 0.1 205) 12%, transparent);
+  --pf-accent-line: color-mix(in oklch, oklch(0.5 0.1 205) 40%, transparent);
+  --pf-grid: oklch(0.145 0 0 / 0.09);
+  --pf-wire: oklch(0.145 0 0 / 0.22);
+}
+
+.dark {
+  --pf-accent: oklch(0.83 0.11 197);
+  --pf-accent-surface: oklch(0.79 0.11 197);
+  --pf-accent-contrast: oklch(0.19 0.03 200);
+  --pf-accent-soft: color-mix(in oklch, oklch(0.83 0.11 197) 14%, transparent);
+  --pf-accent-line: color-mix(in oklch, oklch(0.83 0.11 197) 38%, transparent);
+  --pf-grid: oklch(1 0 0 / 0.08);
+  --pf-wire: oklch(1 0 0 / 0.2);
+}
+
+/*
+ * `next/font` puts the display family on `--font-display` (set on the element carrying the font's
+ * generated class). Tailwind has no `font-display` utility for it because registering the variable
+ * in `@theme` would be self-referential, so headings opt in with this class.
+ */
+.pf-display {
+  font-family: var(--font-display), "Geist", "Geist Fallback", ui-sans-serif, system-ui, sans-serif;
+  font-optical-sizing: auto;
+}
+
+/* The canvas mock's backdrop: the same dot grid React Flow draws in the editor. */
+.pf-grid {
+  background-image: radial-gradient(var(--pf-grid) 1px, transparent 1px);
+  background-size: 16px 16px;
+  background-position: -1px -1px;
+}
+
+/*
+ * The one animation on the page: current running along the wire into the node that is mid-run.
+ * Everything else is static, so this is what the eye lands on.
+ */
+.pf-wire-live {
+  stroke-dasharray: 5 7;
+  animation: pf-current 1.1s linear infinite;
+}
+
+@keyframes pf-current {
+  to {
+    stroke-dashoffset: -24;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pf-wire-live {
+    animation: none;
+  }
+}

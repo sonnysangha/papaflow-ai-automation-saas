@@ -30,6 +30,45 @@ export const PLAN_LABELS: Record<PlanSlug, string> = {
 };
 
 /**
+ * List prices and the one-line pitch behind each plan, in US dollars per organisation per month.
+ *
+ * Clerk Billing is the source of truth for what a customer is actually charged — this table only
+ * exists so the public pricing page (`app/(marketing)/pricing`) can be generated from the same
+ * slugs, features and limits as the app, instead of hardcoding a second set of numbers that drift.
+ * `annual` is the effective monthly price when billed yearly. Change a price here *and* on the
+ * Clerk plan; nothing reads it to charge anyone.
+ */
+export const PRICING: Record<
+  PlanSlug,
+  { monthly: number; annual: number; tagline: string; audience: string; highlighted: boolean }
+> = {
+  free_org: {
+    monthly: 0,
+    annual: 0,
+    tagline: "Build a few workflows and see a run finish end to end.",
+    audience: "For trying it out",
+    highlighted: false,
+  },
+  pro: {
+    monthly: 29,
+    annual: 24,
+    tagline: "Schedules, AI nodes and the connectors your team already lives in.",
+    audience: "For solo builders and small teams",
+    highlighted: true,
+  },
+  team: {
+    monthly: 99,
+    annual: 82,
+    tagline: "Shared connections, an audit log and runs that jump the queue.",
+    audience: "For teams running automations in production",
+    highlighted: false,
+  },
+};
+
+/** The plans a pricing page lists, cheapest first. */
+export const PLAN_ORDER: readonly PlanSlug[] = ["free_org", "pro", "team"];
+
+/**
  * Human wording for a feature slug, for upgrade prompts ("Slack needs Pro connectors"). Keyed on
  * the same slugs as `FEATURES`; an unknown slug falls back to the slug itself rather than throwing,
  * because a Clerk plan may carry a feature this build has never heard of.

@@ -6,29 +6,13 @@ import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { categoryLabel } from "@/nodes/categories";
-import type { AnyNodeDef } from "@/nodes/define";
 import { NODES } from "@/nodes/registry";
 
-import type { WorkflowNodeType } from "./graph-io";
+import { sourceHandles, type WorkflowNodeType } from "./graph-io";
 import { NodeIcon } from "./node-icon";
 import { StatusRing } from "./StatusRing";
 
 const HANDLE_CLASS = "size-2 border border-background bg-muted-foreground";
-
-/**
- * Source handle ids for a node. `handles()` is a user-supplied function of a half-finished
- * config (Condition and Switch grow one handle per branch in Phase 3), so a definition that
- * throws must not take the whole canvas down with it.
- */
-function sourceHandles(definition: AnyNodeDef | undefined, inputs: Record<string, unknown>): string[] {
-  if (!definition?.handles) return ["out"];
-  try {
-    const handles = definition.handles(inputs);
-    return handles.length > 0 ? handles : ["out"];
-  } catch {
-    return ["out"];
-  }
-}
 
 /**
  * Every node on the canvas is this component — the registry decides the icon, the category and
@@ -36,13 +20,17 @@ function sourceHandles(definition: AnyNodeDef | undefined, inputs: Record<string
  */
 export function WorkflowNode({ data, selected }: NodeProps<WorkflowNodeType>) {
   const definition = NODES[data.nodeType];
-  const handles = sourceHandles(definition, data.inputs);
+  const handles = sourceHandles(data.nodeType, data.inputs);
 
   return (
     <div
       className={cn(
         "relative min-w-44 rounded-lg border border-border bg-card p-3 shadow-sm transition-shadow",
         selected && "ring-2 ring-primary",
+        // A node the run never reached: the same quiet grey as its status dot, drawn as a dashed
+        // outline so "this branch did not happen" reads at a glance next to a solid neighbour.
+        data.status === "skipped" &&
+          "outline-2 outline-offset-2 outline-dashed outline-muted-foreground/40",
       )}
     >
       {definition?.category !== "trigger" && (
@@ -58,7 +46,11 @@ export function WorkflowNode({ data, selected }: NodeProps<WorkflowNodeType>) {
         </Badge>
       </div>
 
-      <p className="mt-1 truncate font-mono text-xs text-muted-foreground">{data.nodeType}</p>
+      {/* The key, not the node type: this is the name templates address the node by
+          (`{{ http_request_1.body }}`), so it has to be readable without opening the panel. */}
+      <p className="mt-1 truncate font-mono text-xs text-muted-foreground" title={data.nodeType}>
+        {data.key || data.nodeType}
+      </p>
 
       {handles.map((handle, index) => {
         const top = `${((index + 1) / (handles.length + 1)) * 100}%`;

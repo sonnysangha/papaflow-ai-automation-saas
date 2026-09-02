@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import {
   addEdge,
   Background,
@@ -23,15 +23,19 @@ import { ConvexError } from "convex/values";
 import { toast } from "sonner";
 
 import { api } from "@/convex/_generated/api";
+import { cn } from "@/lib/utils";
 import { NODES } from "@/nodes/registry";
 
+import { ConfigPanel } from "./ConfigPanel";
 import {
+  DEFAULT_HANDLE,
   fromStoredGraph,
+  nextKey,
   NODE_DRAG_MIME,
   PAPAFLOW_NODE_TYPE,
   serializeGraph,
   toStoredGraph,
-  type NodeStatus,
+  type RunNodeState,
   type SaveState,
   type StoredGraph,
   type WorkflowNodeType,
@@ -43,12 +47,17 @@ const nodeTypes: NodeTypes = { [PAPAFLOW_NODE_TYPE]: WorkflowNode };
 
 const SAVE_DEBOUNCE_MS = 600;
 
+/** Applied to the edge the run actually followed out of a branching node. */
+const TAKEN_EDGE_CLASS = "[&_.react-flow__edge-path]:stroke-primary";
+/** …and to its siblings, so an untaken branch reads as "this did not happen". */
+const UNTAKEN_EDGE_CLASS = "opacity-40";
+
 export type WorkflowDoc = FunctionReturnType<typeof api.workflows.get>;
 
 type CanvasProps = {
   workflow: WorkflowDoc;
-  /** Live status per node id from the latest run; anything missing is idle. */
-  statusByNode: Record<string, NodeStatus>;
+  /** Live state per node id from the latest run; anything missing is idle. */
+  runByNode: Record<string, RunNodeState>;
   onSaveStateChange: (state: SaveState) => void;
 };
 
@@ -65,7 +74,7 @@ function convexErrorData(error: unknown): Record<string, unknown> | null {
  * `workflows.saveGraph` with the version we last saw, so a Builder agent or a second tab
  * writing at the same time is detected instead of silently overwritten.
  */
-export function Canvas({ workflow, statusByNode, onSaveStateChange }: CanvasProps) {
+export function Canvas({ workflow, runByNode, onSaveStateChange }: CanvasProps) {
   const saveGraph = useMutation(api.workflows.saveGraph);
   const { screenToFlowPosition, setViewport } = useReactFlow<WorkflowNodeType, Edge>();
 
@@ -147,14 +156,14 @@ export function Canvas({ workflow, statusByNode, onSaveStateChange }: CanvasProp
     setNodes((current) => {
       let changed = false;
       const next = current.map((node) => {
-        const status = statusByNode[node.id] ?? "idle";
+        const status = runByNode[node.id]?.status ?? "idle";
         if (node.data.status === status) return node;
         changed = true;
         return { ...node, data: { ...node.data, status } };
       });
       return changed ? next : current;
     });
-  }, [setNodes, statusByNode]);
+  }, [runByNode, setNodes]);
 
   // Debounced save. Re-running the effect clears the previous timer, so a drag saves 600ms
   // after it stops rather than once per frame.
@@ -225,36 +234,100 @@ export function Canvas({ workflow, statusByNode, onSaveStateChange }: CanvasProp
           id: crypto.randomUUID(),
           type: PAPAFLOW_NODE_TYPE,
           position,
-          data: { nodeType, label: definition.name, inputs: {}, status: "idle" },
+          data: {
+            nodeType,
+            // Assigned against the nodes as they are right now, so two quick drops of the same
+            // node type get `http_request_1` and `http_request_2` rather than the same key twice.
+            key: nextKey(current, nodeType),
+            label: definition.name,
+            inputs: {},
+            status: "idle",
+          },
         }),
       );
     },
     [screenToFlowPosition, setNodes],
   );
 
+  // Exactly one node selected opens the config panel; a marquee over three does not.
+  const selected = useMemo(() => {
+    const picked = nodes.filter((node) => node.selected);
+    return picked.length === 1 ? picked[0] : null;
+  }, [nodes]);
+
+  const deselect = useCallback(() => {
+    setNodes((current) =>
+      current.map((node) => (node.selected ? { ...node, selected: false } : node)),
+    );
+  }, [setNodes]);
+
+  const runOutputs = useMemo(() => {
+    const outputs: Record<string, unknown> = {};
+    for (const [nodeId, state] of Object.entries(runByNode)) outputs[nodeId] = state.output;
+    return outputs;
+  }, [runByNode]);
+
+  /**
+   * Branch feedback: once a node has finished, the edge leaving the handle its step recorded is
+   * drawn in the primary colour and the rest are dimmed, which is what makes an untaken Condition
+   * branch grey out. Styling lives here rather than in state — `toStoredGraph` ignores `className`,
+   * but writing it into `edges` would still churn the save effect on every run.
+   */
+  const styledEdges = useMemo(() => {
+    return edges.map((edge) => {
+      const source = runByNode[edge.source];
+      if (source?.status !== "success") return edge;
+      // A node that records no handle (everything but Condition/Switch) took all of its edges.
+      const taken = source.handle
+        ? (edge.sourceHandle ?? DEFAULT_HANDLE) === source.handle
+        : true;
+      return {
+        ...edge,
+        animated: false,
+        className: cn(edge.className, taken ? TAKEN_EDGE_CLASS : UNTAKEN_EDGE_CLASS),
+      };
+    });
+  }, [edges, runByNode]);
+
   return (
-    <ReactFlow<WorkflowNodeType, Edge>
-      nodes={nodes}
-      edges={edges}
-      nodeTypes={nodeTypes}
-      onNodesChange={onNodesChange}
-      onEdgesChange={onEdgesChange}
-      onConnect={onConnect}
-      onMoveEnd={onMoveEnd}
-      isValidConnection={isValidConnection}
-      onDrop={onDrop}
-      onDragOver={onDragOver}
-      defaultViewport={initial.graph.viewport}
-      fitView={!initial.graph.viewport}
-      deleteKeyCode={["Backspace", "Delete"]}
-      colorMode="system"
-      minZoom={0.2}
-      className="bg-background"
-      aria-label="Workflow canvas"
-    >
-      <Background gap={16} />
-      <Controls showInteractive={false} />
-      <MiniMap pannable zoomable />
-    </ReactFlow>
+    <div className="flex h-full min-h-0 w-full">
+      <div className="min-w-0 flex-1">
+        <ReactFlow<WorkflowNodeType, Edge>
+          nodes={nodes}
+          edges={styledEdges}
+          nodeTypes={nodeTypes}
+          onNodesChange={onNodesChange}
+          onEdgesChange={onEdgesChange}
+          onConnect={onConnect}
+          onMoveEnd={onMoveEnd}
+          isValidConnection={isValidConnection}
+          onDrop={onDrop}
+          onDragOver={onDragOver}
+          defaultViewport={initial.graph.viewport}
+          fitView={!initial.graph.viewport}
+          deleteKeyCode={["Backspace", "Delete"]}
+          colorMode="system"
+          minZoom={0.2}
+          className="bg-background"
+          aria-label="Workflow canvas"
+        >
+          <Background gap={16} />
+          <Controls showInteractive={false} />
+          <MiniMap pannable zoomable />
+        </ReactFlow>
+      </div>
+
+      {selected ? (
+        <ConfigPanel
+          key={selected.id}
+          node={selected}
+          nodes={nodes}
+          edges={edges}
+          runOutputs={runOutputs}
+          setNodes={setNodes}
+          onClose={deselect}
+        />
+      ) : null}
+    </div>
   );
 }

@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils";
 import { NODES } from "@/nodes/registry";
 
 import { Canvas } from "./Canvas";
-import { fromStoredGraph, type NodeStatus, type SaveState } from "./graph-io";
+import { fromStoredGraph, type RunNodeState, type SaveState } from "./graph-io";
 import { NodeSidebar } from "./NodeSidebar";
 import { RunBar, type RunWorkflowAction } from "./RunBar";
 
@@ -130,9 +130,13 @@ export function Editor({
   const steps = useQuery(api.steps.byExecution, latest ? { executionId: latest._id } : "skip");
   const [saveState, setSaveState] = useState<SaveState>("saved");
 
-  const statusByNode = useMemo(() => {
-    const byNode: Record<string, NodeStatus> = {};
-    for (const step of steps ?? []) byNode[step.nodeId] = step.status;
+  // One entry per node the latest run touched: the status the ring shows, the branch handle the
+  // canvas dims the other edges from, and the output the variable picker reads real paths off.
+  const runByNode = useMemo(() => {
+    const byNode: Record<string, RunNodeState> = {};
+    for (const step of steps ?? []) {
+      byNode[step.nodeId] = { status: step.status, handle: step.handle, output: step.output };
+    }
     return byNode;
   }, [steps]);
 
@@ -171,7 +175,7 @@ export function Editor({
               <Canvas
                 key={workflow._id}
                 workflow={workflow}
-                statusByNode={statusByNode}
+                runByNode={runByNode}
                 onSaveStateChange={setSaveState}
               />
             </div>

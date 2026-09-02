@@ -11,15 +11,34 @@ export const PAPAFLOW_NODE_TYPE = "papaflow";
 /** Drag payload: the sidebar writes a node `type` here, the canvas reads it on drop. */
 export const NODE_DRAG_MIME = "application/papaflow-node";
 
+/** The single source handle of a node that does not branch; edges leave it with no `sourceHandle`. */
+export const DEFAULT_HANDLE = "out";
+
 /**
  * Runtime-only; fed from the `steps` table. Never stored. Every `steps.status` value plus `idle`
  * for a node the latest run has no row for, so a step status assigns straight into node data.
  */
 export type NodeStatus = "idle" | "running" | "success" | "failed" | "waiting" | "skipped";
 
+/**
+ * What the latest run knows about one node, keyed by node id in `Editor`. `handle` is the branch
+ * a Condition/Switch actually took (the canvas dims the others) and `output` is what the step
+ * returned, which the variable picker mines for paths the output schema cannot describe.
+ */
+export type RunNodeState = {
+  status: NodeStatus;
+  handle?: string;
+  output?: unknown;
+};
+
+/** The shape a node key must have to be usable in a template: `{{ http_request_1.body }}`. */
+export const NODE_KEY_PATTERN = /^[a-z][a-z0-9_]*$/;
+
 export type WorkflowNodeData = {
   /** Key into `NODES`, e.g. `http.request`. */
   nodeType: string;
+  /** Stable human name templates address this node by; unique per workflow. */
+  key: string;
   label: string;
   inputs: Record<string, unknown>;
   status?: NodeStatus;
@@ -96,11 +115,115 @@ function toNode(raw: unknown): WorkflowNodeType | null {
     position: { x: toFinite(position.x, 0), y: toFinite(position.y, 0) },
     data: {
       nodeType,
+      // Empty for a graph saved before Phase 3; `migrateKeys` fills it in on load.
+      key: toOptionalString(data.key) ?? "",
       label: toOptionalString(data.label) ?? NODES[nodeType]?.name ?? nodeType,
       inputs: isRecord(data.inputs) ? data.inputs : {},
       status: "idle",
     },
   };
+}
+
+/** `http.request` → `http_request`, kept inside `NODE_KEY_PATTERN` for exotic node types. */
+function keyPrefix(nodeType: string): string {
+  const base = nodeType.replaceAll(".", "_").toLowerCase().replace(/[^a-z0-9_]/g, "_");
+  return NODE_KEY_PATTERN.test(base) ? base : `n_${base}`;
+}
+
+function nextKeyFrom(taken: ReadonlySet<string>, nodeType: string): string {
+  const prefix = keyPrefix(nodeType);
+  for (let n = 1; ; n++) {
+    const key = `${prefix}_${n}`;
+    if (!taken.has(key)) return key;
+  }
+}
+
+/**
+ * The key a newly dropped node gets: `<nodeType with '.' → '_'>_<n>` with the smallest free
+ * `n ≥ 1`, so deleting `http_request_1` and dropping another HTTP node reuses the name rather
+ * than climbing forever.
+ */
+export function nextKey(nodes: readonly WorkflowNodeType[], nodeType: string): string {
+  return nextKeyFrom(new Set(nodes.map((node) => node.data.key)), nodeType);
+}
+
+/**
+ * The key `workflows/graph.ts#keyFor` derives for a node that has none: its type and its position
+ * in the stored array, not the smallest free number. The rule is duplicated rather than imported
+ * because `workflows/` is `"use step"` code, and the two have to agree — a legacy graph that has
+ * already run must migrate to the very keys its run outputs were stored under, `_2` collision
+ * suffix included.
+ */
+function derivedKey(taken: ReadonlySet<string>, nodeType: string, index: number): string {
+  const derived = `${keyPrefix(nodeType)}_${index + 1}`;
+  if (!taken.has(derived)) return derived;
+  let suffix = 2;
+  while (taken.has(`${derived}_${suffix}`)) suffix++;
+  return `${derived}_${suffix}`;
+}
+
+/**
+ * Gives every node a key: graphs saved before Phase 3 have none, and a hand-edited or
+ * agent-written graph may repeat one. A usable key is kept (the first node wins a duplicate) and
+ * everything else is numbered by position — exactly what the engine derives for a keyless graph,
+ * so a workflow that ran before this migration keeps the names its run outputs already used.
+ */
+export function migrateKeys(nodes: readonly WorkflowNodeType[]): WorkflowNodeType[] {
+  const taken = new Set<string>();
+  return nodes.map((node, index) => {
+    if (NODE_KEY_PATTERN.test(node.data.key) && !taken.has(node.data.key)) {
+      taken.add(node.data.key);
+      return node;
+    }
+    const key = derivedKey(taken, node.data.nodeType, index);
+    taken.add(key);
+    return { ...node, data: { ...node.data, key } };
+  });
+}
+
+/**
+ * The source handles a node shows on the canvas, and the branches its panel lists. `handles()` is
+ * user code reading a half-finished config — a Switch dropped a second ago has no `cases` array
+ * yet — so the stored inputs go through the node's own schema first (which supplies the defaults)
+ * and a definition that throws anyway falls back to the single default handle rather than
+ * taking the canvas down with it.
+ */
+export function sourceHandles(nodeType: string, inputs: Record<string, unknown>): string[] {
+  const definition = NODES[nodeType];
+  if (!definition?.handles) return [DEFAULT_HANDLE];
+  const parsed = definition.inputs.safeParse(inputs);
+  try {
+    const handles = definition.handles(parsed.success ? parsed.data : inputs);
+    return handles.length > 0 ? handles : [DEFAULT_HANDLE];
+  } catch {
+    return [DEFAULT_HANDLE];
+  }
+}
+
+/**
+ * Every node that can reach `nodeId`, nearest first — the nodes whose outputs are in scope for a
+ * template. Walks the edges backwards; a cycle the canvas allowed cannot loop it.
+ */
+export function upstreamNodeIds(edges: readonly Edge[], nodeId: string): string[] {
+  const incoming = new Map<string, string[]>();
+  for (const edge of edges) {
+    const sources = incoming.get(edge.target);
+    if (sources) sources.push(edge.source);
+    else incoming.set(edge.target, [edge.source]);
+  }
+
+  const seen = new Set<string>([nodeId]);
+  const queue = [nodeId];
+  const upstream: string[] = [];
+  for (let index = 0; index < queue.length; index++) {
+    for (const source of incoming.get(queue[index]) ?? []) {
+      if (seen.has(source)) continue;
+      seen.add(source);
+      upstream.push(source);
+      queue.push(source);
+    }
+  }
+  return upstream;
 }
 
 function toEdge(raw: unknown): Edge | null {
@@ -146,7 +269,7 @@ export function fromStoredGraph(graph: StoredGraphInput | undefined): LoadedGrap
     edges.push(edge);
   }
 
-  return { nodes, edges, viewport: toViewport(graph?.viewport) };
+  return { nodes: migrateKeys(nodes), edges, viewport: toViewport(graph?.viewport) };
 }
 
 /**
@@ -166,6 +289,7 @@ export function toStoredGraph(
       position: { x: node.position.x, y: node.position.y },
       data: {
         nodeType: node.data.nodeType,
+        key: node.data.key,
         label: node.data.label,
         inputs: node.data.inputs,
       },

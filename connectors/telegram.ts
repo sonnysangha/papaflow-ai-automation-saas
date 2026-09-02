@@ -1,0 +1,150 @@
+// Telegram bots are connected by pasting the token @BotFather printed. `getMe` validates it and
+// tells us who the bot is; `setWebhook` then points Telegram at this connection's own inbound URL
+// with a generated `secret_token` it will echo in `X-Telegram-Bot-Api-Secret-Token`
+// (docs/research/connectors-chat.md — HTTPS only, ports 443/80/88/8443).
+//
+// The generated token is stored *inside* the sealed secret rather than in `meta`: `meta` is
+// projected to the client by the connections list, and this value is what authenticates every
+// inbound update (CLAUDE.md rule 1).
+import { randomBytes } from "node:crypto";
+
+import { defineConnector } from "./define";
+
+const TIMEOUT_MS = 15_000;
+
+/** Which updates a trigger can act on. Anything else Telegram would send is not worth the request. */
+const ALLOWED_UPDATES = ["message", "callback_query"] as const;
+
+const api = (token: string, method: string) => `https://api.telegram.org/bot${token}/${method}`;
+
+type TelegramResponse = { ok?: boolean; result?: Record<string, unknown>; description?: string };
+
+/** Every Bot API answer is `{ ok, result }` or `{ ok: false, description }`, including on a 4xx. */
+async function callBotApi(
+  token: string,
+  method: string,
+  body?: unknown,
+): Promise<{ ok: true; result: Record<string, unknown> } | { ok: false; error: string }> {
+  let response: Response;
+  try {
+    response = await fetch(api(token, method), {
+      method: body === undefined ? "GET" : "POST",
+      headers: body === undefined ? {} : { "Content-Type": "application/json" },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+  } catch {
+    // The token never reaches a log line, and neither does the URL that contains it.
+    return { ok: false, error: "Could not reach Telegram. Check your connection and try again." };
+  }
+
+  const payload = (await response.json().catch(() => ({}))) as TelegramResponse;
+  if (!response.ok || payload.ok !== true) {
+    const described = typeof payload.description === "string" ? payload.description : `HTTP ${response.status}`;
+    return {
+      ok: false,
+      error: response.status === 401 ? "Telegram rejected that bot token." : `Telegram refused the request: ${described}`,
+    };
+  }
+
+  return { ok: true, result: payload.result ?? {} };
+}
+
+/** 24 random bytes → exactly 32 base64url characters, well inside Telegram's 1-256 char limit. */
+function generateSecretToken(): string {
+  return randomBytes(24).toString("base64url");
+}
+
+/** A chat learned from an inbound update, as the route stores it in `meta.chat_ids`. */
+type KnownChat = { id: unknown; title?: unknown; first_name?: unknown };
+
+function knownChats(meta: Record<string, unknown>): KnownChat[] {
+  const chats = meta.chat_ids;
+  if (!Array.isArray(chats)) return [];
+  return chats.filter((chat): chat is KnownChat => typeof chat === "object" && chat !== null);
+}
+
+function chatLabel(chat: KnownChat): string {
+  if (typeof chat.title === "string" && chat.title) return chat.title;
+  if (typeof chat.first_name === "string" && chat.first_name) return chat.first_name;
+  return String(chat.id);
+}
+
+export const telegramConnector = defineConnector({
+  provider: "telegram",
+  name: "Telegram",
+  category: "chat",
+  kind: "botToken",
+  requiresFeature: null,
+  fields: [
+    {
+      name: "botToken",
+      label: "Bot token",
+      kind: "secret",
+      placeholder: "123456789:AA…",
+      help: "From @BotFather",
+    },
+  ],
+  docsUrl: "https://core.telegram.org/bots/features#botfather",
+  icon: "Send",
+
+  async test(secret) {
+    const token = secret.botToken?.trim();
+    if (!token) return { ok: false, error: "Paste the bot token @BotFather gave you." };
+
+    const result = await callBotApi(token, "getMe");
+    if (!result.ok) return result;
+
+    const username = typeof result.result.username === "string" ? result.result.username : "";
+    if (!username) return { ok: false, error: "Telegram accepted the token but returned no bot username." };
+
+    return {
+      ok: true,
+      label: `@${username}`,
+      hint: token.slice(-4),
+      meta: { bot_username: username, bot_id: result.result.id },
+    };
+  },
+
+  /**
+   * Registers the webhook now that the connection has an id — the URL contains it, so this cannot
+   * happen during `test()`.
+   *
+   * Telegram only accepts HTTPS URLs, so a localhost `APP_ORIGIN` skips the call rather than
+   * failing the whole create: the connection is still perfectly usable for sending (Phase 6), and
+   * `meta.webhookSet === false` is what the UI reads to say "inbound needs a deployed URL".
+   * A real refusal from Telegram *does* throw, so `createConnectionFromInput` rolls the row back
+   * instead of leaving a connection whose triggers would silently never fire.
+   */
+  async afterCreate({ connectionId, secret, appOrigin }) {
+    const token = secret.botToken?.trim() ?? "";
+    const secretToken = generateSecretToken();
+    const inboundUrl = `${appOrigin}/api/events/telegram/${connectionId}`;
+
+    if (!appOrigin.startsWith("https://")) {
+      return {
+        secret: { ...secret, secretToken },
+        meta: { webhookSet: false, webhookSkipped: "APP_ORIGIN is not https", inboundUrl },
+      };
+    }
+
+    const result = await callBotApi(token, "setWebhook", {
+      url: inboundUrl,
+      secret_token: secretToken,
+      allowed_updates: [...ALLOWED_UPDATES],
+    });
+    if (!result.ok) throw new Error(`telegram: setWebhook failed — ${result.error}`);
+
+    return { secret: { ...secret, secretToken }, meta: { webhookSet: true, inboundUrl } };
+  },
+
+  /**
+   * Telegram has no "list my chats" endpoint: a bot only learns a chat exists when someone writes
+   * to it. The inbound route records each one in `meta.chat_ids`, and this turns that into the
+   * options the Send-message node's picker shows.
+   */
+  async pick(kind, _secret, meta) {
+    if (kind !== "chats") return [];
+    return knownChats(meta).map((chat) => ({ id: String(chat.id), label: chatLabel(chat) }));
+  },
+});

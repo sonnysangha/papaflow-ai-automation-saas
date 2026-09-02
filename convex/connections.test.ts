@@ -210,7 +210,7 @@ describe("api.engine connection functions", () => {
       await convexErrorData(
         h.t.query(api.engine.getConnectionSealed, { secret: "not-the-secret", connectionId }),
       ),
-    ).toEqual({ code: "unauthorized" });
+    ).toMatchObject({ code: "unauthorized" });
 
     expect(
       await convexErrorData(

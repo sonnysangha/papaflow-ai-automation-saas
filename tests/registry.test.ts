@@ -1,9 +1,18 @@
 import { describe, expect, it } from "vitest";
+import { featuresForPlan } from "@/lib/plans";
 import { CATEGORIES } from "@/nodes/categories";
 import type { AnyNodeDef } from "@/nodes/define";
 import { NODES, buildRegistry, nodeCatalogue } from "@/nodes/registry";
 
 const TYPE_PATTERN = /^[a-z]+\.[a-zA-Z]+$/;
+
+/** The four nodes Phase 11 put behind `pro_connectors` — one per Pro connector. Sorted. */
+const PRO_NODES = [
+  "airtable.createRecord",
+  "linear.createIssue",
+  "notion.createPage",
+  "slack.postMessage",
+];
 
 describe("node registry", () => {
   it("keys every definition by its own unique, well-formed type", () => {
@@ -64,7 +73,8 @@ describe("node registry", () => {
     ]);
 
     for (const entry of catalogue) {
-      expect(entry.allowed).toBe(true);
+      // `core_connectors` is what `free_org` carries, so the Pro four are listed but not allowed.
+      expect(entry.allowed).toBe(!PRO_NODES.includes(entry.type));
       expect(entry.version).toBe("v1");
       expect(entry.inputsSchema.type).toBe("object");
       expect(entry.outputsSchema.type).toBe("object");
@@ -120,12 +130,33 @@ describe("node registry", () => {
     ]);
   });
 
-  it("still allows nodes whose requiresFeature is null when the org has no features", () => {
+  it("dims exactly the Pro nodes for an org with no paid features", () => {
     const catalogue = nodeCatalogue([]);
     expect(catalogue).toHaveLength(26);
+
+    const blocked = catalogue.filter((entry) => !entry.allowed).map((entry) => entry.type);
+    expect(blocked.sort()).toEqual(PRO_NODES);
+
     for (const entry of catalogue) {
-      expect(entry.requiresFeature).toBeNull();
-      expect(entry.allowed).toBe(true);
+      expect(entry.requiresFeature).toBe(
+        PRO_NODES.includes(entry.type) ? "pro_connectors" : null,
+      );
+      expect(entry.allowed).toBe(!PRO_NODES.includes(entry.type));
+    }
+  });
+
+  it("allows every node on Pro", () => {
+    const catalogue = nodeCatalogue(featuresForPlan("pro"));
+    expect(catalogue).toHaveLength(26);
+    for (const entry of catalogue) expect(entry.allowed).toBe(true);
+  });
+
+  it("keeps each Pro node's feature in step with the connector it needs", () => {
+    // A node and its connector must agree, or the sidebar offers something `/api/connections`
+    // will never let the org create a credential for.
+    for (const type of PRO_NODES) {
+      expect(NODES[type].requiresFeature).toBe("pro_connectors");
+      expect(NODES[type].credential).toBeTruthy();
     }
   });
 

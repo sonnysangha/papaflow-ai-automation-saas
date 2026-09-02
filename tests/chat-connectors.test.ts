@@ -76,13 +76,13 @@ afterEach(() => {
 });
 
 describe("slack connector", () => {
-  it("is a free chat bot-token connector with an optional signing secret", () => {
+  it("is a Pro chat bot-token connector with an optional signing secret", () => {
     expect(slackConnector).toMatchObject({
       provider: "slack",
       name: "Slack",
       category: "chat",
       kind: "botToken",
-      requiresFeature: null,
+      requiresFeature: "pro_connectors",
     });
     expect(slackConnector.fields.map((field) => field.name)).toEqual(["botToken", "signingSecret"]);
     expect(slackConnector.fields[0]).toMatchObject({ kind: "secret", placeholder: "xoxb-…" });

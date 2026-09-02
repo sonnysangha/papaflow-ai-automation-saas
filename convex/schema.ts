@@ -54,7 +54,10 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_workflow", ["workflowId"])
     .index("by_runId", ["runId"])
-    .index("by_org_started", ["orgId", "startedAt"]),
+    // The two the runs pages scan: `startedAt` is the sort key *and* the retention cutoff, so a
+    // plan's history window is a range on the index rather than a filter over a page of rows.
+    .index("by_org_started", ["orgId", "startedAt"])
+    .index("by_workflow_started", ["workflowId", "startedAt"]),
 
   steps: defineTable({
     orgId: v.string(),

@@ -720,10 +720,12 @@ describe("api.steps / api.executions (org-gated reads)", () => {
       }
     });
 
-    const list = await orgA.query(api.executions.listByWorkflow, { workflowId });
-    expect(list).toHaveLength(50);
-    expect(list[0]._id).toBe(ids[50]);
-    expect(list[49]._id).toBe(ids[1]);
+    const page = await orgA.query(api.executions.listByWorkflow, { workflowId });
+    expect(page.runs).toHaveLength(50);
+    expect(page.runs[0]._id).toBe(ids[50]);
+    expect(page.runs[49]._id).toBe(ids[1]);
+    // All 51 were started just now, so nothing falls outside the free plan's 7-day window.
+    expect(page.clipped).toBe(false);
 
     const latest = await orgA.query(api.executions.latestByWorkflow, { workflowId });
     expect(latest?._id).toBe(ids[50]);
@@ -740,6 +742,10 @@ describe("api.steps / api.executions (org-gated reads)", () => {
   test("latestByWorkflow is null while a workflow has never run", async () => {
     const { orgA, workflowId } = await setup();
     expect(await orgA.query(api.executions.latestByWorkflow, { workflowId })).toBeNull();
-    expect(await orgA.query(api.executions.listByWorkflow, { workflowId })).toEqual([]);
+    expect(await orgA.query(api.executions.listByWorkflow, { workflowId })).toEqual({
+      runs: [],
+      windowDays: 7,
+      clipped: false,
+    });
   });
 });

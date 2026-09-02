@@ -36,7 +36,7 @@ export const airtableCreateRecordNode = defineNode({
   category: "data",
   icon: "Table",
   credential: "airtable",
-  requiresFeature: null,
+  requiresFeature: "pro_connectors",
   version: "v1",
   inputs: z.object({
     connectionId: z.string(),

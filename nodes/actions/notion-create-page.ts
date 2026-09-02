@@ -77,7 +77,7 @@ export const notionCreatePageNode = defineNode({
   category: "data",
   icon: "FileText",
   credential: "notion",
-  requiresFeature: null,
+  requiresFeature: "pro_connectors",
   version: "v1",
   inputs: z.object({
     connectionId: z.string(),

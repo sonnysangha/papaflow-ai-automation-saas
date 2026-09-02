@@ -105,7 +105,7 @@ describe("notion.createPage", () => {
       type: "notion.createPage",
       category: "data",
       credential: "notion",
-      requiresFeature: null,
+      requiresFeature: "pro_connectors",
       icon: "FileText",
     });
     expect(pickerOf(notionCreatePageNode, "dataSourceId")).toBe("dataSources");

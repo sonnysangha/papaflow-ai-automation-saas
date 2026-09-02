@@ -46,7 +46,7 @@ export const linearCreateIssueNode = defineNode({
   category: "data",
   icon: "SquareKanban",
   credential: "linear",
-  requiresFeature: null,
+  requiresFeature: "pro_connectors",
   version: "v1",
   inputs: z.object({
     connectionId: z.string(),

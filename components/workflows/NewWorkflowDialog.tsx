@@ -19,7 +19,8 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { reportWorkflowError } from "./errors";
+import { UpgradeCard } from "@/components/billing/UpgradeCard";
+import { reportWorkflowError, workflowLimitFrom } from "./errors";
 
 /** Matches the fallback `convex/workflows.ts` applies to a blank name. */
 const DEFAULT_NAME = "Untitled workflow";
@@ -36,6 +37,8 @@ export function NewWorkflowDialog() {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [pending, setPending] = useState(false);
+  // The plan's workflow cap once `workflows.create` has refused; `undefined` until it does.
+  const [limit, setLimit] = useState<number | null | undefined>(undefined);
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -48,15 +51,26 @@ export function NewWorkflowDialog() {
       setName("");
       router.push(`/w/${id}`);
     } catch (error) {
-      // Most often the free plan's three-workflow wall; the dialog stays open either way.
+      // Most often the free plan's three-workflow wall; the dialog stays open either way, and
+      // swaps the form's footer for an upgrade card rather than only flashing a toast.
+      setLimit(workflowLimitFrom(error));
       reportWorkflowError(error, "Could not create the workflow.");
     } finally {
       setPending(false);
     }
   }
 
+  const atLimit = limit !== undefined;
+
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog
+      open={open}
+      onOpenChange={setOpen}
+      onOpenChangeComplete={(nowOpen) => {
+        // A fresh open starts without last time's wall — the org may have upgraded since.
+        if (!nowOpen) setLimit(undefined);
+      }}
+    >
       <DialogTrigger render={<Button />}>
         <PlusIcon />
         New workflow
@@ -83,11 +97,23 @@ export function NewWorkflowDialog() {
             />
           </div>
 
+          {atLimit && (
+            <UpgradeCard
+              compact
+              title={
+                limit === null
+                  ? "Workflow limit reached"
+                  : `This plan includes ${limit} workflow${limit === 1 ? "" : "s"}`
+              }
+              description="Delete one you no longer need, or upgrade for unlimited workflows."
+            />
+          )}
+
           <DialogFooter>
             <DialogClose render={<Button variant="outline" />} disabled={pending}>
               Cancel
             </DialogClose>
-            <Button type="submit" disabled={pending}>
+            <Button type="submit" disabled={pending || atLimit}>
               {pending ? "Creating…" : "Create workflow"}
             </Button>
           </DialogFooter>

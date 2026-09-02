@@ -6,21 +6,36 @@ import { toast } from "sonner";
  * reaches the client is a bug or a dropped connection. `data` is typed as an arbitrary Convex value,
  * so narrow it before reading `code`.
  */
-function convexErrorCode(error: unknown): string | undefined {
+function convexErrorData(error: unknown): { code?: unknown; limit?: unknown } | undefined {
   if (!(error instanceof ConvexError)) return undefined;
   const data: unknown = error.data;
-  if (typeof data !== "object" || data === null) return undefined;
-  const code = (data as { code?: unknown }).code;
+  return typeof data === "object" && data !== null ? data : undefined;
+}
+
+function convexErrorCode(error: unknown): string | undefined {
+  const code = convexErrorData(error)?.code;
   return typeof code === "string" ? code : undefined;
 }
 
 /**
- * Turns a failed workflow mutation into a toast. Phase 11 replaces the plan wall message with an
- * upgrade card, so the copy lives here rather than at each call site.
+ * The plan's workflow cap, when that is why a create failed. `undefined` means the failure was
+ * something else — the caller shows its own message; `null` means the limit was hit but the payload
+ * did not name it (a shape change in `convex/workflows.ts`), so the card drops the number.
+ */
+export function workflowLimitFrom(error: unknown): number | null | undefined {
+  if (convexErrorCode(error) !== "plan_limit") return undefined;
+
+  const limit = convexErrorData(error)?.limit;
+  return typeof limit === "number" ? limit : null;
+}
+
+/**
+ * Turns a failed workflow mutation into a toast. The plan wall gets an upgrade card at the call
+ * site (`NewWorkflowDialog`); everywhere else a toast is the whole story.
  */
 export function reportWorkflowError(error: unknown, fallback: string): void {
   if (convexErrorCode(error) === "plan_limit") {
-    toast.error("Free plan allows 3 workflows — upgrade to add more");
+    toast.error("Workflow limit reached for this plan");
     return;
   }
 

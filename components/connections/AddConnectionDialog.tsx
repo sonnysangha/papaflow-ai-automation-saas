@@ -2,10 +2,12 @@
 
 import { useCallback, useId, useMemo, useState } from "react";
 import Link from "next/link";
+import { Show } from "@clerk/nextjs";
 import { useQuery } from "convex/react";
 import { ArrowLeftIcon, ExternalLinkIcon, PlusIcon } from "lucide-react";
 import { toast } from "sonner";
 
+import { UpgradeCard } from "@/components/billing/UpgradeCard";
 import { NodeIcon } from "@/components/canvas/node-icon";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -23,6 +25,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { connectorCatalogue, type ConnectorCatalogueEntry } from "@/connectors/registry";
 import { api } from "@/convex/_generated/api";
+import { featureLabel } from "@/lib/plans";
 
 import { ProviderPicker } from "./ProviderPicker";
 
@@ -98,6 +101,22 @@ export function AddConnectionDialog({
   const [picked, setPicked] = useState<string | null>(null);
   const selected = provider ?? picked;
   const definition = selected ? entries.find((entry) => entry.provider === selected) : undefined;
+  /** Only offer "Back" when this dialog owns the choice of provider. */
+  const onBack = provider ? undefined : () => setPicked(null);
+
+  const form = definition ? (
+    <ConnectionForm
+      // Keyed by provider so going Back and picking another app starts from empty fields
+      // rather than carrying the previous provider's typed key in state.
+      key={definition.provider}
+      entry={definition}
+      onBack={onBack}
+      onDone={(created) => {
+        setOpen(false);
+        onCreated?.(created);
+      }}
+    />
+  ) : null;
 
   return (
     <Dialog
@@ -117,18 +136,20 @@ export function AddConnectionDialog({
 
       <DialogContent className="sm:max-w-md">
         {definition ? (
-          <ConnectionForm
-            // Keyed by provider so going Back and picking another app starts from empty fields
-            // rather than carrying the previous provider's typed key in state.
-            key={definition.provider}
-            entry={definition}
-            /** Only offer "Back" when this dialog owns the choice. */
-            onBack={provider ? undefined : () => setPicked(null)}
-            onDone={(created) => {
-              setOpen(false);
-              onCreated?.(created);
-            }}
-          />
+          // Layer one of the plan gate (CLAUDE.md rule 3), read straight from the Clerk session
+          // token rather than from anything this app stores. A connector with no `requiresFeature`
+          // skips it entirely, so the common case never waits on `<Show>` resolving. The real
+          // refusal is `has()` inside `POST /api/connections`.
+          definition.requiresFeature ? (
+            <Show
+              when={{ feature: `org:${definition.requiresFeature}` }}
+              fallback={<ProviderWall entry={definition} onBack={onBack} />}
+            >
+              {form}
+            </Show>
+          ) : (
+            form
+          )
         ) : (
           <>
             <DialogHeader>
@@ -143,6 +164,48 @@ export function AddConnectionDialog({
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * What a Pro connector shows an organisation whose plan does not include it: the app it picked,
+ * why the form is not there, and the way to change that. No fields are rendered at all, so there
+ * is nothing to type a key into that the server would only refuse.
+ */
+function ProviderWall({
+  entry,
+  onBack,
+}: {
+  entry: ConnectorCatalogueEntry;
+  onBack?: () => void;
+}) {
+  return (
+    <div className="grid gap-4">
+      <DialogHeader>
+        <DialogTitle className="flex items-center gap-2">
+          <NodeIcon name={entry.icon} className="size-4 shrink-0 text-muted-foreground" />
+          Connect {entry.name}
+          <Badge variant="outline">Pro</Badge>
+        </DialogTitle>
+        <DialogDescription>
+          {entry.name} is available on plans that include{" "}
+          {featureLabel(entry.requiresFeature ?? "")}.
+        </DialogDescription>
+      </DialogHeader>
+
+      <UpgradeCard feature={entry.requiresFeature ?? undefined} />
+
+      <DialogFooter>
+        {onBack ? (
+          <Button type="button" variant="outline" onClick={onBack}>
+            <ArrowLeftIcon />
+            Back
+          </Button>
+        ) : (
+          <DialogClose render={<Button variant="outline" />}>Close</DialogClose>
+        )}
+      </DialogFooter>
+    </div>
   );
 }
 
@@ -268,7 +331,10 @@ function ConnectionForm({
       {!entry.allowed && (
         <p className="text-xs text-muted-foreground">
           {entry.name} needs a plan with{" "}
-          <span className="font-medium text-foreground">{entry.requiresFeature}</span>.{" "}
+          <span className="font-medium text-foreground">
+            {featureLabel(entry.requiresFeature ?? "")}
+          </span>
+          .{" "}
           <Link href="/settings/billing" className="underline underline-offset-4">
             See plans
           </Link>

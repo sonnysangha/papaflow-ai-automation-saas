@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState, type DragEvent } from "react";
+import Link from "next/link";
 import { useQuery } from "convex/react";
 import { SearchIcon } from "lucide-react";
 
@@ -8,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/convex/_generated/api";
+import { featureLabel } from "@/lib/plans";
 import { cn } from "@/lib/utils";
 import { CATEGORIES } from "@/nodes/categories";
 import { nodeCatalogue, type CatalogueEntry } from "@/nodes/registry";
@@ -32,24 +34,39 @@ function NodeSidebarItem({ entry }: { entry: CatalogueEntry }) {
       className={cn(
         "rounded-lg border border-border bg-background p-2.5 transition-colors",
         disabled
-          ? "cursor-not-allowed opacity-50"
+          ? "cursor-not-allowed"
           : "cursor-grab hover:border-ring hover:bg-muted active:cursor-grabbing",
       )}
     >
-      <div className="flex items-center gap-2">
-        <NodeIcon name={entry.icon} className="h-4 w-4 shrink-0 text-muted-foreground" />
-        <span className="truncate text-sm font-medium">{entry.name}</span>
-        {locked ? (
-          <Badge variant="secondary" className="ml-auto shrink-0">
-            Pro
-          </Badge>
-        ) : soon ? (
-          <Badge variant="outline" className="ml-auto shrink-0">
-            Soon
-          </Badge>
-        ) : null}
+      {/* Dimming the *contents* rather than the card leaves the upgrade link at full contrast —
+          an `opacity` on the card would apply to its whole subtree, link included. */}
+      <div className={cn(disabled && "opacity-50")}>
+        <div className="flex items-center gap-2">
+          <NodeIcon name={entry.icon} className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <span className="truncate text-sm font-medium">{entry.name}</span>
+          {locked ? (
+            <Badge variant="secondary" className="ml-auto shrink-0">
+              Pro
+            </Badge>
+          ) : soon ? (
+            <Badge variant="outline" className="ml-auto shrink-0">
+              Soon
+            </Badge>
+          ) : null}
+        </div>
+        <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{entry.description}</p>
       </div>
-      <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{entry.description}</p>
+
+      {locked && entry.requiresFeature && (
+        // The card itself is undraggable; the link is the one live thing on it, so the upgrade is
+        // reachable from where the wall is met rather than only from settings.
+        <Link
+          href="/settings/billing"
+          className="mt-1.5 inline-block cursor-pointer text-xs underline underline-offset-4"
+        >
+          Upgrade for {featureLabel(entry.requiresFeature).toLowerCase()}
+        </Link>
+      )}
     </div>
   );
 }

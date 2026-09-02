@@ -58,7 +58,7 @@ export const linearConnector = defineConnector({
   name: "Linear",
   category: "data",
   kind: "apiKey",
-  requiresFeature: null,
+  requiresFeature: "pro_connectors",
   fields: [
     {
       name: "apiKey",

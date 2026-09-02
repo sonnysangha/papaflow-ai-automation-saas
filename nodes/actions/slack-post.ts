@@ -47,7 +47,7 @@ export const slackPostNode = defineNode({
   category: "chat",
   icon: "Hash",
   credential: "slack",
-  requiresFeature: null,
+  requiresFeature: "pro_connectors",
   version: "v1",
   inputs: z.object({
     connectionId: z.string(),

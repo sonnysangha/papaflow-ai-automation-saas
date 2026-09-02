@@ -7,6 +7,7 @@ import { FatalError } from "workflow";
 import type { ConnectorDef } from "@/connectors/define";
 import { CONNECTORS } from "@/connectors/registry";
 import * as engine from "@/lib/engine-client";
+import { featureLabel } from "@/lib/plans";
 import { aadFor, open, seal } from "@/lib/vault";
 
 /**
@@ -30,6 +31,8 @@ export class ConnectionRequestError extends Error {
     readonly status: number,
     readonly code: string,
     readonly error: string,
+    /** For `upgrade_required`: the feature slug the org is missing, so the UI can name it. */
+    readonly feature?: string,
   ) {
     super(error);
     this.name = "ConnectionRequestError";
@@ -39,10 +42,17 @@ export class ConnectionRequestError extends Error {
 /** The JSON body and status for a thrown failure. Unknown errors never reach the caller verbatim. */
 export function connectionErrorResponse(cause: unknown): {
   status: number;
-  body: { code: string; error: string };
+  body: { code: string; error: string; feature?: string };
 } {
   if (cause instanceof ConnectionRequestError) {
-    return { status: cause.status, body: { code: cause.code, error: cause.error } };
+    return {
+      status: cause.status,
+      body: {
+        code: cause.code,
+        error: cause.error,
+        ...(cause.feature ? { feature: cause.feature } : {}),
+      },
+    };
   }
 
   // The request bodies here carry credentials, so only the error is logged, never the input.
@@ -212,7 +222,8 @@ export async function createConnectionFromInput(
     throw new ConnectionRequestError(
       403,
       "upgrade_required",
-      `${def.name} needs the ${def.requiresFeature} feature. Upgrade your plan to connect it.`,
+      `${def.name} needs ${featureLabel(def.requiresFeature)}. Upgrade your plan to connect it.`,
+      def.requiresFeature,
     );
   }
 

@@ -6,6 +6,7 @@ import type { FunctionReturnType } from "convex/server";
 import { HistoryIcon, PlayIcon } from "lucide-react";
 import { toast } from "sonner";
 
+import { UpgradeCard } from "@/components/billing/UpgradeCard";
 import { RunStatusBadge } from "@/components/runs/RunsTable";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -37,9 +38,13 @@ const MANUAL_TRIGGER = "manual.trigger";
  * `Error` whose message carries the `ConvexError` payload in development and a generic digest in
  * production, so the limit is recognised by its code rather than by an instanceof check.
  */
+function isRunLimit(error: unknown): boolean {
+  return (error instanceof Error ? error.message : String(error)).includes("run_limit");
+}
+
 function runErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  if (message.includes("run_limit")) return "Monthly run limit reached";
+  if (isRunLimit(error)) return "Monthly run limit reached";
   return message.length > 0 ? message : "Could not start this run";
 }
 
@@ -74,6 +79,9 @@ type RunBarProps = {
 export function RunBar({ workflowId, triggerType, latest, runWorkflow }: RunBarProps) {
   const [sample, setSample] = useState("{}");
   const [pending, startTransition] = useTransition();
+  // Sticky once hit: the wall stays visible under the bar until a run actually starts, because a
+  // toast that has faded is no explanation for a Run button that keeps doing nothing.
+  const [runLimit, setRunLimit] = useState(false);
 
   const definition = triggerType ? NODES[triggerType] : undefined;
   const isManual = triggerType === MANUAL_TRIGGER;
@@ -92,59 +100,72 @@ export function RunBar({ workflowId, triggerType, latest, runWorkflow }: RunBarP
     startTransition(async () => {
       try {
         await runWorkflow(workflowId, isManual ? sample : "{}");
+        setRunLimit(false);
       } catch (error) {
         console.error(error);
+        setRunLimit(isRunLimit(error));
         toast.error(runErrorMessage(error));
       }
     });
   }
 
   return (
-    <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2">
-      <span className="flex items-center gap-1.5 text-sm">
-        <NodeIcon name={definition?.icon} className="h-4 w-4 shrink-0 text-muted-foreground" />
-        <span className={triggerType ? "font-medium" : "text-muted-foreground"}>
-          {definition?.name ?? triggerType ?? "No trigger yet"}
+    <>
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2">
+        <span className="flex items-center gap-1.5 text-sm">
+          <NodeIcon name={definition?.icon} className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <span className={triggerType ? "font-medium" : "text-muted-foreground"}>
+            {definition?.name ?? triggerType ?? "No trigger yet"}
+          </span>
         </span>
-      </span>
 
-      {isManual ? (
-        <Textarea
-          rows={1}
-          value={sample}
-          spellCheck={false}
-          aria-invalid={!sampleValid}
-          aria-label="Sample JSON payload"
-          title={
-            sampleValid
-              ? "Sample JSON sent to the trigger"
-              : "Invalid JSON — the run starts with an empty payload"
-          }
-          onChange={(event) => setSample(event.target.value)}
-          className="max-h-24 min-h-8 w-64 resize-none px-2 py-1.5 font-mono text-xs"
-        />
-      ) : null}
+        {isManual ? (
+          <Textarea
+            rows={1}
+            value={sample}
+            spellCheck={false}
+            aria-invalid={!sampleValid}
+            aria-label="Sample JSON payload"
+            title={
+              sampleValid
+                ? "Sample JSON sent to the trigger"
+                : "Invalid JSON — the run starts with an empty payload"
+            }
+            onChange={(event) => setSample(event.target.value)}
+            className="max-h-24 min-h-8 w-64 resize-none px-2 py-1.5 font-mono text-xs"
+          />
+        ) : null}
 
-      <Button
-        size="sm"
-        onClick={onRun}
-        disabled={pending || !triggerType}
-        title={triggerType ? undefined : "Drag a trigger onto the canvas first"}
-      >
-        <PlayIcon />
-        {pending ? "Starting…" : "Run"}
-      </Button>
-
-      <div className="ml-auto flex items-center gap-2">
-        <LastRun latest={latest} />
-        <Link
-          href={`/w/${workflowId}/runs`}
-          className={buttonVariants({ variant: "ghost", size: "sm" })}
+        <Button
+          size="sm"
+          onClick={onRun}
+          disabled={pending || !triggerType}
+          title={triggerType ? undefined : "Drag a trigger onto the canvas first"}
         >
-          <HistoryIcon />
-          Runs
-        </Link>
+          <PlayIcon />
+          {pending ? "Starting…" : "Run"}
+        </Button>
+
+        <div className="ml-auto flex items-center gap-2">
+          <LastRun latest={latest} />
+          <Link
+            href={`/w/${workflowId}/runs`}
+            className={buttonVariants({ variant: "ghost", size: "sm" })}
+          >
+            <HistoryIcon />
+            Runs
+          </Link>
+        </div>
       </div>
-    </div>
+
+      {runLimit && (
+        <UpgradeCard
+          compact
+          className="shrink-0 rounded-none border-x-0 border-t-0"
+          title="Monthly run limit reached"
+          description="This organisation has used every run its plan includes this month."
+        />
+      )}
+    </>
   );
 }

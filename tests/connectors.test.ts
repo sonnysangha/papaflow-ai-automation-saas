@@ -5,6 +5,10 @@ import {
   connectorCatalogue,
   hintFor,
 } from "@/connectors/registry";
+import { featuresForPlan } from "@/lib/plans";
+
+/** The four connectors Phase 11 put behind `pro_connectors`. Sorted, for direct comparison. */
+const PRO_PROVIDERS = ["airtable", "linear", "notion", "slack"];
 
 const AI_PROVIDERS = [
   "anthropic",
@@ -92,13 +96,39 @@ describe("connector registry", () => {
     }
   });
 
-  it("marks every connector allowed for an org with no paid features", () => {
+  it("dims exactly the Pro connectors for an org with no paid features", () => {
     const catalogue = connectorCatalogue([]);
     expect(catalogue).toHaveLength(21);
+
+    const blocked = catalogue.filter((entry) => !entry.allowed).map((entry) => entry.provider);
+    expect(blocked.sort()).toEqual(PRO_PROVIDERS);
+
     for (const entry of catalogue) {
-      expect(entry.requiresFeature).toBeNull();
-      expect(entry.allowed).toBe(true);
+      // The only feature any connector asks for today is `pro_connectors`; everything else — the
+      // AI providers, GitHub, Discord, Teams, Telegram, Resend — is free.
+      expect(entry.requiresFeature).toBe(
+        PRO_PROVIDERS.includes(entry.provider) ? "pro_connectors" : null,
+      );
+      expect(entry.allowed).toBe(!PRO_PROVIDERS.includes(entry.provider));
     }
+  });
+
+  it("allows every connector on Pro", () => {
+    const catalogue = connectorCatalogue(featuresForPlan("pro"));
+    expect(catalogue).toHaveLength(21);
+    for (const entry of catalogue) expect(entry.allowed).toBe(true);
+  });
+
+  it("gates a connector on the feature it names, not on the plan", () => {
+    // `core_connectors` alone is what `free_org` carries: it must not unlock the Pro four.
+    const core = connectorCatalogue(["core_connectors"]);
+    expect(core.filter((entry) => !entry.allowed).map((entry) => entry.provider).sort()).toEqual(
+      PRO_PROVIDERS,
+    );
+
+    // And the feature alone is enough, whichever plan happens to grant it.
+    const pro = connectorCatalogue(["pro_connectors"]);
+    expect(pro.every((entry) => entry.allowed)).toBe(true);
   });
 
   it("copies the field specs so the catalogue cannot mutate a definition", () => {

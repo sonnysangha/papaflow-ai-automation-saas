@@ -74,12 +74,12 @@ afterEach(() => {
 describe("slack.postMessage", () => {
   const CREDENTIAL = { provider: "slack", kind: "botToken", botToken: SLACK_TOKEN };
 
-  it("is a free Slack action whose channel field asks for a picker", () => {
+  it("is a Pro Slack action whose channel field asks for a picker", () => {
     expect(slackPostNode).toMatchObject({
       type: "slack.postMessage",
       category: "chat",
       credential: "slack",
-      requiresFeature: null,
+      requiresFeature: "pro_connectors",
       version: "v1",
     });
     expect(pickerOf(slackPostNode, "channel")).toBe("channels");

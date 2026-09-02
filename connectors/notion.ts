@@ -71,7 +71,7 @@ export const notionConnector = defineConnector({
   name: "Notion",
   category: "data",
   kind: "apiKey",
-  requiresFeature: null,
+  requiresFeature: "pro_connectors",
   fields: [
     {
       name: "apiKey",

@@ -1,6 +1,8 @@
 import { ConvexError, v } from "convex/values";
 
-import { internalMutation } from "./_generated/server";
+import { internalMutation, query } from "./_generated/server";
+import { requireOrg } from "./lib/auth";
+import { currentPlan } from "./lib/plan";
 
 /**
  * The `usage.month` key: "YYYY-MM" in UTC. Deliberately not local time — a run at 23:30 in Sydney
@@ -35,5 +37,60 @@ export const incrementRuns = internalMutation({
     else await ctx.db.insert("usage", { orgId, month, runs, builderTurns: 0, houseModelCalls: 0 });
 
     return { month, runs };
+  },
+});
+
+/** JSON cannot carry Infinity — an unlimited allowance becomes null on the wire, as in `plan.ts`. */
+function finite(n: number): number | null {
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * What the settings page's usage bars read: this month's runs and the org's workflow count, each
+ * against the allowance of the plan on the caller's session token.
+ *
+ * The counts are the same ones the limits are enforced against — `usage.incrementRuns` counts runs
+ * into this row, and `workflows.create` counts the same table — so a bar that reads "3 of 3" is
+ * exactly the wall the next create hits.
+ */
+export const current = query({
+  args: {},
+  returns: v.object({
+    month: v.string(),
+    runs: v.number(),
+    workflows: v.number(),
+    plan: v.string(),
+    limits: v.object({
+      runsPerMonth: v.union(v.number(), v.null()),
+      workflows: v.union(v.number(), v.null()),
+    }),
+  }),
+  handler: async (ctx) => {
+    const { orgId } = await requireOrg(ctx);
+    const { slug, limits } = await currentPlan(ctx);
+    const month = monthKey();
+
+    const row = await ctx.db
+      .query("usage")
+      .withIndex("by_org_month", (q) => q.eq("orgId", orgId).eq("month", month))
+      .unique();
+
+    // One indexed read of a table a workspace holds tens of rows in, exactly as `workflows.list`
+    // does — the count has to match the one `workflows.create` enforces against.
+    const workflows = await ctx.db
+      .query("workflows")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .collect();
+
+    return {
+      month,
+      runs: row?.runs ?? 0,
+      workflows: workflows.length,
+      plan: slug,
+      limits: {
+        runsPerMonth: finite(limits.runsPerMonth),
+        workflows: finite(limits.workflows),
+      },
+    };
   },
 });

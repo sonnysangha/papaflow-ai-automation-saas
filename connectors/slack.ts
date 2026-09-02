@@ -86,7 +86,7 @@ export const slackConnector = defineConnector({
   name: "Slack",
   category: "chat",
   kind: "botToken",
-  requiresFeature: null,
+  requiresFeature: "pro_connectors",
   fields: [
     {
       name: "botToken",

@@ -87,13 +87,13 @@ const NOTION_ME = "https://api.notion.com/v1/users/me";
 const NOTION_SEARCH = "https://api.notion.com/v1/search";
 
 describe("notion connector", () => {
-  it("is a free data connector with one secret field", () => {
+  it("is a Pro data connector with one secret field", () => {
     expect(notionConnector).toMatchObject({
       provider: "notion",
       name: "Notion",
       category: "data",
       kind: "apiKey",
-      requiresFeature: null,
+      requiresFeature: "pro_connectors",
       icon: "FileText",
     });
     expect(notionConnector.fields).toHaveLength(1);
@@ -194,12 +194,12 @@ const BASES = "https://api.airtable.com/v0/meta/bases";
 const TABLES = "https://api.airtable.com/v0/meta/bases/appBase1/tables";
 
 describe("airtable connector", () => {
-  it("is a free data connector with one secret field", () => {
+  it("is a Pro data connector with one secret field", () => {
     expect(airtableConnector).toMatchObject({
       provider: "airtable",
       category: "data",
       kind: "apiKey",
-      requiresFeature: null,
+      requiresFeature: "pro_connectors",
       icon: "Table",
     });
     expect(airtableConnector.fields[0]).toMatchObject({ name: "apiKey", kind: "secret" });
@@ -271,12 +271,12 @@ const LINEAR_KEY = "lin_api_0123456789abcdef";
 const LINEAR = "https://api.linear.app/graphql";
 
 describe("linear connector", () => {
-  it("is a free data connector with one secret field", () => {
+  it("is a Pro data connector with one secret field", () => {
     expect(linearConnector).toMatchObject({
       provider: "linear",
       category: "data",
       kind: "apiKey",
-      requiresFeature: null,
+      requiresFeature: "pro_connectors",
       icon: "SquareKanban",
     });
   });

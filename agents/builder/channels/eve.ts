@@ -2,8 +2,8 @@ import { verifyToken } from "@clerk/backend";
 import { extractBearerToken, localDev, type AuthFn } from "eve/channels/auth";
 import { eveChannel } from "eve/channels/eve";
 
-import { BUILDER_WORKFLOW_HEADER } from "@/lib/builder-protocol";
-import { DEFAULT_PLAN, isPlanSlug } from "@/lib/plans";
+import { BUILDER_WORKFLOW_HEADER } from "../../../lib/builder-protocol";
+import { DEFAULT_PLAN, isPlanSlug } from "../../../lib/plans";
 
 /**
  * Who may open a Builder session.

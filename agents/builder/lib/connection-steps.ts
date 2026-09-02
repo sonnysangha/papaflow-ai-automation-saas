@@ -1,5 +1,5 @@
-import { CONNECTORS } from "@/connectors/registry";
-import { listOrgConnections, openOrgConnection } from "@/lib/connections-engine";
+import { CONNECTORS } from "../../../connectors/registry";
+import { listOrgConnections, openOrgConnection } from "../../../lib/connections-engine";
 
 import { requireBuilderPlan, type BuilderIdentity } from "./session";
 

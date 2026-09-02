@@ -2,14 +2,14 @@ import type { ToolDefinition } from "eve/tools";
 import { defineTool } from "eve/tools";
 import type { z } from "zod";
 
-import { openOrgConnection } from "@/lib/connections-engine";
-import { featuresForPlan } from "@/lib/plans";
-import { discordPostNode } from "@/nodes/actions/discord-post";
-import { httpRequest } from "@/nodes/actions/http-request";
-import { notionCreatePageNode } from "@/nodes/actions/notion-create-page";
-import { slackPostNode } from "@/nodes/actions/slack-post";
-import { telegramSendNode } from "@/nodes/actions/telegram-send";
-import type { NodeDef } from "@/nodes/define";
+import { openOrgConnection } from "../../../lib/connections-engine";
+import { featuresForPlan } from "../../../lib/plans";
+import { discordPostNode } from "../../../nodes/actions/discord-post";
+import { httpRequest } from "../../../nodes/actions/http-request";
+import { notionCreatePageNode } from "../../../nodes/actions/notion-create-page";
+import { slackPostNode } from "../../../nodes/actions/slack-post";
+import { telegramSendNode } from "../../../nodes/actions/telegram-send";
+import type { NodeDef } from "../../../nodes/define";
 
 /**
  * The Runtime agent's connector tools, built from one organisation's connections.

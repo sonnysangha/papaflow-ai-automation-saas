@@ -8,9 +8,9 @@ import {
   removeBuilderNode,
   type BuilderWorkflow,
   type EditIdentity,
-} from "@/lib/builder-engine";
-import { inputIssues, sourceHandlesFor, validateWorkflow } from "@/lib/validate-workflow";
-import { NODES, nodeCatalogue } from "@/nodes/registry";
+} from "../../../lib/builder-engine";
+import { inputIssues, sourceHandlesFor, validateWorkflow } from "../../../lib/validate-workflow";
+import { NODES, nodeCatalogue } from "../../../nodes/registry";
 
 import type { BuilderSession } from "./session";
 

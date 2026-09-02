@@ -1,7 +1,7 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 
-import { listOrgConnections } from "@/lib/connections-engine";
+import { listOrgConnections } from "../../../lib/connections-engine";
 
 import { requireBuilder } from "../lib/session";
 

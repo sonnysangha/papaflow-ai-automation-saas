@@ -8,8 +8,8 @@ import {
 } from "eve/channels/auth";
 import { eveChannel } from "eve/channels/eve";
 
-import { ENGINE_TOKEN_AUDIENCE, ENGINE_TOKEN_ISSUER } from "@/lib/eve";
-import { DEFAULT_PLAN, isPlanSlug } from "@/lib/plans";
+import { ENGINE_TOKEN_AUDIENCE, ENGINE_TOKEN_ISSUER } from "../../../lib/eve";
+import { DEFAULT_PLAN, isPlanSlug } from "../../../lib/plans";
 
 /**
  * Who may open a session on the Runtime agent.

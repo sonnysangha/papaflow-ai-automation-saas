@@ -3,7 +3,7 @@ import { ask, type ToolInputResponse } from "eve/workflow";
 import { sleep } from "workflow";
 import { z } from "zod";
 
-import { CANCEL_OPTION_ID } from "@/lib/builder-protocol";
+import { CANCEL_OPTION_ID } from "../../../lib/builder-protocol";
 
 import { confirmConnection, prepareConnectionRequest } from "../lib/connection-steps";
 import { requireIdentity } from "../lib/session";

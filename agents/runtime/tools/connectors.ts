@@ -1,7 +1,7 @@
 import { defineDynamic } from "eve/tools";
 
-import { listOrgConnections } from "@/lib/connections-engine";
-import { DEFAULT_PLAN } from "@/lib/plans";
+import { listOrgConnections } from "../../../lib/connections-engine";
+import { DEFAULT_PLAN } from "../../../lib/plans";
 
 import { buildConnectorTools, type ConnectorToolSet } from "../lib/connector-tools";
 

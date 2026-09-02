@@ -1,7 +1,7 @@
 import { defineAgent, defineDynamic } from "eve";
 
-import { providerFor } from "@/lib/ai/providers";
-import { listOrgConnections, openOrgConnection } from "@/lib/connections-engine";
+import { providerFor } from "../../lib/ai/providers";
+import { listOrgConnections, openOrgConnection } from "../../lib/connections-engine";
 
 import { modelsFromMeta, pickConnection, pickModelId } from "./lib/models";
 

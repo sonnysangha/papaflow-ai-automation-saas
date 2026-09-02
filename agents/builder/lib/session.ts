@@ -1,6 +1,6 @@
-import { orgPlanFromClerk } from "@/lib/billing-engine";
-import { BUILDER_FEATURE } from "@/lib/builder-protocol";
-import { featuresForPlan } from "@/lib/plans";
+import { orgPlanFromClerk } from "../../../lib/billing-engine";
+import { BUILDER_FEATURE } from "../../../lib/builder-protocol";
+import { featuresForPlan } from "../../../lib/plans";
 
 /**
  * Who is on the other end of a Builder session, and whether their plan may use it.

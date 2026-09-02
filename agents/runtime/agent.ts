@@ -1,7 +1,7 @@
 import { defineAgent, defineDynamic } from "eve";
 
-import { providerFor } from "@/lib/ai/providers";
-import { openOrgConnection } from "@/lib/connections-engine";
+import { providerFor } from "../../lib/ai/providers";
+import { openOrgConnection } from "../../lib/connections-engine";
 
 /**
  * The agent behind the `ai.agent` node.

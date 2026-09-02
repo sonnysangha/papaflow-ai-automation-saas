@@ -12,37 +12,8 @@ const stepStatus = v.union(
 );
 
 export default defineSchema({
-  organizations: defineTable({
-    orgId: v.string(),
-    name: v.string(),
-    slug: v.optional(v.string()),
-    imageUrl: v.optional(v.string()),
-    createdBy: v.optional(v.string()),
-    deletedAt: v.optional(v.number()),
-    updatedAt: v.number(),
-  }).index("by_org", ["orgId"]),
-
-  memberships: defineTable({
-    orgId: v.string(),
-    userId: v.string(),
-    role: v.string(),
-    clerkMembershipId: v.string(),
-    updatedAt: v.number(),
-  })
-    .index("by_org", ["orgId"])
-    .index("by_user", ["userId"])
-    .index("by_clerkMembershipId", ["clerkMembershipId"]),
-
-  orgPlans: defineTable({
-    orgId: v.string(),
-    planSlug: v.string(), // "free_org" (Clerk's auto-created default) | "pro" | "team"
-    status: v.string(), // snake_case from the webhook: active | canceled | ended | past_due | upcoming | …
-    periodEnd: v.optional(v.number()),
-    isFreeTrial: v.optional(v.boolean()),
-    subscriptionItemId: v.optional(v.string()),
-    features: v.array(v.string()),
-    updatedAt: v.number(),
-  }).index("by_org", ["orgId"]),
+  // Organisations, memberships and plans are NOT mirrored here: Clerk is the source of truth and
+  // the session token carries the org id, role, plan (`pla`) and features (`fea`). See convex/lib/auth.ts.
 
   workflows: defineTable({
     orgId: v.string(),

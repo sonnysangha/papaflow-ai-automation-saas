@@ -6,6 +6,7 @@ import type { FunctionReturnType } from "convex/server";
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
 
 import { StatusRing } from "@/components/canvas/StatusRing";
+import { CopyableUrl } from "@/components/canvas/fields/CopyableUrl";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -27,6 +28,7 @@ import {
 } from "@/components/ui/table";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { appOrigin } from "@/lib/app-origin";
 import { NODES } from "@/nodes/registry";
 
 /** One row of `api.steps.byExecution` — the whole `steps` document. */
@@ -77,10 +79,35 @@ function JsonBlock({ label, value }: { label: string; value: unknown }) {
   );
 }
 
+/**
+ * The URL that resumes this step, for as long as it is the one being waited on.
+ *
+ * The token (`steps.hookToken`, `${executionId}:${nodeId}`) is only on the row while the run is
+ * suspended there, so this is the one place the concrete address exists: the config panel can only
+ * show the pattern, because at design time no execution id has been minted yet.
+ *
+ * The token is the whole authorization — anyone holding this URL can resume this one node of this
+ * one run — so it is shown, not hidden, but only to someone who can already read the run.
+ */
+function ResumeUrl({ step }: { step: Step }) {
+  const url = `${appOrigin()}/api/wait/${step.hookToken ?? ""}`;
+
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-xs font-medium text-muted-foreground">Resume URL</span>
+      <CopyableUrl value={url} label="Resume URL" />
+      <p className="text-xs text-muted-foreground">
+        POST to this URL to continue the run. The body becomes this node&rsquo;s output.
+      </p>
+    </div>
+  );
+}
+
 /** The expanded half of a step row: what went in (redacted by `runNode`) and what came back. */
 function StepDetail({ step }: { step: Step }) {
   return (
     <div className="flex flex-col gap-3 rounded-lg bg-muted/30 p-3">
+      {step.status === "waiting" && step.hookToken ? <ResumeUrl step={step} /> : null}
       <div className="flex flex-wrap gap-3">
         <JsonBlock label="Input" value={step.input} />
         <JsonBlock label="Output" value={step.output} />

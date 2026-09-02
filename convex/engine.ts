@@ -12,6 +12,7 @@ import {
   executionStatusValidator,
   sealedValidator,
   stepMarkArgs,
+  stepStatusValidator,
 } from "./lib/validators";
 import schema from "./schema";
 import { graphValidator } from "./workflows";
@@ -126,6 +127,42 @@ export const getStep = query({
   handler: async (ctx, { secret, ...args }): Promise<Doc<"steps"> | null> => {
     guard(secret);
     return await ctx.runQuery(internal.steps.get, args);
+  },
+});
+
+/**
+ * The step a hook token belongs to. A resume route (`/api/wait/:token`, and the Approval
+ * interactivity routes) holds nothing but the token, so this is how it learns whether there is a
+ * run waiting for it — and it is answered with ids only, never the step's input or output.
+ */
+type StepByHookToken = {
+  _id: Id<"steps">;
+  executionId: Id<"executions">;
+  orgId: string;
+  nodeId: string;
+  nodeType: string;
+  status: Doc<"steps">["status"];
+} | null;
+
+const stepByHookTokenResult = v.union(
+  v.object({
+    _id: v.id("steps"),
+    executionId: v.id("executions"),
+    orgId: v.string(),
+    nodeId: v.string(),
+    nodeType: v.string(),
+    status: stepStatusValidator,
+  }),
+  v.null(),
+);
+
+/** The waiting step a token addresses, or null when no step has ever carried that token. */
+export const getStepByHookToken = query({
+  args: { secret: v.string(), hookToken: v.string() },
+  returns: stepByHookTokenResult,
+  handler: async (ctx, { secret, ...args }): Promise<StepByHookToken> => {
+    guard(secret);
+    return await ctx.runQuery(internal.steps.byHookToken, args);
   },
 });
 

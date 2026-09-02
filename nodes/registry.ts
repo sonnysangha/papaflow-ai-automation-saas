@@ -16,6 +16,8 @@ import type { AnyNodeDef, NodeCategory } from "./define";
 import { conditionNode } from "./logic/condition";
 import { setNode } from "./logic/set";
 import { switchNode } from "./logic/switch";
+import { waitNode } from "./logic/wait";
+import { waitForWebhookNode } from "./logic/wait-for-webhook";
 import { toJsonSchema, type JsonSchema } from "./schema";
 import { formTriggerNode } from "./triggers/form";
 import { manualTrigger } from "./triggers/manual";
@@ -33,6 +35,8 @@ const DEFINITIONS: readonly AnyNodeDef[] = [
   conditionNode,
   switchNode,
   setNode,
+  waitNode,
+  waitForWebhookNode,
   llmNode,
   extractNode,
   classifyNode,

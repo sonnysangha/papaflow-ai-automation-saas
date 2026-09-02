@@ -3,7 +3,20 @@ import { createHook, sleep } from "workflow";
 import { nextNodes, unvisited } from "@/workflows/graph";
 import { recordFinish, recordResume, recordSkipped } from "@/workflows/steps/record";
 import { runNode } from "@/workflows/steps/run-node";
-import type { HookPayload, RunInput } from "@/workflows/types";
+import { hookTokenFor, type HookPayload, type RunInput } from "@/workflows/types";
+
+/**
+ * The branch a resumed hook asks for. Pure and tiny so it can live in workflow code: the payload
+ * comes off the event log on every replay, and reading a field off it is deterministic.
+ *
+ * Anything that is not a non-empty string means "the node's own handle decides" — a Wait-for-webhook
+ * body that happens to contain a `handle` number is data, not a routing instruction.
+ */
+function handleFromPayload(payload: unknown): string | null {
+  if (typeof payload !== "object" || payload === null) return null;
+  const handle = (payload as { handle?: unknown }).handle;
+  return typeof handle === "string" && handle.length > 0 ? handle : null;
+}
 
 /**
  * The durable run: a breadth-first walk of the graph, one frontier at a time.
@@ -53,23 +66,28 @@ export async function runGraph({ executionId, orgId, planSlug, graph, trigger }:
       frontier = [];
       for (const r of results) {
         let output = r.output;
+        let handle = r.handle;
 
         // Wait node: suspends the run without holding compute.
         if (r.control?.kind === "sleep") await sleep(r.control.ms);
 
-        // Approval node: suspends until something outside calls `resumeHook(token, payload)`. The
-        // token is derived from the run, so the resumer only needs ids it already has.
+        // Approval and Wait-for-webhook: suspend until something outside calls
+        // `resumeHook(token, payload)`. The token is derived from the run, so the resumer only
+        // needs ids it already has.
         if (r.control?.kind === "hook") {
-          using hook = createHook<HookPayload>({ token: `${executionId}:${r.nodeId}` });
+          using hook = createHook<HookPayload>({ token: hookTokenFor(executionId, r.nodeId) });
           output = await hook;
-          await recordResume(executionId, r.nodeId, output);
+          // The branch can only be known now: an Approval's `approved`/`rejected` handle is the
+          // resumer's answer, not the node's. A payload that names one wins over `handle(out)`.
+          handle = handleFromPayload(output) ?? handle;
+          await recordResume(executionId, r.nodeId, output, handle);
         }
 
         outputs[graph.nodes[r.nodeId].data.key] = output;
 
         // A Condition/Switch node returns the handle to follow; everything else returns null and
         // follows its default output. `visited` keeps a diamond from running a node twice.
-        for (const next of nextNodes(graph, r.nodeId, r.handle))
+        for (const next of nextNodes(graph, r.nodeId, handle))
           if (!visited.has(next)) {
             visited.add(next);
             frontier.push(next);

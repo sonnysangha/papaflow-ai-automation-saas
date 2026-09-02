@@ -294,6 +294,107 @@ describe("api.engine", () => {
     ).toEqual({ code: "not_found" });
   });
 
+  test("markStep stores the hook token on a waiting step, and getStepByHookToken finds it", async () => {
+    const { t, workflowId } = await setup();
+    const executionId = await createExecution({ t, workflowId });
+    const token = `${executionId}:approval_1`;
+
+    await t.mutation(api.engine.markStep, {
+      secret: SECRET,
+      executionId,
+      orgId: ORG,
+      nodeId: "approval_1",
+      nodeType: "logic.waitForWebhook",
+      status: "waiting",
+      attempt: 1,
+      output: { body: null, headers: {} },
+      hookToken: token,
+    });
+
+    // `waiting` is not terminal: the row stays open until the payload arrives.
+    await t.run(async (ctx) => {
+      const [row] = await ctx.db.query("steps").collect();
+      expect(row.hookToken).toBe(token);
+      expect(row.finishedAt).toBeUndefined();
+    });
+
+    const found = await t.query(api.engine.getStepByHookToken, { secret: SECRET, hookToken: token });
+    expect(found).toEqual({
+      _id: expect.anything(),
+      executionId,
+      orgId: ORG,
+      nodeId: "approval_1",
+      nodeType: "logic.waitForWebhook",
+      status: "waiting",
+    });
+    // Ids and status only: a resume route holds nothing but the token, so it learns nothing else.
+    expect(Object.keys(found ?? {}).sort()).toEqual([
+      "_id",
+      "executionId",
+      "nodeId",
+      "nodeType",
+      "orgId",
+      "status",
+    ]);
+  });
+
+  test("getStepByHookToken is null for an unissued token, and reports a step that stopped waiting", async () => {
+    const { t, workflowId } = await setup();
+    const executionId = await createExecution({ t, workflowId });
+    const token = `${executionId}:wait_1`;
+
+    expect(
+      await t.query(api.engine.getStepByHookToken, { secret: SECRET, hookToken: token }),
+    ).toBeNull();
+
+    await t.mutation(api.engine.markStep, {
+      secret: SECRET,
+      executionId,
+      orgId: ORG,
+      nodeId: "wait_1",
+      nodeType: "logic.waitForWebhook",
+      status: "waiting",
+      attempt: 1,
+      hookToken: token,
+    });
+
+    // The resume: `recordResume` marks the same row `success` with the payload as its output and
+    // does not send a token, which must not wipe the one already on the row.
+    await t.mutation(api.engine.markStep, {
+      secret: SECRET,
+      executionId,
+      orgId: ORG,
+      nodeId: "wait_1",
+      nodeType: "logic.waitForWebhook",
+      status: "success",
+      attempt: 1,
+      output: { body: { ok: true }, headers: {} },
+      handle: "approved",
+    });
+
+    // Still findable by token — `lib/hooks.ts#resumeByToken` refuses it on status, not absence, so
+    // a second POST to the same URL is a flat 404 rather than a second resume.
+    const resumed = await t.query(api.engine.getStepByHookToken, {
+      secret: SECRET,
+      hookToken: token,
+    });
+    expect(resumed).toMatchObject({ nodeId: "wait_1", status: "success" });
+  });
+
+  test("getStepByHookToken refuses a wrong secret", async () => {
+    const { t, workflowId } = await setup();
+    const executionId = await createExecution({ t, workflowId });
+
+    expect(
+      await convexErrorData(
+        t.query(api.engine.getStepByHookToken, {
+          secret: "not-the-secret",
+          hookToken: `${executionId}:wait_1`,
+        }),
+      ),
+    ).toEqual({ code: "unauthorized" });
+  });
+
   test("markSkipped only writes rows for nodes that never ran", async () => {
     const { t, workflowId } = await setup();
     const executionId = await createExecution({ t, workflowId });

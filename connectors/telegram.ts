@@ -6,8 +6,6 @@
 // The generated token is stored *inside* the sealed secret rather than in `meta`: `meta` is
 // projected to the client by the connections list, and this value is what authenticates every
 // inbound update (CLAUDE.md rule 1).
-import { randomBytes } from "node:crypto";
-
 import { defineConnector } from "./define";
 
 const TIMEOUT_MS = 15_000;
@@ -52,7 +50,12 @@ async function callBotApi(
 
 /** 24 random bytes → exactly 32 base64url characters, well inside Telegram's 1-256 char limit. */
 function generateSecretToken(): string {
-  return randomBytes(24).toString("base64url");
+  // Web Crypto rather than `node:crypto`: this module is reachable from the node registry, which
+  // the Workflow SDK bundles into the workflow function, and its bundler refuses Node built-ins.
+  const bytes = new Uint8Array(24);
+  globalThis.crypto.getRandomValues(bytes);
+  const base64 = btoa(String.fromCharCode(...bytes));
+  return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 /** A chat learned from an inbound update, as the route stores it in `meta.chat_ids`. */

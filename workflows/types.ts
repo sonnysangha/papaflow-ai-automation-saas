@@ -19,3 +19,16 @@ export type NodeInput = { nodeId: string; nodeType: string; executionId: string;
 export type Control = { kind: "sleep"; ms: number } | { kind: "hook" } | undefined;
 export type NodeResult = { nodeId: string; output: unknown; handle: string | null; control: Control };
 export type HookPayload = Record<string, unknown>;
+
+/**
+ * The hook token for one node of one run — the only address a resumer needs, and derivable from
+ * ids the caller already has. `runNode` stores it on the `waiting` step row (`steps.hookToken`,
+ * indexed by `by_hookToken`), `runGraph` opens `createHook({ token })` with it, and the resume
+ * routes hand it straight back to `resumeHook`.
+ *
+ * It lives here because both sides need it and this module has no imports: `"use workflow"` code
+ * may not reach into `lib/`, which is where the Node-only resume half lives.
+ */
+export function hookTokenFor(executionId: string, nodeId: string): string {
+  return `${executionId}:${nodeId}`;
+}

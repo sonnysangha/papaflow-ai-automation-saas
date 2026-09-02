@@ -3,7 +3,7 @@ import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internalMutation, internalQuery, query, type QueryCtx } from "./_generated/server";
 import { requireOrg } from "./lib/auth";
-import { stepMarkArgs, type StepStatus } from "./lib/validators";
+import { stepMarkArgs, stepStatusValidator, type StepStatus } from "./lib/validators";
 import schema from "./schema";
 
 /** Statuses that end a step: they stamp `finishedAt`. Every other status clears it again. */
@@ -36,6 +36,45 @@ export const get = internalQuery({
   args: { executionId: v.id("executions"), nodeId: v.string() },
   returns: v.union(schema.doc("steps"), v.null()),
   handler: async (ctx, { executionId, nodeId }) => await stepFor(ctx, executionId, nodeId),
+});
+
+/**
+ * A step that is (or was) suspended on a hook, found by the token alone — the only thing a resume
+ * route holds, since the token comes out of its URL.
+ *
+ * Deliberately not the whole document: a resume route has proved nothing but possession of the
+ * token, and a step's `input`/`output` is node data. It gets the ids it needs to decide whether to
+ * resume, and nothing else (CLAUDE.md rule 1).
+ */
+export const byHookToken = internalQuery({
+  args: { hookToken: v.string() },
+  returns: v.union(
+    v.object({
+      _id: v.id("steps"),
+      executionId: v.id("executions"),
+      orgId: v.string(),
+      nodeId: v.string(),
+      nodeType: v.string(),
+      status: stepStatusValidator,
+    }),
+    v.null(),
+  ),
+  handler: async (ctx, { hookToken }) => {
+    const step = await ctx.db
+      .query("steps")
+      .withIndex("by_hookToken", (q) => q.eq("hookToken", hookToken))
+      .unique();
+    if (!step) return null;
+
+    return {
+      _id: step._id,
+      executionId: step.executionId,
+      orgId: step.orgId,
+      nodeId: step.nodeId,
+      nodeType: step.nodeType,
+      status: step.status,
+    };
+  },
 });
 
 /**

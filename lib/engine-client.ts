@@ -34,6 +34,9 @@ export type WorkflowForRun = FunctionReturnType<typeof api.engine.getWorkflowFor
 /** A stored `steps` row — what `runNode` reads to decide whether it has already done the work. */
 export type StoredStep = FunctionReturnType<typeof api.engine.getStep>;
 
+/** The projection a resume route gets from a hook token: ids and status, never node data. */
+export type StepByHookToken = FunctionReturnType<typeof api.engine.getStepByHookToken>;
+
 /** One `markStep` call, with `executionId` as the plain string the step boundary carries. */
 export type MarkStepInput = MarkStepArgs & { executionId: string };
 
@@ -88,6 +91,15 @@ export async function getStep(executionId: string, nodeId: string): Promise<Stor
     executionId: executionRef(executionId),
     nodeId,
   });
+}
+
+/**
+ * The step a hook token addresses, or null. Ids and status only — a resume route has proved
+ * nothing but possession of the token, and this is all it needs to decide whether to resume.
+ */
+export async function getStepByHookToken(hookToken: string): Promise<StepByHookToken> {
+  const { client, secret } = engineClient();
+  return await client.query(api.engine.getStepByHookToken, { secret, hookToken });
 }
 
 export async function markStep({ executionId, ...args }: MarkStepInput): Promise<void> {

@@ -24,6 +24,7 @@ import { JsonField } from "./fields/JsonField";
 import { KeyValueList, type KeyValuePair } from "./fields/KeyValueList";
 import { NumberInput } from "./fields/NumberInput";
 import { PickerField } from "./fields/PickerField";
+import { ResumeUrlPattern } from "./fields/ResumeUrl";
 import { TagList } from "./fields/TagList";
 import { TemplateInput } from "./fields/TemplateInput";
 import { TriggerUrl } from "./fields/TriggerUrl";
@@ -49,6 +50,9 @@ const CONNECTION_INPUT = "connectionId";
 
 /** The trigger whose configuration is not inputs at all, but the URL the workflow listens on. */
 const WEBHOOK_TRIGGER = "webhook.trigger";
+
+/** …and the node whose configuration is the URL that resumes one paused run of this workflow. */
+const WAIT_FOR_WEBHOOK = "logic.waitForWebhook";
 
 type FieldKind =
   | "text"
@@ -381,6 +385,7 @@ export function ConfigPanel({
   // The Webhook trigger has no inputs — its URL is the configuration — so the panel must not
   // follow it with "This node has no settings."
   const showsUrl = node.data.nodeType === WEBHOOK_TRIGGER;
+  const showsResumeUrl = node.data.nodeType === WAIT_FOR_WEBHOOK;
   const handles = sourceHandles(node.data.nodeType, node.data.inputs);
   // Read here rather than inside `NodeField`: every picker field on this node reads the same
   // input, and choosing a different connection has to re-load all of them at once.
@@ -463,11 +468,18 @@ export function ConfigPanel({
             </div>
           )}
 
+          {showsResumeUrl && (
+            <div className="space-y-1.5">
+              <Label htmlFor={`${node.id}-resume-url`}>Resume URL</Label>
+              <ResumeUrlPattern id={`${node.id}-resume-url`} nodeId={node.id} />
+            </div>
+          )}
+
           {schema === null ? (
             <p className="text-sm text-muted-foreground">
               This node type is not installed, so there is nothing to configure.
             </p>
-          ) : Object.keys(properties).length === 0 && !showsUrl ? (
+          ) : Object.keys(properties).length === 0 && !showsUrl && !showsResumeUrl ? (
             <p className="text-sm text-muted-foreground">This node has no settings.</p>
           ) : (
             Object.entries(properties).map(([name, raw]) => {

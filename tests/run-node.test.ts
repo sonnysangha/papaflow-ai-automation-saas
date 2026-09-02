@@ -180,13 +180,31 @@ describe("runNode", () => {
     expect(result).toEqual({ nodeId: "n1", output: { ok: true }, handle: null, control: undefined });
   });
 
-  it("marks the step waiting when the node asks for a hook", async () => {
+  it("marks the step waiting, with its hook token, when the node asks for a hook", async () => {
     installNode({ control: () => ({ kind: "hook" }) });
 
     const result = await runNode(nodeInput({ url: "https://api.example.com/things" }));
 
-    expect(markStepMock.mock.calls[1][0]).toMatchObject({ status: "waiting" });
+    // `${executionId}:${nodeId}` — the address `runGraph` opens the hook on and the resume route
+    // finds this row by (`steps.by_hookToken`).
+    expect(markStepMock.mock.calls[1][0]).toMatchObject({
+      status: "waiting",
+      hookToken: "exec_1:n1",
+    });
     expect(result.control).toEqual({ kind: "hook" });
+  });
+
+  it("leaves no hook token on a node that does not suspend", async () => {
+    await runNode(nodeInput({ url: "https://api.example.com/things" }));
+
+    expect(markStepMock.mock.calls[1][0]).toMatchObject({ status: "success" });
+    expect(markStepMock.mock.calls[1][0].hookToken).toBeUndefined();
+  });
+
+  it("hands the node its own hook token, so a node that posts buttons can address itself", async () => {
+    await runNode(nodeInput({ url: "https://api.example.com/things" }));
+
+    expect(run.mock.calls[0][0]).toMatchObject({ hookToken: "exec_1:n1" });
   });
 
   it("records the handle a branching node returns", async () => {

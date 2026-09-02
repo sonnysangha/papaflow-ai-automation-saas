@@ -33,7 +33,7 @@ describe("node registry", () => {
 
   it("builds a catalogue for a plan's features", () => {
     const catalogue = nodeCatalogue(["core_connectors"]);
-    expect(catalogue).toHaveLength(21);
+    expect(catalogue).toHaveLength(23);
     expect(catalogue.map((entry) => entry.type).sort()).toEqual([
       "ai.classify",
       "ai.extract",
@@ -48,6 +48,8 @@ describe("node registry", () => {
       "logic.condition",
       "logic.set",
       "logic.switch",
+      "logic.wait",
+      "logic.waitForWebhook",
       "manual.trigger",
       "notion.createPage",
       "slack.postMessage",
@@ -90,6 +92,8 @@ describe("node registry", () => {
       "logic",
       "logic",
       "logic",
+      "logic",
+      "logic",
       "ai",
       "ai",
       "ai",
@@ -108,7 +112,7 @@ describe("node registry", () => {
 
   it("still allows nodes whose requiresFeature is null when the org has no features", () => {
     const catalogue = nodeCatalogue([]);
-    expect(catalogue).toHaveLength(21);
+    expect(catalogue).toHaveLength(23);
     for (const entry of catalogue) {
       expect(entry.requiresFeature).toBeNull();
       expect(entry.allowed).toBe(true);

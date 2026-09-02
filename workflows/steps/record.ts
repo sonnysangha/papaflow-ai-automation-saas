@@ -38,11 +38,16 @@ export async function recordFinish(
  * Closes a node that was `waiting` on a hook: the payload the hook received becomes the node's
  * output. `orgId`, `nodeType` and `attempt` come from the row `runNode` already wrote, so the
  * workflow does not have to carry them through the suspension.
+ *
+ * `handle` is the branch the resumed run is about to take — for an Approval that is decided by the
+ * payload ("approved" or "rejected"), not by anything the node knew when it suspended — so the
+ * step row records the branch that was actually followed rather than the one it guessed.
  */
 export async function recordResume(
   executionId: string,
   nodeId: string,
   output: unknown,
+  handle?: string | null,
 ): Promise<void> {
   "use step";
 
@@ -58,6 +63,6 @@ export async function recordResume(
     status: "success",
     attempt: stored.attempt,
     output,
-    handle: stored.handle ?? undefined,
+    handle: handle ?? stored.handle ?? undefined,
   });
 }

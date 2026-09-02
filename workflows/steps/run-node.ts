@@ -8,7 +8,7 @@ import { openFresh } from "@/lib/vault";
 import { ConnectorError } from "@/nodes/define";
 import { NODES } from "@/nodes/registry";
 import { resolveTemplates } from "@/nodes/templates";
-import type { NodeInput, NodeResult } from "@/workflows/types";
+import { hookTokenFor, type NodeInput, type NodeResult } from "@/workflows/types";
 
 /**
  * One node, one step. This is the only place a connector's `run()` is called, and the only place
@@ -80,12 +80,18 @@ export async function runNode(input: NodeInput): Promise<NodeResult> {
           ? await openCredential(inputs, orgId, features)
           : undefined;
 
+      // The address this node can be resumed at, whether or not it turns out to want one: a node
+      // that posts its own buttons (Approval) has to put the token in them, and it only learns
+      // that it is suspending by returning `control` — after `run` has already sent the message.
+      const hookToken = hookTokenFor(executionId, nodeId);
+
       const output: unknown = def.outputs.parse(
-        await def.run({ inputs, credential, orgId, executionId, nodeId }),
+        await def.run({ inputs, credential, orgId, executionId, nodeId, hookToken }),
       );
 
       const handle = def.handle?.(output) ?? null;
       const control = def.control?.(output);
+      const waiting = control?.kind === "hook";
 
       await markStep({
         executionId,
@@ -94,11 +100,15 @@ export async function runNode(input: NodeInput): Promise<NodeResult> {
         nodeType,
         // A node that asked for a hook is not finished: the workflow suspends on it, and
         // `recordResume` closes the row when the payload arrives.
-        status: control?.kind === "hook" ? "waiting" : "success",
+        status: waiting ? "waiting" : "success",
         attempt,
         input: redact(inputs),
         output,
         handle: handle ?? undefined,
+        // `by_hookToken` is how a resume route finds this step from nothing but the token in its
+        // URL. Written only on the suspending mark (an `undefined` here leaves whatever the row
+        // already had); a resume that has landed is refused by status, not by clearing the token.
+        hookToken: waiting ? hookToken : undefined,
         // Unresolved paths are configuration mistakes, not failures: the node ran with `""` where
         // the template was, and the row carries the explanation to the canvas.
         warnings,

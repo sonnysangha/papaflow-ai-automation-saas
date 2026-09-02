@@ -66,7 +66,7 @@ beforeEach(() => {
 });
 
 describe("providerFor", () => {
-  it("builds a provider for every AI connector kind", () => {
+  it("builds a provider for every AI connector kind", async () => {
     for (const provider of [
       "openai",
       "anthropic",
@@ -77,7 +77,7 @@ describe("providerFor", () => {
       "deepseek",
       "openrouter",
     ]) {
-      expect(modelFor(provider, "key-1", "some-model")).toEqual({
+      expect(await modelFor(provider, "key-1", "some-model")).toEqual({
         provider,
         modelId: "some-model",
         apiKey: "key-1",
@@ -85,8 +85,8 @@ describe("providerFor", () => {
     }
   });
 
-  it("refuses a provider it has no factory for", () => {
-    expect(() => providerFor("elevenlabs", "key-1")).toThrow(/elevenlabs/);
+  it("refuses a provider it has no factory for", async () => {
+    await expect(providerFor("elevenlabs", "key-1")).rejects.toThrow(/elevenlabs/);
   });
 });
 

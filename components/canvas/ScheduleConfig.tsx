@@ -123,7 +123,7 @@ export function ScheduleConfig({ workflowId, inputs }: ScheduleConfigProps) {
           }
           toast.success(next ? "Schedule enabled" : "Schedule paused");
         })
-        .catch(() => toast.error("Could not reach the server"))
+        .catch(() => toast.error("Could not reach the server — please try again"))
         .finally(() => setPending(false));
     },
     [workflowId],

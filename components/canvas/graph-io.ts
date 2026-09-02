@@ -29,6 +29,8 @@ export type RunNodeState = {
   status: NodeStatus;
   handle?: string;
   output?: unknown;
+  /** How long the step took, once it has finished; `undefined` while it is still going. */
+  durationMs?: number;
 };
 
 /** The shape a node key must have to be usable in a template: `{{ http_request_1.body }}`. */
@@ -42,10 +44,12 @@ export type WorkflowNodeData = {
   label: string;
   inputs: Record<string, unknown>;
   status?: NodeStatus;
+  /** Runtime-only, like `status`: how long this node's step took in the latest run. */
+  durationMs?: number;
 };
 
-/** What actually reaches Convex — `status` is stripped on the way out. */
-export type StoredNodeData = Omit<WorkflowNodeData, "status">;
+/** What actually reaches Convex — the run-state fields are stripped on the way out. */
+export type StoredNodeData = Omit<WorkflowNodeData, "status" | "durationMs">;
 
 export type WorkflowNodeType = Node<WorkflowNodeData, typeof PAPAFLOW_NODE_TYPE>;
 

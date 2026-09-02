@@ -36,22 +36,26 @@ export const scheduleTriggerNode = defineNode({
     mode: z
       .enum(["every", "cron"])
       .default("every")
-      .describe("every: a fixed interval. cron: a five-field expression you write yourself."),
+      .describe("every: a fixed interval. cron: a five-field expression you write yourself.")
+      .meta({ label: "Repeat" }),
     everyMinutes: z
       .number()
       .int()
       .min(1)
       .max(1440)
       .default(60)
-      .describe("Minutes between runs, when mode is every. Your plan sets the smallest allowed."),
+      .describe("Minutes between runs, when mode is every. Your plan sets the smallest allowed.")
+      .meta({ label: "Every (minutes)" }),
     cron: z
       .string()
       .optional()
-      .describe("Five fields — minute hour day month weekday — when mode is cron. e.g. 0 9 * * 1-5"),
+      .describe("Five fields — minute hour day month weekday — when mode is cron. e.g. 0 9 * * 1-5")
+      .meta({ label: "Cron expression" }),
     timezone: z
       .string()
       .optional()
-      .describe("IANA name the expression is read in, e.g. Europe/London. Defaults to UTC."),
+      .describe("IANA name the expression is read in, e.g. Europe/London. Defaults to UTC.")
+      .meta({ label: "Time zone" }),
   }),
   outputs: z.object({
     /** ISO 8601, the tick this run was scheduled for — not the moment the step happened to wake. */

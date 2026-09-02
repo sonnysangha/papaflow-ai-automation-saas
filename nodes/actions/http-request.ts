@@ -114,7 +114,8 @@ export const httpRequest = defineNode({
     auth: z
       .enum(["bearer", "header", "none"])
       .default("bearer")
-      .describe("How the connection's token is sent. Ignored without a connection"),
+      .describe("How the connection's token is sent. Ignored without a connection")
+      .meta({ label: "Authentication" }),
     authHeader: z.string().default("Authorization").describe("Header name, when auth is header"),
     headers: z.record(z.string(), z.string()).default({}),
     body: z.string().optional().describe("Raw body; JSON is sent as-is"),

@@ -17,6 +17,7 @@ import { NODES } from "@/nodes/registry";
 import { toJsonSchema, type JsonSchema } from "@/nodes/schema";
 import { renameKeyInTemplates } from "@/nodes/templates";
 
+import { fieldLabel } from "./field-label";
 import { BooleanSwitch } from "./fields/BooleanSwitch";
 import { ConnectionField } from "./fields/ConnectionField";
 import { EnumSelect } from "./fields/EnumSelect";
@@ -48,6 +49,13 @@ const KEY_HELP = "Lower-case letters, digits and underscores, starting with a le
 
 /** The input a node with a `credential` stores its chosen connection in. */
 const CONNECTION_INPUT = "connectionId";
+
+/**
+ * The fields that answer "which account, and which of its models" rather than "what should this
+ * node do". They are always declared first on a node, and a rule separates them from the rest so
+ * the panel reads as *pick an account, then say what to do with it* — one decision per group.
+ */
+const ACCOUNT_INPUTS = new Set([CONNECTION_INPUT, "model"]);
 
 /** The trigger whose configuration is not inputs at all, but the URL the workflow listens on. */
 const WEBHOOK_TRIGGER = "webhook.trigger";
@@ -282,6 +290,65 @@ function NodeField({
   }
 }
 
+/** One labelled row of the generated form: the label, the control, and the field's own help text. */
+function NodeFieldRow({
+  nodeId,
+  name,
+  schema,
+  required,
+  value,
+  inputs,
+  groups,
+  credential,
+  connectionId,
+  onChange,
+}: {
+  nodeId: string;
+  name: string;
+  schema: JsonSchema;
+  /** The node's `required` list, straight from the generated JSON Schema. */
+  required: readonly string[];
+  value: unknown;
+  inputs: Record<string, unknown>;
+  groups: VariableGroup[];
+  credential: string | null;
+  connectionId: string | undefined;
+  onChange: (value: unknown) => void;
+}) {
+  const fieldId = `${nodeId}-${name}`;
+  const description = typeof schema.description === "string" ? schema.description : null;
+  // `.default()` fields come back in `required` (the parsed output always has them), so only a
+  // field with no default is one the user actually has to fill in.
+  const mandatory = required.includes(name) && schema.default === undefined;
+
+  return (
+    <div className="space-y-1.5">
+      {/* The property name is still the truth — it is what a Builder tool call and the stored
+          graph use — so it stays reachable on hover without shouting from the form. */}
+      <Label htmlFor={fieldId} className="gap-1" title={name}>
+        {fieldLabel(name, schema as { label?: unknown })}
+        {mandatory ? (
+          <span aria-label="required" className="text-destructive">
+            *
+          </span>
+        ) : null}
+      </Label>
+      <NodeField
+        id={fieldId}
+        name={name}
+        schema={schema}
+        value={value}
+        inputs={inputs}
+        groups={groups}
+        credential={credential}
+        connectionId={connectionId}
+        onChange={onChange}
+      />
+      {description ? <p className="text-xs text-muted-foreground">{description}</p> : null}
+    </div>
+  );
+}
+
 export type ConfigPanelProps = {
   node: WorkflowNodeType;
   nodes: WorkflowNodeType[];
@@ -386,6 +453,14 @@ export function ConfigPanel({
 
   const properties = isRecord(schema?.properties) ? schema.properties : {};
   const required = Array.isArray(schema?.required) ? schema.required : [];
+
+  // Declaration order is the node's own, so this keeps it and only cuts the list in two.
+  const fields = Object.entries(properties).flatMap(([name, raw]) => {
+    const property = asSchema(raw);
+    return property ? [[name, property] as const] : [];
+  });
+  const accountFields = fields.filter(([name]) => ACCOUNT_INPUTS.has(name));
+  const settingFields = fields.filter(([name]) => !ACCOUNT_INPUTS.has(name));
   // The Webhook trigger has no inputs — its URL is the configuration — so the panel must not
   // follow it with "This node has no settings."
   const showsUrl = node.data.nodeType === WEBHOOK_TRIGGER;
@@ -486,44 +561,45 @@ export function ConfigPanel({
             <p className="text-sm text-muted-foreground">
               This node type is not installed, so there is nothing to configure.
             </p>
-          ) : Object.keys(properties).length === 0 && !showsUrl && !showsResumeUrl ? (
+          ) : fields.length === 0 && !showsUrl && !showsResumeUrl ? (
             <p className="text-sm text-muted-foreground">This node has no settings.</p>
           ) : (
-            Object.entries(properties).map(([name, raw]) => {
-              const property = asSchema(raw);
-              if (!property) return null;
-              const fieldId = `${node.id}-${name}`;
-              const description =
-                typeof property.description === "string" ? property.description : null;
-              // `.default()` fields come back in `required` (the parsed output always has them),
-              // so only a field with no default is one the user actually has to fill in.
-              const mandatory = required.includes(name) && property.default === undefined;
+            <>
+              {accountFields.map(([name, property]) => (
+                <NodeFieldRow
+                  key={name}
+                  nodeId={node.id}
+                  name={name}
+                  schema={property}
+                  required={required}
+                  value={node.data.inputs[name]}
+                  inputs={node.data.inputs}
+                  groups={groups}
+                  credential={definition?.credential ?? null}
+                  connectionId={connectionId}
+                  onChange={(value) => setInput(name, value)}
+                />
+              ))}
 
-              return (
-                <div key={name} className="space-y-1.5">
-                  <Label htmlFor={fieldId} className="gap-1 font-mono text-xs">
-                    {name}
-                    {mandatory && (
-                      <span aria-label="required" className="text-destructive">
-                        *
-                      </span>
-                    )}
-                  </Label>
-                  <NodeField
-                    id={fieldId}
-                    name={name}
-                    schema={property}
-                    value={node.data.inputs[name]}
-                    inputs={node.data.inputs}
-                    groups={groups}
-                    credential={definition?.credential ?? null}
-                    connectionId={connectionId}
-                    onChange={(value) => setInput(name, value)}
-                  />
-                  {description && <p className="text-xs text-muted-foreground">{description}</p>}
-                </div>
-              );
-            })
+              {/* Which account, above the line; what to do with it, below. */}
+              {accountFields.length > 0 && settingFields.length > 0 ? <Separator /> : null}
+
+              {settingFields.map(([name, property]) => (
+                <NodeFieldRow
+                  key={name}
+                  nodeId={node.id}
+                  name={name}
+                  schema={property}
+                  required={required}
+                  value={node.data.inputs[name]}
+                  inputs={node.data.inputs}
+                  groups={groups}
+                  credential={definition?.credential ?? null}
+                  connectionId={connectionId}
+                  onChange={(value) => setInput(name, value)}
+                />
+              ))}
+            </>
           )}
 
           {showsSchedule && <ScheduleConfig workflowId={workflowId} inputs={node.data.inputs} />}

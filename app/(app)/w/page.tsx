@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 
+import { GettingStarted } from "@/components/workflows/GettingStarted";
 import { NewWorkflowDialog } from "@/components/workflows/NewWorkflowDialog";
 import { WorkflowList } from "@/components/workflows/WorkflowList";
 
@@ -23,6 +24,9 @@ export default function WorkflowsPage() {
         </div>
         <NewWorkflowDialog />
       </div>
+
+      {/* Removes itself once a connection, a workflow and a run all exist. */}
+      <GettingStarted />
 
       <WorkflowList />
     </div>

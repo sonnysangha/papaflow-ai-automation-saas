@@ -34,6 +34,33 @@ import { NODES } from "@/nodes/registry";
 /** One row of `api.steps.byExecution` — the whole `steps` document. */
 type Step = FunctionReturnType<typeof api.steps.byExecution>[number];
 
+/** What a node is called, both ways: the name you gave it and the name templates use. */
+type NodeNames = { label: string; key: string };
+
+/**
+ * The names in the workflow's *current* graph, by node id.
+ *
+ * A run records `nodeId` and `nodeType`, not the label — the label is canvas state and can change
+ * between runs — so the drawer reads it back from the graph. A node that has since been deleted or
+ * renamed simply falls out of the map and the row falls back to the node definition's own name,
+ * which is what this drawer showed before.
+ */
+function nodeNames(graph: unknown): Record<string, NodeNames> {
+  const names: Record<string, NodeNames> = {};
+  const nodes = (graph as { nodes?: unknown } | null | undefined)?.nodes;
+  for (const entry of Array.isArray(nodes) ? nodes : []) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const { id, data } = entry as { id?: unknown; data?: unknown };
+    if (typeof id !== "string" || typeof data !== "object" || data === null) continue;
+    const { label, key } = data as { label?: unknown; key?: unknown };
+    names[id] = {
+      label: typeof label === "string" && label ? label : "",
+      key: typeof key === "string" && key ? key : "",
+    };
+  }
+  return names;
+}
+
 /**
  * How long a step or a run took. Exported because the runs table shows the same shape for
  * executions, and this file is the leaf of the pair (`RunsTable` imports the sheet already, so
@@ -54,7 +81,8 @@ export function formatDuration(startedAt: number, finishedAt?: number): string {
 function StepStatusBadge({ status }: { status: Step["status"] }) {
   return (
     <Badge variant="outline" className="gap-1.5 capitalize">
-      <StatusRing status={status} className="ring-0" />
+      {/* The badge already spells the status out, so the dot must not say it a second time. */}
+      <StatusRing status={status} labelled={false} className="ring-0" />
       {status}
     </Badge>
   );
@@ -63,12 +91,15 @@ function StepStatusBadge({ status }: { status: Step["status"] }) {
 /** A tool call the Agent node made, written by `runNode` as `agent.tool:<name>`. */
 const TOOL_PREFIX = "agent.tool:";
 
-/** The step's node type as a person reads it; skipped rows are recorded without one. */
-function stepLabel(step: Step): string {
-  if (step.nodeType.length === 0) return "Not reached";
+/**
+ * What to call this row: the node's own label off the canvas ("Greet"), the node definition's name
+ * when the graph no longer has it ("Set"), and the tool's name for an Agent sub-step.
+ */
+function stepLabel(step: Step, names?: NodeNames): string {
+  if (step.nodeType.length === 0) return names?.label || "Not reached";
   // A child row has no registry entry to name it: the tool's own name is the whole label.
   if (step.nodeType.startsWith(TOOL_PREFIX)) return step.nodeType.slice(TOOL_PREFIX.length);
-  return NODES[step.nodeType]?.name ?? step.nodeType;
+  return names?.label || NODES[step.nodeType]?.name || step.nodeType;
 }
 
 /** One node's row plus whatever it spawned — the Agent node's tool calls, in the order they ran. */
@@ -176,10 +207,13 @@ function StepDetail({ step }: { step: Step }) {
 function StepRows({
   step,
   passes,
+  names,
   substeps = [],
 }: {
   step: Step;
   passes: number;
+  /** The names this node carries on the canvas, when it is still there. */
+  names?: NodeNames;
   /** The tool calls this step spawned. Rendered underneath it, indented, and never nested twice. */
   substeps?: Step[];
 }) {
@@ -187,6 +221,7 @@ function StepRows({
   const detailId = `step-detail-${step._id}`;
   const pass = passLabel(step, passes);
   const child = step.parentStepId !== undefined;
+  const label = stepLabel(step, names);
 
   return (
     <>
@@ -201,20 +236,27 @@ function StepRows({
           >
             {open ? <ChevronDownIcon /> : <ChevronRightIcon />}
             <span className="sr-only">
-              {open ? "Hide" : "Show"} input and output for {stepLabel(step)}
+              {open ? "Hide" : "Show"} input and output for {label}
             </span>
           </Button>
         </TableCell>
         <TableCell>
-          <span className={child ? "text-muted-foreground" : "font-medium"}>{stepLabel(step)}</span>
-          {pass ? (
-            <span className="ml-2 text-xs text-muted-foreground tabular-nums" title="Loop pass">
-              · {pass}
-            </span>
-          ) : null}
+          <div className="flex items-center gap-2">
+            <span className={child ? "text-muted-foreground" : "font-medium"}>{label}</span>
+            {pass ? (
+              <span className="text-xs text-muted-foreground tabular-nums" title="Loop pass">
+                · {pass}
+              </span>
+            ) : null}
+          </div>
+          {/* The name templates address this node by, under the name you gave it — the same pair
+              the canvas node and the config panel show. A tool call has neither. */}
           {child ? null : (
-            <span className="ml-2 font-mono text-xs text-muted-foreground" title={step.nodeId}>
-              {step.nodeId.slice(0, 8)}
+            <span
+              className="mt-0.5 block font-mono text-xs text-muted-foreground"
+              title={step.nodeId}
+            >
+              {names?.key || step.nodeType || step.nodeId.slice(0, 8)}
             </span>
           )}
         </TableCell>
@@ -247,6 +289,12 @@ function StepRows({
 
 type StepsSheetProps = {
   executionId: Id<"executions">;
+  /**
+   * The workflow this run belongs to, so the rows can show each node's own label. Left out when the
+   * workflow has since been deleted — `workflows.get` answers `not_found` for one, and a drawer
+   * that throws is worse than one showing "Set" instead of "Greet".
+   */
+  workflowId?: Id<"workflows">;
   /** Header chrome only — everything the sheet actually renders comes from `steps.byExecution`. */
   summary?: string;
   open: boolean;
@@ -260,16 +308,20 @@ type StepsSheetProps = {
  */
 export function StepsSheet({
   executionId,
+  workflowId,
   summary,
   open,
   onOpenChange,
   onClosed,
 }: StepsSheetProps) {
   const steps = useQuery(api.steps.byExecution, { executionId });
+  const workflow = useQuery(api.workflows.get, workflowId ? { id: workflowId } : "skip");
   // One pass count per node, computed once for the whole table rather than per row.
   const passes = useMemo(() => passCounts(steps ?? []), [steps]);
   // Tool calls hang under the node that made them rather than sitting between unrelated nodes.
   const trees = useMemo(() => nestSteps(steps ?? []), [steps]);
+  // One index for the whole table rather than a scan of the graph per row.
+  const names = useMemo(() => nodeNames(workflow?.graph), [workflow?.graph]);
 
   return (
     <Sheet
@@ -318,6 +370,7 @@ export function StepsSheet({
                     key={tree.step._id}
                     step={tree.step}
                     passes={passes[tree.step.nodeId] ?? 0}
+                    names={names[tree.step.nodeId]}
                     substeps={tree.substeps}
                   />
                 ))}

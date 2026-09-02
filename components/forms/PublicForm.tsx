@@ -86,9 +86,9 @@ export function PublicForm({ workflowId, spec }: { workflowId: string; spec: For
       } | null;
 
       if (body?.fields) setFieldErrors(body.fields);
-      setError(body?.error ?? "Something went wrong. Please try again.");
+      setError(body?.error ?? "Something went wrong — please try again");
     } catch {
-      setError("Could not reach the server. Please try again.");
+      setError("Could not reach the server — please try again");
     } finally {
       setPending(false);
     }

@@ -6,11 +6,13 @@ import {
   Background,
   Controls,
   MiniMap,
+  Panel,
   ReactFlow,
   useEdgesState,
   useNodesState,
   useReactFlow,
   type Edge,
+  type EdgeTypes,
   type IsValidConnection,
   type NodeTypes,
   type OnConnect,
@@ -20,13 +22,19 @@ import {
 import { useMutation } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import { ConvexError } from "convex/values";
+import { LayoutTemplateIcon } from "lucide-react";
 import { toast } from "sonner";
 
+import { Button } from "@/components/ui/button";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { TemplateDialog } from "@/components/workflows/TemplateDialog";
 import { api } from "@/convex/_generated/api";
+import type { WorkflowTemplate } from "@/lib/templates";
 import { cn } from "@/lib/utils";
 import { NODES } from "@/nodes/registry";
 
 import { ConfigPanel } from "./ConfigPanel";
+import { EdgeWithLabel, LABELLED_EDGE_TYPE, type LabelledEdgeData } from "./EdgeWithLabel";
 import {
   DEFAULT_HANDLE,
   fromStoredGraph,
@@ -34,16 +42,19 @@ import {
   NODE_DRAG_MIME,
   PAPAFLOW_NODE_TYPE,
   serializeGraph,
+  sourceHandles,
   toStoredGraph,
   type RunNodeState,
   type SaveState,
   type StoredGraph,
   type WorkflowNodeType,
 } from "./graph-io";
+import { isTypingTarget } from "./shortcuts";
 import { WorkflowNode } from "./WorkflowNode";
 
 // Module scope on purpose: a fresh object here remounts every node on every render.
 const nodeTypes: NodeTypes = { [PAPAFLOW_NODE_TYPE]: WorkflowNode };
+const edgeTypes: EdgeTypes = { [LABELLED_EDGE_TYPE]: EdgeWithLabel };
 
 const SAVE_DEBOUNCE_MS = 600;
 
@@ -166,10 +177,12 @@ export function Canvas({ workflow, runByNode, onSaveStateChange }: CanvasProps) 
     setNodes((current) => {
       let changed = false;
       const next = current.map((node) => {
-        const status = runByNode[node.id]?.status ?? "idle";
-        if (node.data.status === status) return node;
+        const state = runByNode[node.id];
+        const status = state?.status ?? "idle";
+        const durationMs = state?.durationMs;
+        if (node.data.status === status && node.data.durationMs === durationMs) return node;
         changed = true;
-        return { ...node, data: { ...node.data, status } };
+        return { ...node, data: { ...node.data, status, durationMs } };
       });
       return changed ? next : current;
     });
@@ -293,64 +306,141 @@ export function Canvas({ workflow, runByNode, onSaveStateChange }: CanvasProps) 
    * but writing it into `edges` would still churn the save effect on every run.
    */
   const styledEdges = useMemo(() => {
+    // One lookup per edge instead of a scan per edge, and the branch names come from the same
+    // `sourceHandles()` the node itself draws its handles from.
+    const branching = new Map<string, boolean>();
+    for (const node of nodes) {
+      branching.set(node.id, sourceHandles(node.data.nodeType, node.data.inputs).length > 1);
+    }
+
     return edges.map((edge) => {
+      const handle = edge.sourceHandle ?? DEFAULT_HANDLE;
+      // Only a node with more than one way out has anything to say: "out" would be noise.
+      const labelled = branching.get(edge.source) === true;
+      const typed: Edge = labelled
+        ? { ...edge, type: LABELLED_EDGE_TYPE, data: { label: handle } satisfies LabelledEdgeData }
+        : edge;
+
       const source = runByNode[edge.source];
-      if (source?.status !== "success") return edge;
+      if (source?.status !== "success") return typed;
       // A node that records no handle (everything but Condition/Switch) took all of its edges.
-      const taken = source.handle
-        ? (edge.sourceHandle ?? DEFAULT_HANDLE) === source.handle
-        : true;
+      const taken = source.handle ? handle === source.handle : true;
       return {
-        ...edge,
+        ...typed,
         animated: false,
         className: cn(edge.className, taken ? TAKEN_EDGE_CLASS : UNTAKEN_EDGE_CLASS),
       };
     });
-  }, [edges, runByNode]);
+  }, [edges, nodes, runByNode]);
+
+  /**
+   * Drops a starter template onto an empty canvas.
+   *
+   * This is the same graph `workflows.create` would have been handed from the workflow list; here
+   * the workflow already exists, so the template becomes an ordinary edit and the debounced save
+   * writes it. Guarded on emptiness at the call site — a template is a starting point, never
+   * something that overwrites work.
+   */
+  const applyTemplate = useCallback(
+    (template: WorkflowTemplate) => {
+      const loaded = fromStoredGraph(template.graph);
+      setNodes(loaded.nodes);
+      setEdges(loaded.edges);
+      toast.success(`Added the ${template.name} template`);
+    },
+    [setEdges, setNodes],
+  );
+
+  // Escape closes the settings panel. Ignored while a field has focus, so it still means "put that
+  // back" inside the panel's own inputs, and while a dialog is open, which owns Escape itself.
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (isTypingTarget(event.target)) return;
+      if (document.querySelector("[role=dialog]")) return;
+      deselect();
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [deselect]);
 
   return (
-    <div className="flex h-full min-h-0 w-full">
-      <div className="min-w-0 flex-1">
-        <ReactFlow<WorkflowNodeType, Edge>
-          nodes={nodes}
-          edges={styledEdges}
-          nodeTypes={nodeTypes}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
-          onConnect={onConnect}
-          onMoveEnd={onMoveEnd}
-          isValidConnection={isValidConnection}
-          onDrop={onDrop}
-          onDragOver={onDragOver}
-          defaultViewport={initial.graph.viewport}
-          fitView={!initial.graph.viewport}
-          deleteKeyCode={["Backspace", "Delete"]}
-          colorMode="system"
-          minZoom={0.2}
-          className="bg-background"
-          aria-label="Workflow canvas"
-        >
-          <Background gap={16} />
-          <Controls showInteractive={false} />
-          <MiniMap pannable zoomable />
-        </ReactFlow>
-      </div>
+    // Node tooltips wait a beat: panning across a busy canvas must not set off every node at once.
+    <TooltipProvider delay={400}>
+      <div className="flex h-full min-h-0 w-full">
+        <div className="min-w-0 flex-1">
+          <ReactFlow<WorkflowNodeType, Edge>
+            nodes={nodes}
+            edges={styledEdges}
+            nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            onConnect={onConnect}
+            onMoveEnd={onMoveEnd}
+            isValidConnection={isValidConnection}
+            onDrop={onDrop}
+            onDragOver={onDragOver}
+            defaultViewport={initial.graph.viewport}
+            fitView={!initial.graph.viewport}
+            deleteKeyCode={["Backspace", "Delete"]}
+            colorMode="system"
+            minZoom={0.2}
+            className="bg-background"
+            aria-label="Workflow canvas"
+          >
+            <Background gap={16} />
+            {/* Zoom in / out / fit view, in the app's own tokens rather than React Flow's default
+                white-on-white — see the `.react-flow__controls` block in `app/globals.css`. */}
+            <Controls
+              showInteractive={false}
+              aria-label="Canvas zoom controls"
+              fitViewOptions={{ padding: 0.2, duration: 200 }}
+            />
+            <MiniMap pannable zoomable ariaLabel="Canvas minimap" />
 
-      {selected ? (
-        <ConfigPanel
-          key={selected.id}
-          node={selected}
-          nodes={nodes}
-          edges={edges}
-          workflowId={workflow._id}
-          // Read straight off the live document, not the seeded snapshot: rotating the secret in
-          // another tab has to change the URL this panel shows.
-          webhookSecret={workflow.webhookSecret}
-          runOutputs={runOutputs}
-          setNodes={setNodes}
-          onClose={deselect}
-        />
-      ) : null}
-    </div>
+            {nodes.length === 0 ? (
+              <Panel position="top-center" className="pointer-events-none mt-24">
+                <div className="pointer-events-auto flex max-w-sm flex-col items-center gap-3 rounded-xl border border-dashed border-border bg-card/80 px-6 py-8 text-center backdrop-blur-sm">
+                  <p className="text-sm font-medium">This canvas is empty</p>
+                  <p className="text-sm text-muted-foreground">
+                    Drag a trigger here from the left, or start from a template and change what you
+                    do not want.
+                  </p>
+                  <TemplateDialog
+                    onPick={applyTemplate}
+                    title="Start from a template"
+                    description="Each one drops a working graph onto this canvas. Nothing is locked — edit or delete any node afterwards."
+                    trigger={
+                      <Button variant="outline" size="sm">
+                        <LayoutTemplateIcon />
+                        Pick a template
+                      </Button>
+                    }
+                  />
+                </div>
+              </Panel>
+            ) : null}
+          </ReactFlow>
+        </div>
+
+        {selected ? (
+          <ConfigPanel
+            key={selected.id}
+            node={selected}
+            nodes={nodes}
+            edges={edges}
+            workflowId={workflow._id}
+            // Read straight off the live document, not the seeded snapshot: rotating the secret in
+            // another tab has to change the URL this panel shows.
+            webhookSecret={workflow.webhookSecret}
+            runOutputs={runOutputs}
+            setNodes={setNodes}
+            onClose={deselect}
+          />
+        ) : null}
+      </div>
+    </TooltipProvider>
   );
 }

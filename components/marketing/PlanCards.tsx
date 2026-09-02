@@ -29,7 +29,6 @@ import {
 /** Limits read as sentences, not as a number and a noun the reader has to assemble. */
 function limitLines(plan: PlanSlug): string[] {
   const limits = PLAN_LIMITS[plan];
-  const features = FEATURES[plan] as readonly string[];
   const count = (value: number, one: string, many: string) =>
     value === Infinity ? `Unlimited ${many}` : `${value.toLocaleString("en-GB")} ${value === 1 ? one : many}`;
 
@@ -37,11 +36,14 @@ function limitLines(plan: PlanSlug): string[] {
     count(limits.workflows, "workflow", "workflows"),
     `${limits.runsPerMonth.toLocaleString("en-GB")} runs a month`,
     count(limits.members, "member", "members"),
-    features.includes("schedules")
-      ? limits.minScheduleMinutes <= 1
-        ? "Schedules down to every minute"
-        : `Schedules every ${limits.minScheduleMinutes} minutes`
-      : "Manual and event triggers only",
+    // Every plan can schedule; the `schedules` feature only lifts the interval floor
+    // (`app/api/schedules/route.ts` checks `PLAN_LIMITS.minScheduleMinutes` without it), so the
+    // line is derived from that number rather than from whether the feature is present.
+    limits.minScheduleMinutes <= 1
+      ? "Schedules down to every minute"
+      : limits.minScheduleMinutes % 60 === 0
+        ? `Schedules every ${limits.minScheduleMinutes / 60 === 1 ? "hour" : `${limits.minScheduleMinutes / 60} hours`} or slower`
+        : `Schedules every ${limits.minScheduleMinutes} minutes or slower`,
   ];
 }
 

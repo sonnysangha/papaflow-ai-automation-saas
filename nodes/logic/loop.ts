@@ -26,7 +26,8 @@ const items = z
     (value) => (typeof value === "string" ? value : JSON.stringify(value ?? null)),
     z.string(),
   )
-  .describe("A template that resolves to an array, e.g. {{ http_request_2.body }}");
+  .describe("A template that resolves to an array, e.g. {{ http_request_2.body }}")
+  .meta({ label: "List to loop over" });
 
 /**
  * Whatever the template resolved to → the list to iterate.

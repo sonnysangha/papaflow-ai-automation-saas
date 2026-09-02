@@ -130,4 +130,50 @@
   html {
     @apply font-sans;
   }
+
+  /*
+   * One visible focus ring for everything the keyboard can reach. Components that style their own
+   * (`focus-visible:ring-*` from shadcn) win on specificity; this is the floor, so a link, a
+   * `<kbd>`-adjacent control or a React Flow button is never focused invisibly on the dark theme.
+   */
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-ring;
+  }
+}
+
+/*
+ * React Flow's own chrome, in the app's tokens.
+ *
+ * The library ships light-mode defaults (white buttons, a white minimap) that survive
+ * `colorMode="system"` because they are plain CSS rather than variables. Restating them here keeps
+ * the zoom controls and the minimap legible on the dark canvas — and keeps the fit-view button,
+ * which is the one control people actually reach for, from disappearing into the background.
+ */
+.react-flow__controls {
+  @apply overflow-hidden rounded-lg border border-border bg-card shadow-sm;
+  box-shadow: none;
+}
+
+.react-flow__controls-button {
+  @apply border-0 border-b border-border bg-card fill-current text-muted-foreground transition-colors;
+}
+
+.react-flow__controls-button:last-child {
+  @apply border-b-0;
+}
+
+.react-flow__controls-button:hover {
+  @apply bg-muted text-foreground;
+}
+
+.react-flow__controls-button:focus-visible {
+  @apply outline-2 -outline-offset-2 outline-ring;
+}
+
+.react-flow__minimap {
+  @apply rounded-lg border border-border bg-card;
+}
+
+.react-flow__attribution {
+  @apply bg-transparent text-muted-foreground/60;
 }

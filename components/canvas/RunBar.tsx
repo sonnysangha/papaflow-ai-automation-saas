@@ -1,14 +1,20 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import type { FunctionReturnType } from "convex/server";
-import { HistoryIcon, PlayIcon, SparklesIcon } from "lucide-react";
+import { HistoryIcon, KeyboardIcon, PlayIcon, SparklesIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { UpgradeCard } from "@/components/billing/UpgradeCard";
 import { RunStatusBadge } from "@/components/runs/RunsTable";
 import { Button, buttonVariants } from "@/components/ui/button";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTitle,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { formatAbsoluteTime, formatRelativeTime } from "@/components/workflows/relative-time";
@@ -17,6 +23,12 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { NODES } from "@/nodes/registry";
 
 import { NodeIcon } from "./node-icon";
+import {
+  CANVAS_SHORTCUTS,
+  hasModifier,
+  isTypingTarget,
+  NODE_SEARCH_INPUT_ID,
+} from "./shortcuts";
 
 /** `api.executions.latestByWorkflow`: the newest run, or null before the first one. */
 type LatestExecution = FunctionReturnType<typeof api.executions.latestByWorkflow>;
@@ -48,18 +60,68 @@ function runErrorMessage(error: unknown): string {
   return message.length > 0 ? message : "Could not start this run";
 }
 
+/**
+ * How the last run ended, live from the `executions` subscription.
+ *
+ * `aria-live="polite"` on the wrapper rather than on the badge: the badge unmounts and remounts as
+ * the status changes, and a live region has to be on screen *before* the change to announce it. So
+ * the region is always there and only its contents move — "Running", then "Completed".
+ */
 function LastRun({ latest }: { latest: LatestExecution | undefined }) {
-  if (latest === undefined) return <Skeleton className="h-5 w-28" />;
-  if (latest === null) return <span className="text-xs text-muted-foreground">No runs yet</span>;
-
   return (
     <span
+      aria-live="polite"
+      aria-atomic
       className="flex items-center gap-1.5 text-xs text-muted-foreground"
-      title={formatAbsoluteTime(latest.startedAt)}
+      title={latest ? formatAbsoluteTime(latest.startedAt) : undefined}
     >
-      <RunStatusBadge status={latest.status} />
-      {formatRelativeTime(latest.startedAt)}
+      {latest === undefined ? (
+        <Skeleton className="h-5 w-28" />
+      ) : latest === null ? (
+        <span>No runs yet</span>
+      ) : (
+        <>
+          <RunStatusBadge status={latest.status} />
+          <span>{formatRelativeTime(latest.startedAt)}</span>
+        </>
+      )}
     </span>
+  );
+}
+
+/** The `?` popover: the four bindings the canvas listens for, and nothing else. */
+function ShortcutsPopover() {
+  // ⌘ and Ctrl are shown together rather than sniffed from `navigator`: the handler accepts both,
+  // and a platform guess that renders differently on the server is a hydration mismatch for a
+  // detail nobody is confused by.
+  return (
+    <Popover>
+      <PopoverTrigger
+        render={<Button variant="ghost" size="icon-sm" aria-label="Keyboard shortcuts" />}
+      >
+        <KeyboardIcon />
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-64">
+        <PopoverTitle className="text-sm font-medium">Keyboard shortcuts</PopoverTitle>
+        <dl className="mt-2 grid gap-2">
+          {CANVAS_SHORTCUTS.map((shortcut) => (
+            <div key={shortcut.description} className="flex items-center justify-between gap-3">
+              <dt className="text-sm text-muted-foreground">{shortcut.description}</dt>
+              <dd className="flex shrink-0 items-center gap-1">
+                {shortcut.keys.map((key) => (
+                  <kbd
+                    key={key}
+                    className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px] leading-4"
+                  >
+                    {key === "Mod" ? "⌘ / Ctrl" : key}
+                  </kbd>
+                ))}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -106,7 +168,7 @@ export function RunBar({
     }
   }, [sample]);
 
-  function onRun() {
+  const onRun = useCallback(() => {
     startTransition(async () => {
       try {
         await runWorkflow(workflowId, isManual ? sample : "{}");
@@ -117,7 +179,40 @@ export function RunBar({
         toast.error(runErrorMessage(error));
       }
     });
-  }
+  }, [isManual, runWorkflow, sample, workflowId]);
+
+  const canRun = !pending && Boolean(triggerType);
+
+  /**
+   * The two shortcuts that belong to the run bar rather than to the graph.
+   *
+   * ⌘/Ctrl+Enter fires wherever you are, sample payload included — the whole point is running
+   * without leaving the field you were editing. `/` is the opposite: it only means "search nodes"
+   * when you are not already typing somewhere.
+   */
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.defaultPrevented) return;
+
+      if (event.key === "Enter" && hasModifier(event)) {
+        if (!canRun) return;
+        event.preventDefault();
+        onRun();
+        return;
+      }
+
+      if (event.key === "/" && !hasModifier(event) && !isTypingTarget(event.target)) {
+        const search = document.getElementById(NODE_SEARCH_INPUT_ID);
+        if (!(search instanceof HTMLInputElement)) return;
+        event.preventDefault();
+        search.focus();
+        search.select();
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [canRun, onRun]);
 
   return (
     <>
@@ -149,8 +244,8 @@ export function RunBar({
         <Button
           size="sm"
           onClick={onRun}
-          disabled={pending || !triggerType}
-          title={triggerType ? undefined : "Drag a trigger onto the canvas first"}
+          disabled={!canRun}
+          title={triggerType ? "Run the workflow (⌘/Ctrl + Enter)" : "Drag a trigger onto the canvas first"}
         >
           <PlayIcon />
           {pending ? "Starting…" : "Run"}
@@ -180,17 +275,18 @@ export function RunBar({
             <HistoryIcon />
             Runs
           </Link>
+          <ShortcutsPopover />
         </div>
       </div>
 
-      {runLimit && (
+      {runLimit ? (
         <UpgradeCard
           compact
           className="shrink-0 rounded-none border-x-0 border-t-0"
           title="Monthly run limit reached"
           description="This organisation has used every run its plan includes this month."
         />
-      )}
+      ) : null}
     </>
   );
 }

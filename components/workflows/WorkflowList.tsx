@@ -4,9 +4,21 @@ import { useId, useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
-import { MoreHorizontalIcon, PencilIcon, Trash2Icon } from "lucide-react";
+import { MoreHorizontalIcon, PencilIcon, Trash2Icon, WorkflowIcon } from "lucide-react";
+import { toast } from "sonner";
 
 import { api } from "@/convex/_generated/api";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -34,7 +46,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { describeCron } from "@/lib/schedule";
 import {
   Table,
   TableBody,
@@ -43,6 +54,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { describeCron } from "@/lib/schedule";
+
 import { NewWorkflowDialog } from "./NewWorkflowDialog";
 import { reportWorkflowError } from "./errors";
 import { formatAbsoluteTime, formatRelativeTime } from "./relative-time";
@@ -92,14 +105,20 @@ export function WorkflowList() {
     return (
       <Card>
         <CardHeader>
+          <span
+            aria-hidden
+            className="mb-2 inline-flex size-9 items-center justify-center rounded-lg bg-muted text-muted-foreground"
+          >
+            <WorkflowIcon className="size-4.5" />
+          </span>
           <CardTitle>No workflows yet</CardTitle>
           <CardDescription>
-            Create one to draw a trigger, a few actions, and the lines between
-            them.
+            A workflow is a trigger, a few actions, and the lines between them. Start from a
+            template if you would rather see one working before drawing your own.
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <NewWorkflowDialog />
+          <NewWorkflowDialog defaultTab="template" />
         </CardContent>
       </Card>
     );
@@ -245,9 +264,10 @@ function RenameWorkflowDialog({
     setPending(true);
     try {
       await rename({ id: workflow._id, name: name.trim() || workflow.name });
+      toast.success("Workflow renamed");
       onOpenChange(false);
     } catch (error) {
-      reportWorkflowError(error, "Could not rename the workflow.");
+      reportWorkflowError(error, "Could not rename the workflow");
     } finally {
       setPending(false);
     }
@@ -315,40 +335,42 @@ function DeleteWorkflowDialog({
     setPending(true);
     try {
       await remove({ id: workflow._id });
+      toast.success(`Deleted ${workflow.name}`);
       onOpenChange(false);
     } catch (error) {
-      reportWorkflowError(error, "Could not delete the workflow.");
+      reportWorkflowError(error, "Could not delete the workflow");
     } finally {
       setPending(false);
     }
   }
 
   return (
-    <Dialog
+    <AlertDialog
       open={open}
       onOpenChange={onOpenChange}
       onOpenChangeComplete={(isOpen) => {
         if (!isOpen) onClosed();
       }}
     >
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Delete workflow</DialogTitle>
-          <DialogDescription>
-            “{workflow.name}” and its canvas are deleted for everyone in this
-            organisation. This cannot be undone.
-          </DialogDescription>
-        </DialogHeader>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogMedia>
+            <Trash2Icon className="text-destructive" />
+          </AlertDialogMedia>
+          <AlertDialogTitle>Delete “{workflow.name}”?</AlertDialogTitle>
+          <AlertDialogDescription>
+            The workflow and its canvas go for everyone in this organisation. Runs already recorded
+            stay in the history. This cannot be undone.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
 
-        <DialogFooter>
-          <DialogClose render={<Button variant="outline" />} disabled={pending}>
-            Cancel
-          </DialogClose>
-          <Button variant="destructive" onClick={onDelete} disabled={pending}>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={pending}>Keep it</AlertDialogCancel>
+          <AlertDialogAction variant="destructive" onClick={onDelete} disabled={pending}>
             {pending ? "Deleting…" : "Delete workflow"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }

@@ -124,11 +124,18 @@ export const get = query({
   },
 });
 
-/** Creates an empty draft. Refuses with `plan_limit` when the org is at its plan's workflow cap. */
+/**
+ * Creates a draft. Refuses with `plan_limit` when the org is at its plan's workflow cap.
+ *
+ * `graph` is optional and starts the workflow from a starter template (`lib/templates.ts`) instead
+ * of an empty canvas. It goes through the same `graphValidator` as `saveGraph`, so a template is
+ * indistinguishable from a graph somebody drew — there is no template mode to get out of, and the
+ * canvas' next save carries on from version 1 exactly as it would have.
+ */
 export const create = mutation({
-  args: { name: v.string() },
+  args: { name: v.string(), graph: v.optional(graphValidator) },
   returns: v.id("workflows"),
-  handler: async (ctx, { name }) => {
+  handler: async (ctx, { name, graph }) => {
     const { userId, orgId } = await requireOrg(ctx);
     const { limits } = await currentPlan(ctx);
 
@@ -146,7 +153,7 @@ export const create = mutation({
       orgId,
       createdBy: userId,
       name: name.trim() || "Untitled workflow",
-      graph: { nodes: [], edges: [] },
+      graph: graph ?? { nodes: [], edges: [] },
       version: 1,
       status: "draft",
       webhookSecret: randomWebhookSecret(),

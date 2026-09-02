@@ -30,7 +30,8 @@ export const manualTrigger = defineNode({
     sample: z
       .string()
       .default("{}")
-      .describe("Sample JSON payload used when you press Run"),
+      .describe("Sample JSON payload used when you press Run")
+      .meta({ label: "Sample payload (JSON)" }),
   }),
   outputs: z.record(z.string(), z.any()),
   async run({ inputs }) {

@@ -67,7 +67,7 @@ const approvalInputs = z.object({
   target: z
     .string()
     .min(1)
-    .meta({ picker: TARGETS_PICKER })
+    .meta({ picker: TARGETS_PICKER, label: "Ask in" })
     .describe("The Slack or Discord channel, or the Telegram chat, to ask in"),
   message: z.string().min(1).describe("What the approver sees above the buttons"),
   approveLabel: z.string().min(1).max(75).default("Approve"),

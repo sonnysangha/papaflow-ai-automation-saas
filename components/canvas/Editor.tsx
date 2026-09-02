@@ -46,7 +46,7 @@ function WorkflowName({ workflowId, name }: { workflowId: Id<"workflows">; name:
     setDraft(null);
     if (cancelledRef.current || next.length === 0 || next === name) return;
     void rename({ id: workflowId, name: next }).catch(() => {
-      toast.error("Could not rename this workflow");
+      toast.error("Could not rename the workflow");
     });
   }, [draft, name, rename, workflowId]);
 
@@ -147,7 +147,15 @@ export function Editor({
       const pass = step.iteration ?? 0;
       if (byNode[step.nodeId] && pass < passes[step.nodeId]) continue;
       passes[step.nodeId] = pass;
-      byNode[step.nodeId] = { status: step.status, handle: step.handle, output: step.output };
+      byNode[step.nodeId] = {
+        status: step.status,
+        handle: step.handle,
+        output: step.output,
+        // Undefined while the step is still going, which is exactly what the node tooltip wants:
+        // "Running" with no duration until there is one to report.
+        durationMs:
+          step.finishedAt === undefined ? undefined : step.finishedAt - step.startedAt,
+      };
     }
     return byNode;
   }, [steps]);

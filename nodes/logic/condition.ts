@@ -92,9 +92,17 @@ export const conditionNode = defineNode({
   requiresFeature: null,
   version: "v1",
   inputs: z.object({
-    left: z.coerce.string().default("").describe("Value to test, usually a {{ template }}"),
+    left: z.coerce
+      .string()
+      .default("")
+      .describe("Value to test, usually a {{ template }}")
+      .meta({ label: "Value" }),
     operator: operator.default("equals"),
-    right: z.coerce.string().default("").describe("Value to compare against, or the pattern"),
+    right: z.coerce
+      .string()
+      .default("")
+      .describe("Value to compare against, or the pattern")
+      .meta({ label: "Compare with" }),
   }),
   outputs: z.object({ result: z.boolean(), left: z.any(), right: z.any() }),
   handles: () => ["true", "false"],

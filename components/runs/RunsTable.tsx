@@ -4,12 +4,18 @@ import { useState } from "react";
 import Link from "next/link";
 import { useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
-import { ChevronRightIcon } from "lucide-react";
+import { ChevronRightIcon, PlayIcon } from "lucide-react";
 
 import { UpgradeCard } from "@/components/billing/UpgradeCard";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button, buttonVariants } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -194,6 +200,13 @@ function RunRows({
       {selected ? (
         <StepsSheet
           executionId={selected._id}
+          // Only when the workflow is still there: the org-wide table lists runs of deleted
+          // workflows too, and `workflows.get` answers `not_found` for one.
+          workflowId={
+            workflowNames && workflowNames[selected.workflowId] === undefined
+              ? undefined
+              : selected.workflowId
+          }
           // `selected` is the row as it was clicked; the subscription keeps going, so the header
           // reads from the live row when it is still in the list and falls back to the snapshot.
           summary={runSummary(runs.find((row) => row._id === selected._id) ?? selected)}
@@ -229,8 +242,17 @@ export function RunsTable({ workflowId }: { workflowId: Id<"workflows"> }) {
                 : "Press Run on the canvas and this workflow’s history starts here."}
             </CardDescription>
           </CardHeader>
+          <CardContent>
+            <Link
+              href={`/w/${workflowId}`}
+              className={buttonVariants({ variant: "outline", size: "sm" })}
+            >
+              <PlayIcon />
+              Open the canvas
+            </Link>
+          </CardContent>
         </Card>
-        {page.clipped && <HistoryNote windowDays={page.windowDays} />}
+        {page.clipped ? <HistoryNote windowDays={page.windowDays} /> : null}
       </div>
     );
   }
@@ -238,7 +260,7 @@ export function RunsTable({ workflowId }: { workflowId: Id<"workflows"> }) {
   return (
     <div className="flex flex-col gap-3">
       <RunRows runs={page.runs} />
-      {page.clipped && <HistoryNote windowDays={page.windowDays} />}
+      {page.clipped ? <HistoryNote windowDays={page.windowDays} /> : null}
     </div>
   );
 }
@@ -256,11 +278,18 @@ export function OrgRunsTable() {
           <CardHeader>
             <CardTitle>No runs yet</CardTitle>
             <CardDescription>
-              Nothing has run in the last {page.windowDays} days. Open a workflow and press Run.
+              Nothing has run in the last {page.windowDays} days. Open a workflow and press Run —
+              every node lights up as it goes, and lands here when it is done.
             </CardDescription>
           </CardHeader>
+          <CardContent>
+            <Link href="/w" className={buttonVariants({ variant: "outline", size: "sm" })}>
+              <PlayIcon />
+              Go to workflows
+            </Link>
+          </CardContent>
         </Card>
-        {page.clipped && <HistoryNote windowDays={page.windowDays} />}
+        {page.clipped ? <HistoryNote windowDays={page.windowDays} /> : null}
       </div>
     );
   }
@@ -268,7 +297,7 @@ export function OrgRunsTable() {
   return (
     <div className="flex flex-col gap-3">
       <RunRows runs={page.runs} workflowNames={page.workflowNames} />
-      {page.clipped && <HistoryNote windowDays={page.windowDays} />}
+      {page.clipped ? <HistoryNote windowDays={page.windowDays} /> : null}
     </div>
   );
 }

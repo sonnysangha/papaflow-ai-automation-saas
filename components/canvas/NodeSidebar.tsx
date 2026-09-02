@@ -16,6 +16,7 @@ import { nodeCatalogue, type CatalogueEntry } from "@/nodes/registry";
 
 import { NODE_DRAG_MIME } from "./graph-io";
 import { NodeIcon } from "./node-icon";
+import { NODE_SEARCH_INPUT_ID } from "./shortcuts";
 
 function NodeSidebarItem({ entry }: { entry: CatalogueEntry }) {
   const soon = entry.version === "v2";
@@ -103,14 +104,30 @@ export function NodeSidebar() {
             className="pointer-events-none absolute top-1/2 left-2.5 h-4 w-4 -translate-y-1/2 text-muted-foreground"
           />
           <Input
+            id={NODE_SEARCH_INPUT_ID}
             value={search}
             onChange={(event) => setSearch(event.target.value)}
+            onKeyDown={(event) => {
+              // Escape gets you out of the search and back to the canvas, where Escape then means
+              // "close the settings panel".
+              if (event.key === "Escape") event.currentTarget.blur();
+            }}
             placeholder="Search nodes"
             aria-label="Search nodes"
-            className="pl-8"
+            aria-describedby={`${NODE_SEARCH_INPUT_ID}-hint`}
+            className="pl-8 pr-8"
           />
+          {/* The binding, where the thing it operates is — not in a help menu. */}
+          <kbd
+            aria-hidden
+            className="pointer-events-none absolute top-1/2 right-2 -translate-y-1/2 rounded border border-border bg-muted px-1 font-mono text-[10px] leading-4 text-muted-foreground"
+          >
+            /
+          </kbd>
         </div>
-        <p className="mt-2 text-xs text-muted-foreground">Drag a node onto the canvas.</p>
+        <p id={`${NODE_SEARCH_INPUT_ID}-hint`} className="mt-2 text-xs text-muted-foreground">
+          Drag a node onto the canvas. Press / to search from anywhere.
+        </p>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-3">

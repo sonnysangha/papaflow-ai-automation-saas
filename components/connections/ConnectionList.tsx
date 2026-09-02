@@ -5,6 +5,7 @@ import { useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import {
   CopyIcon,
+  KeyRoundIcon,
   MoreHorizontalIcon,
   RefreshCwIcon,
   RotateCwIcon,
@@ -13,6 +14,17 @@ import {
 import { toast } from "sonner";
 
 import { NodeIcon } from "@/components/canvas/node-icon";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -22,15 +34,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -183,7 +186,7 @@ async function errorMessage(response: Response): Promise<string> {
   } catch {
     // Falls through.
   }
-  return "Something went wrong. Please try again.";
+  return "Something went wrong — please try again";
 }
 
 /**
@@ -232,7 +235,7 @@ export function ConnectionList() {
           : `${connection.label} is working`,
       );
     } catch {
-      toast.error("Could not reach the server. Please try again.");
+      toast.error("Could not reach the server — please try again");
     } finally {
       setBusyId(null);
     }
@@ -252,10 +255,16 @@ export function ConnectionList() {
     return (
       <Card>
         <CardHeader>
+          <span
+            aria-hidden
+            className="mb-2 inline-flex size-9 items-center justify-center rounded-lg bg-muted text-muted-foreground"
+          >
+            <KeyRoundIcon className="size-4.5" />
+          </span>
           <CardTitle>Connect your first app</CardTitle>
           <CardDescription>
-            Bring your own API keys; they are encrypted before they are stored, and nodes open them
-            only while a run is in flight.
+            Bring your own API keys and bot tokens. Each one is encrypted before it is stored, and
+            a node opens it only while a run is in flight — never in the browser, never in a log.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -406,38 +415,39 @@ function DeleteConnectionDialog({
       toast.success(`Deleted ${connection.label}`);
       onOpenChange(false);
     } catch {
-      toast.error("Could not reach the server. Please try again.");
+      toast.error("Could not reach the server — please try again");
     } finally {
       setPending(false);
     }
   }
 
   return (
-    <Dialog
+    <AlertDialog
       open={open}
       onOpenChange={onOpenChange}
       onOpenChangeComplete={(isOpen) => {
         if (!isOpen) onClosed();
       }}
     >
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Delete connection</DialogTitle>
-          <DialogDescription>
-            “{connection.label}” is removed for everyone in this organisation, and any node still
-            pointing at it fails on its next run. This cannot be undone.
-          </DialogDescription>
-        </DialogHeader>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogMedia>
+            <Trash2Icon className="text-destructive" />
+          </AlertDialogMedia>
+          <AlertDialogTitle>Delete “{connection.label}”?</AlertDialogTitle>
+          <AlertDialogDescription>
+            The connection goes for everyone in this organisation, and any node still pointing at it
+            fails on its next run. This cannot be undone.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
 
-        <DialogFooter>
-          <DialogClose render={<Button variant="outline" />} disabled={pending}>
-            Cancel
-          </DialogClose>
-          <Button variant="destructive" onClick={onDelete} disabled={pending}>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={pending}>Keep it</AlertDialogCancel>
+          <AlertDialogAction variant="destructive" onClick={onDelete} disabled={pending}>
             {pending ? "Deleting…" : "Delete connection"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }

@@ -52,6 +52,31 @@ describe("api.workflows", () => {
     expect(otherDoc.webhookSecret).not.toBe(doc.webhookSecret);
   });
 
+  test("create stores a starter graph when one is given", async () => {
+    const { orgA } = setup();
+
+    const graph = {
+      nodes: [
+        {
+          id: "start",
+          type: "papaflow",
+          position: { x: 0, y: 0 },
+          data: { nodeType: "manual.trigger", key: "start", label: "Run it", inputs: {} },
+        },
+      ],
+      edges: [],
+      triggerId: "start",
+    };
+
+    const id = await orgA.mutation(api.workflows.create, { name: "From a template", graph });
+    const doc = await orgA.query(api.workflows.get, { id });
+
+    // Stored verbatim and still version 1: a template is a head start, not a separate mode.
+    expect(doc.graph).toEqual(graph);
+    expect(doc.version).toBe(1);
+    expect(doc.status).toBe("draft");
+  });
+
   test("list returns the active org's workflows, newest first", async () => {
     const { orgA, orgB } = setup();
 

@@ -66,7 +66,7 @@ async function readError(response: Response): Promise<RouteError> {
   } catch {
     // Falls through to the generic message.
   }
-  return { code: "unknown", error: "Something went wrong. Please try again." };
+  return { code: "unknown", error: "Something went wrong — please try again" };
 }
 
 export function AddConnectionDialog({
@@ -258,7 +258,7 @@ function ConnectionForm({
       toast.success(`Connected ${created.label}`);
       onDone(created);
     } catch {
-      setError({ code: "network", error: "Could not reach the server. Please try again." });
+      setError({ code: "network", error: "Could not reach the server — please try again" });
     } finally {
       setPending(false);
     }

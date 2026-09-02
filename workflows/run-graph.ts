@@ -1,0 +1,81 @@
+import { createHook, sleep } from "workflow";
+
+import { nextNodes, unvisited } from "@/workflows/graph";
+import { recordFinish, recordResume, recordSkipped } from "@/workflows/steps/record";
+import { runNode } from "@/workflows/steps/run-node";
+import type { HookPayload, RunInput } from "@/workflows/types";
+
+/**
+ * The durable run: a breadth-first walk of the graph, one frontier at a time.
+ *
+ * This function is orchestration and nothing else (CLAUDE.md rule 4). It has no Node.js runtime, no
+ * `fetch`, no timers — every side effect is a `"use step"` call, and every value it holds is
+ * serialised into the event log so the run can be replayed after a crash, a deploy, or a 30-day
+ * sleep. What looks like a plain `while` loop is therefore also the run's state machine: the
+ * frontier, the visited set and the `outputs` map are rebuilt deterministically on every replay.
+ *
+ * The name and the path are permanent — they are the workflow's id
+ * (`workflow//./workflows/run-graph//runGraph`).
+ */
+export async function runGraph({ executionId, orgId, graph, trigger }: RunInput) {
+  "use workflow";
+
+  // The trigger's payload is its output: `startRun` already wrote its `success` step row.
+  const outputs: Record<string, unknown> = { [graph.triggerId]: trigger.payload };
+  const visited = new Set<string>([graph.triggerId]);
+  let frontier = nextNodes(graph, graph.triggerId, null);
+
+  try {
+    while (frontier.length) {
+      // Fan-out: sibling branches run as parallel steps, and the SDK keeps their wake order
+      // deterministic across replays.
+      const results = await Promise.all(
+        frontier.map((nodeId) =>
+          runNode({
+            nodeId,
+            nodeType: graph.nodes[nodeId].data.nodeType,
+            executionId,
+            orgId,
+            node: graph.nodes[nodeId],
+            outputs,
+          }),
+        ),
+      );
+
+      frontier = [];
+      for (const r of results) {
+        let output = r.output;
+
+        // Wait node: suspends the run without holding compute.
+        if (r.control?.kind === "sleep") await sleep(r.control.ms);
+
+        // Approval node: suspends until something outside calls `resumeHook(token, payload)`. The
+        // token is derived from the run, so the resumer only needs ids it already has.
+        if (r.control?.kind === "hook") {
+          using hook = createHook<HookPayload>({ token: `${executionId}:${r.nodeId}` });
+          output = await hook;
+          await recordResume(executionId, r.nodeId, output);
+        }
+
+        outputs[r.nodeId] = output;
+
+        // A Condition/Switch node returns the handle to follow; everything else returns null and
+        // follows its default output. `visited` keeps a diamond from running a node twice.
+        for (const next of nextNodes(graph, r.nodeId, r.handle))
+          if (!visited.has(next)) {
+            visited.add(next);
+            frontier.push(next);
+          }
+      }
+    }
+
+    await recordSkipped(executionId, orgId, unvisited(graph, visited));
+    await recordFinish(executionId, "completed");
+    return { executionId, status: "completed" as const };
+  } catch (err) {
+    // A step that exhausted its retries (or threw a FatalError) fails the run: record why, then
+    // rethrow so the SDK marks the run failed too and the trace shows the original error.
+    await recordFinish(executionId, "failed", err instanceof Error ? err.message : String(err));
+    throw err;
+  }
+}

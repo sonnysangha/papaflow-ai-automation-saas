@@ -8,6 +8,7 @@ const eslintConfig = defineConfig([
   // Override default ignores of eslint-config-next.
   globalIgnores([
     "convex/_generated/**",
+    "app/.well-known/**",
     // Default ignores of eslint-config-next:
     ".next/**",
     "out/**",

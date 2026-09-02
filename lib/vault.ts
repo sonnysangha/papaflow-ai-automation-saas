@@ -94,6 +94,8 @@ export type OpenedConnection = {
   provider: string;
   kind: string;
   secret: Record<string, unknown>;
+  /** The non-secret half `test()` recorded (verified domains, known chats), for nodes that need it. */
+  meta?: Record<string, unknown>;
   status: "active";
 };
 
@@ -126,6 +128,7 @@ export async function openFresh(connectionId: string): Promise<OpenedConnection>
     provider: row.provider,
     kind: row.kind,
     secret: open(row.secret, aadFor(row.orgId, connectionId)),
+    meta: (row.meta ?? undefined) as Record<string, unknown> | undefined,
     status: row.status,
   };
 }

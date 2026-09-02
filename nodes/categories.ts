@@ -10,6 +10,8 @@ export const CATEGORIES: readonly CategoryMeta[] = [
   { id: "trigger", label: "Triggers" },
   { id: "logic", label: "Logic" },
   { id: "ai", label: "AI" },
+  { id: "chat", label: "Chat" },
+  { id: "data", label: "Data" },
   { id: "action", label: "Actions" },
 ];
 

@@ -1,5 +1,13 @@
+import { airtableCreateRecordNode } from "./actions/airtable-create-record";
+import { discordPostNode } from "./actions/discord-post";
 import { emailSend } from "./actions/email-send";
+import { githubCreateIssueNode } from "./actions/github-create-issue";
 import { httpRequest } from "./actions/http-request";
+import { linearCreateIssueNode } from "./actions/linear-create-issue";
+import { notionCreatePageNode } from "./actions/notion-create-page";
+import { slackPostNode } from "./actions/slack-post";
+import { teamsPostCardNode } from "./actions/teams-post-card";
+import { telegramSendNode } from "./actions/telegram-send";
 import { classifyNode } from "./ai/classify";
 import { extractNode } from "./ai/extract";
 import { llmNode } from "./ai/llm";
@@ -28,6 +36,14 @@ const DEFINITIONS: readonly AnyNodeDef[] = [
   llmNode,
   extractNode,
   classifyNode,
+  slackPostNode,
+  discordPostNode,
+  telegramSendNode,
+  teamsPostCardNode,
+  notionCreatePageNode,
+  airtableCreateRecordNode,
+  linearCreateIssueNode,
+  githubCreateIssueNode,
   httpRequest,
   emailSend,
 ];

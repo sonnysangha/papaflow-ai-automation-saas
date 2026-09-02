@@ -158,6 +158,28 @@ describe("http.request", () => {
 });
 
 describe("email.send", () => {
+  /** A connected Resend account, as `runNode` hands it over: the secret plus the row's `meta`. */
+  function resendConnection(domains: { name: string; status: string }[]): Record<string, unknown> {
+    return {
+      provider: "resend",
+      kind: "apiKey",
+      apiKey: "re_credential_key",
+      meta: { domains },
+    };
+  }
+
+  const VERIFIED = [
+    { name: "pending.dev", status: "pending" },
+    { name: "mail.acme.com", status: "verified" },
+  ];
+
+  it("offers an optional connection, so the platform key still works", () => {
+    // `credentialOptional` is what lets `runNode` skip the vault when no connection was chosen.
+    expect(emailSend.credential).toBe("resend");
+    expect(emailSend.credentialOptional).toBe(true);
+    expect(emailSend.inputs.safeParse({ to: "a@example.com", subject: "s", text: "t" }).success).toBe(true);
+  });
+
   it("throws a ConnectorError when no key is configured", async () => {
     vi.stubEnv("RESEND_API_KEY", "");
     const fetchMock = mockFetch(async () => new Response("{}", { status: 200 }));
@@ -174,7 +196,7 @@ describe("email.send", () => {
   });
 
   it("posts to Resend with a User-Agent and returns the message id", async () => {
-    vi.stubEnv("RESEND_API_KEY", "");
+    vi.stubEnv("RESEND_API_KEY", "re_env_key");
     const fetchMock = mockFetch(async () =>
       new Response(JSON.stringify({ id: "re_123" }), {
         status: 200,
@@ -183,10 +205,7 @@ describe("email.send", () => {
     );
 
     const out = await emailSend.run(
-      ctx(
-        emailSend.inputs.parse({ to: "a@example.com", subject: "Hi", text: "There" }),
-        { apiKey: "re_credential_key" },
-      ),
+      ctx(emailSend.inputs.parse({ to: "a@example.com", subject: "Hi", text: "There" })),
     );
 
     expect(out).toEqual({ id: "re_123" });
@@ -198,10 +217,12 @@ describe("email.send", () => {
 
     const headers = headersOf(init);
     expect(headers["User-Agent"]).toBeTruthy();
-    expect(headers.Authorization).toBe("Bearer re_credential_key");
+    expect(headers.Authorization).toBe("Bearer re_env_key");
     expect(headers["Content-Type"]).toBe("application/json");
+    expect(headers["Idempotency-Key"]).toBe("exec_test:node_test");
 
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    // No connection: the platform account, which may only send from the sandbox address.
     expect(body.from).toBe("PapaFlow <onboarding@resend.dev>");
     expect(body.to).toEqual(["a@example.com"]);
     expect(body.subject).toBe("Hi");
@@ -232,6 +253,98 @@ describe("email.send", () => {
     const [, init] = fetchMock.mock.calls[0];
     expect(headersOf(init).Authorization).toBe("Bearer re_env_key");
     expect((JSON.parse(String(init?.body)) as { from: string }).from).toBe("me@mine.dev");
+  });
+
+  it("prefers a connected Resend account's own key over the platform's", async () => {
+    vi.stubEnv("RESEND_API_KEY", "re_env_key");
+    const fetchMock = mockFetch(async () =>
+      new Response(JSON.stringify({ id: "re_789" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    const out = await emailSend.run(
+      ctx(
+        emailSend.inputs.parse({
+          connectionId: "conn_1",
+          to: "a@example.com",
+          subject: "Hi",
+          text: "There",
+          from: "hello@mail.acme.com",
+        }),
+        resendConnection(VERIFIED),
+      ),
+    );
+
+    expect(out).toEqual({ id: "re_789" });
+    const [, init] = fetchMock.mock.calls[0];
+    expect(headersOf(init).Authorization).toBe("Bearer re_credential_key");
+    expect((JSON.parse(String(init?.body)) as { from: string }).from).toBe("hello@mail.acme.com");
+  });
+
+  it("refuses a from address that is not on one of the connection's verified domains", async () => {
+    const fetchMock = mockFetch(async () => new Response("{}", { status: 200 }));
+
+    const error = await caught(
+      emailSend.run(
+        ctx(
+          emailSend.inputs.parse({
+            connectionId: "conn_1",
+            to: "a@example.com",
+            subject: "Hi",
+            text: "There",
+            from: "hello@pending.dev",
+          }),
+          resendConnection(VERIFIED),
+        ),
+      ),
+    );
+
+    expect((error as ConnectorError).status).toBe(400);
+    expect((error as ConnectorError).message).toContain("mail.acme.com");
+    // The refusal happens before the call, so no email is sent and nothing is billed.
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("names the verified domains when a connected send has no from address", async () => {
+    const error = await caught(
+      emailSend.run(
+        ctx(
+          emailSend.inputs.parse({
+            connectionId: "conn_1",
+            to: "a@example.com",
+            subject: "Hi",
+            text: "There",
+          }),
+          resendConnection(VERIFIED),
+        ),
+      ),
+    );
+
+    expect((error as ConnectorError).status).toBe(400);
+    expect((error as ConnectorError).message).toContain("mail.acme.com");
+  });
+
+  it("refuses a connection with no verified domain, and one whose domains were never recorded", async () => {
+    const inputs = emailSend.inputs.parse({
+      connectionId: "conn_1",
+      to: "a@example.com",
+      subject: "Hi",
+      text: "There",
+      from: "hello@mail.acme.com",
+    });
+
+    const unverified = await caught(
+      emailSend.run(ctx(inputs, resendConnection([{ name: "mail.acme.com", status: "pending" }]))),
+    );
+    expect((unverified as ConnectorError).message).toMatch(/no verified domain/);
+
+    // An older row, connected before `meta.domains` existed: re-testing it fills them in.
+    const unknown = await caught(
+      emailSend.run(ctx(inputs, { provider: "resend", kind: "apiKey", apiKey: "re_credential_key" })),
+    );
+    expect((unknown as ConnectorError).message).toMatch(/Re-test/);
   });
 
   it("throws a ConnectorError with the response text on a non-2xx", async () => {

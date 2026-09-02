@@ -4,7 +4,7 @@
 // with the `"use step"` code that runs them.
 import type { z } from "zod";
 
-export type NodeCategory = "trigger" | "logic" | "ai" | "action";
+export type NodeCategory = "trigger" | "logic" | "ai" | "chat" | "data" | "action";
 
 /** Returned by `control` so the engine can suspend the run: Wait → sleep, Approval → hook. */
 export type Control = { kind: "sleep"; ms: number } | { kind: "hook" } | undefined;
@@ -29,6 +29,12 @@ export interface NodeDef<I extends z.ZodType = z.ZodType, O extends z.ZodType = 
   icon: string;
   /** Connection kind this node needs, or null. */
   credential: string | null;
+  /**
+   * Set when that connection is a choice rather than a requirement: `email.send` uses the org's
+   * own Resend key when one is picked and the platform key when it is not. `runNode` then skips
+   * the vault instead of failing the step when no `connectionId` was configured.
+   */
+  credentialOptional?: boolean;
   /** Clerk feature slug required to run this node, or null. */
   requiresFeature: string | null;
   version: "v1" | "v2";

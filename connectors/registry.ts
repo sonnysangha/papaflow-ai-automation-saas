@@ -1,14 +1,23 @@
+import { airtableConnector } from "./airtable";
 import { anthropicConnector } from "./anthropic";
 import { deepseekConnector } from "./deepseek";
 import type { ConnectorDef, FieldSpec } from "./define";
+import { discordBotConnector } from "./discord-bot";
+import { discordWebhookConnector } from "./discord-webhook";
 import { elevenlabsConnector } from "./elevenlabs";
 import { falConnector } from "./fal";
+import { githubConnector } from "./github";
 import { googleConnector } from "./google";
 import { groqConnector } from "./groq";
+import { linearConnector } from "./linear";
 import { mistralConnector } from "./mistral";
+import { notionConnector } from "./notion";
 import { openaiConnector } from "./openai";
 import { openrouterConnector } from "./openrouter";
+import { resendConnector } from "./resend";
+import { slackConnector } from "./slack";
 import { stripeConnector } from "./stripe";
+import { teamsConnector } from "./teams";
 import { telegramConnector } from "./telegram";
 import { xaiConnector } from "./xai";
 
@@ -26,6 +35,15 @@ const DEFINITIONS: readonly ConnectorDef[] = [
   falConnector,
   telegramConnector,
   stripeConnector,
+  slackConnector,
+  discordWebhookConnector,
+  discordBotConnector,
+  teamsConnector,
+  notionConnector,
+  airtableConnector,
+  linearConnector,
+  githubConnector,
+  resendConnector,
 ];
 
 export function buildConnectorRegistry(definitions: readonly ConnectorDef[]): Record<string, ConnectorDef> {

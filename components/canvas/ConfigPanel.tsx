@@ -23,6 +23,7 @@ import { EnumSelect } from "./fields/EnumSelect";
 import { JsonField } from "./fields/JsonField";
 import { KeyValueList, type KeyValuePair } from "./fields/KeyValueList";
 import { NumberInput } from "./fields/NumberInput";
+import { PickerField } from "./fields/PickerField";
 import { TagList } from "./fields/TagList";
 import { TemplateInput } from "./fields/TemplateInput";
 import { TriggerUrl } from "./fields/TriggerUrl";
@@ -105,6 +106,16 @@ function fieldKind(name: string, schema: JsonSchema): FieldKind {
   return "json";
 }
 
+/**
+ * The list a connector can fill this field from: `z.string().meta({ picker: "channels" })` on a
+ * node input survives `z.toJSONSchema` as an extra `picker` key, which is how a node asks for a
+ * dropdown without `nodes/` knowing that React exists.
+ */
+function pickerKind(schema: JsonSchema): string | null {
+  const picker = (schema as { picker?: unknown }).picker;
+  return typeof picker === "string" && picker.length > 0 ? picker : null;
+}
+
 /** A template may stand where the schema wants a number or a boolean — show it, don't eat it. */
 function isTemplate(value: unknown): value is string {
   return typeof value === "string" && value.includes("{{");
@@ -145,6 +156,7 @@ function NodeField({
   value,
   groups,
   credential,
+  connectionId,
   onChange,
 }: {
   id: string;
@@ -154,6 +166,8 @@ function NodeField({
   groups: VariableGroup[];
   /** The node definition's `credential`, so `connectionId` becomes a picker instead of a text box. */
   credential: string | null;
+  /** The connection this node is currently pointed at — what a remote list has to be read with. */
+  connectionId: string | undefined;
   onChange: (value: unknown) => void;
 }) {
   const kind = fieldKind(name, schema);
@@ -163,6 +177,22 @@ function NodeField({
   // picker has to be chosen by name rather than by shape.
   if (credential && name === CONNECTION_INPUT) {
     return <ConnectionField id={id} credential={credential} value={value} onChange={onChange} />;
+  }
+
+  // A field the connector can list for us (`picker: "channels"`). Without a connection there is
+  // nothing to ask, so it stays the text box the schema would otherwise have produced.
+  const picker = kind === "text" || kind === "textarea" ? pickerKind(schema) : null;
+  if (picker && connectionId) {
+    return (
+      <PickerField
+        id={id}
+        kind={picker}
+        connectionId={connectionId}
+        value={asText(value)}
+        groups={groups}
+        onChange={(next) => onChange(next.length === 0 ? undefined : next)}
+      />
+    );
   }
 
   // Anything holding a template is edited as text, whatever the schema says it should become.
@@ -343,6 +373,10 @@ export function ConfigPanel({
   // follow it with "This node has no settings."
   const showsUrl = node.data.nodeType === WEBHOOK_TRIGGER;
   const handles = sourceHandles(node.data.nodeType, node.data.inputs);
+  // Read here rather than inside `NodeField`: every picker field on this node reads the same
+  // input, and choosing a different connection has to re-load all of them at once.
+  const chosenConnection = node.data.inputs[CONNECTION_INPUT];
+  const connectionId = typeof chosenConnection === "string" && chosenConnection ? chosenConnection : undefined;
 
   return (
     <aside
@@ -454,6 +488,7 @@ export function ConfigPanel({
                     value={node.data.inputs[name]}
                     groups={groups}
                     credential={definition?.credential ?? null}
+                    connectionId={connectionId}
                     onChange={(value) => setInput(name, value)}
                   />
                   {description && <p className="text-xs text-muted-foreground">{description}</p>}

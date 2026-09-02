@@ -40,7 +40,10 @@ function providersFor(credential: string): string[] {
       .filter((definition) => definition.category === "ai")
       .map((definition) => definition.provider);
   }
-  return CONNECTORS[credential] ? [credential] : [];
+  if (CONNECTORS[credential]) return [credential];
+  // A node may name a family rather than one provider: `discord` covers `discord-webhook` and
+  // `discord-bot`, which are two ways of connecting the same app and post the same message.
+  return Object.keys(CONNECTORS).filter((provider) => provider.startsWith(`${credential}-`));
 }
 
 export function ConnectionPicker({ id, credential, value, onChange }: ConnectionPickerProps) {
@@ -55,8 +58,9 @@ export function ConnectionPicker({ id, credential, value, onChange }: Connection
 
   const selected = matching.find((connection) => connection._id === value);
   // A category picker (`credential: "ai"`) opens on step one, filtered; a single-provider node
-  // skips straight to that provider's form.
-  const preselect = credential === "ai" ? undefined : credential;
+  // skips straight to that provider's form. A family (`discord`) is not a provider, so it opens on
+  // step one too — the user has to say which kind of Discord connection they are adding.
+  const preselect = CONNECTORS[credential] ? credential : undefined;
 
   return (
     <div className="grid gap-1.5">

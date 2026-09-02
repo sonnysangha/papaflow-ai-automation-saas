@@ -72,9 +72,13 @@ export async function runNode(input: NodeInput): Promise<NodeResult> {
 
       // The secret appears here and goes no further: it is passed to `run` and never stored,
       // returned or logged (CLAUDE.md rule 1). `inputs` only ever carries the `connectionId`.
-      const credential = def.credential
-        ? await openCredential(inputs, orgId, features)
-        : undefined;
+      //
+      // A node whose credential is optional (`email.send`: the org's own Resend account, or the
+      // platform's key) runs without one rather than failing when none was chosen.
+      const credential =
+        def.credential && (!def.credentialOptional || hasConnectionId(inputs))
+          ? await openCredential(inputs, orgId, features)
+          : undefined;
 
       const output: unknown = def.outputs.parse(
         await def.run({ inputs, credential, orgId, executionId, nodeId }),
@@ -145,7 +149,16 @@ async function openCredential(
 
   assertFeature(features, connectionFeature(row));
 
-  return { provider: row.provider, kind: row.kind, ...row.secret };
+  // `meta` is the non-secret half the connector's `test()` learned (a Resend account's verified
+  // domains, a Telegram bot's known chats): a node may need it to refuse bad input before it calls
+  // the provider. The secret is spread last so a field of the same name always wins.
+  return { provider: row.provider, kind: row.kind, ...(row.meta ? { meta: row.meta } : {}), ...row.secret };
+}
+
+/** Whether a connection was actually chosen, as opposed to left empty in the config panel. */
+function hasConnectionId(inputs: unknown): boolean {
+  const connectionId = (inputs as { connectionId?: unknown }).connectionId;
+  return typeof connectionId === "string" && connectionId.length > 0;
 }
 
 /**

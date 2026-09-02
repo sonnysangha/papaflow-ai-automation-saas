@@ -41,15 +41,18 @@ function findFunctions(value: unknown, path = "$"): string[] {
 }
 
 describe("connector registry", () => {
-  it("keys every connector by its own unique provider (ten AI + telegram + stripe)", () => {
+  it("keys every connector by its own unique provider (ten AI + chat, data, email, payments)", () => {
     const entries = Object.entries(CONNECTORS);
-    expect(entries).toHaveLength(12);
+    expect(entries).toHaveLength(21);
 
     const providers = entries.map(([, def]) => def.provider);
     expect(new Set(providers).size).toBe(providers.length);
     expect(providers.filter((p) => CONNECTORS[p].category === "ai").sort()).toEqual(AI_PROVIDERS);
     expect(providers).toContain("telegram");
     expect(providers).toContain("stripe");
+    for (const provider of ["slack", "discord-webhook", "discord-bot", "teams", "notion", "airtable", "linear", "github", "resend"]) {
+      expect(providers).toContain(provider);
+    }
 
     for (const [key, def] of entries) {
       expect(def.provider).toBe(key);
@@ -79,7 +82,7 @@ describe("connector registry", () => {
   it("builds a catalogue that carries no functions across the wire", () => {
     const catalogue = connectorCatalogue([]);
 
-    expect(catalogue).toHaveLength(12);
+    expect(catalogue).toHaveLength(21);
     expect(findFunctions(catalogue)).toEqual([]);
     expect(JSON.parse(JSON.stringify(catalogue))).toEqual(catalogue);
 
@@ -91,7 +94,7 @@ describe("connector registry", () => {
 
   it("marks every connector allowed for an org with no paid features", () => {
     const catalogue = connectorCatalogue([]);
-    expect(catalogue).toHaveLength(12);
+    expect(catalogue).toHaveLength(21);
     for (const entry of catalogue) {
       expect(entry.requiresFeature).toBeNull();
       expect(entry.allowed).toBe(true);
@@ -106,7 +109,7 @@ describe("connector registry", () => {
 
   it("groups the catalogue by category and then by name", () => {
     const catalogue = connectorCatalogue([]);
-    expect(new Set(catalogue.map((entry) => entry.category))).toEqual(new Set(["ai", "chat", "payments"]));
+    expect(new Set(catalogue.map((entry) => entry.category))).toEqual(new Set(["ai", "chat", "data", "email", "payments"]));
     const order = ["ai", "chat", "data", "email", "payments"];
     const categories = catalogue.map((entry) => order.indexOf(entry.category));
     expect(categories).toEqual([...categories].sort((a, b) => a - b));

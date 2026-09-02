@@ -96,6 +96,93 @@ function asStringSecret(secret: Record<string, unknown>): Record<string, string>
   return fields;
 }
 
+/**
+ * A stored envelope that will not open: a wrong KEK, a tampered row, or a create that never got as
+ * far as sealing. Its own message is about crypto rather than anything a user can act on, so it is
+ * never propagated — every caller replaces it with its own verdict.
+ */
+class SecretUnreadableError extends Error {}
+
+function openStoredSecret(
+  row: engine.ConnectionSealed,
+  orgId: string,
+  connectionId: string,
+): Record<string, string> {
+  try {
+    return asStringSecret(open(row.secret, aadFor(orgId, connectionId)));
+  } catch {
+    throw new SecretUnreadableError("connection secret could not be opened");
+  }
+}
+
+const SECRET_UNREADABLE =
+  "This connection's stored credential could not be opened. Please add it again.";
+
+/**
+ * Runs one server-side call with a connection's plaintext credential in hand.
+ *
+ * The secret exists only for the duration of `call`, and `call` is expected to return something
+ * derived from the *provider's* answer — never the credential itself (CLAUDE.md rule 1). The org
+ * check is the same one every other route does: a connection this org may not read is a connection
+ * that does not exist.
+ */
+export async function withConnectionSecret<T>(
+  args: { connectionId: string; orgId: string },
+  call: (context: {
+    def: ConnectorDef;
+    secret: Record<string, string>;
+    meta: Record<string, unknown>;
+  }) => Promise<T>,
+): Promise<T> {
+  const row = await connectionInOrg(args.connectionId, args.orgId);
+  const def = connectorFor(row.provider);
+
+  let secret: Record<string, string>;
+  try {
+    secret = openStoredSecret(row, args.orgId, args.connectionId);
+  } catch {
+    throw new ConnectionRequestError(400, "secret_unreadable", SECRET_UNREADABLE);
+  }
+
+  const meta = (row.meta ?? {}) as Record<string, unknown>;
+  return await call({ def, secret, meta });
+}
+
+/**
+ * What `POST /api/connections/:id/pick` answers with: the remote objects a config field can offer
+ * (Slack channels, Discord guilds, Telegram chats). The credential does the call; only ids and
+ * labels come back, which is the whole reason the picker is a server round-trip rather than a
+ * client fetch with a token.
+ */
+export async function pickConnectionOptions(args: {
+  connectionId: string;
+  orgId: string;
+  kind: string;
+}): Promise<{ id: string; label: string }[]> {
+  return await withConnectionSecret(args, async ({ def, secret, meta }) => {
+    if (!def.pick) {
+      throw new ConnectionRequestError(
+        400,
+        "no_picker",
+        `${def.name} connections have nothing to list.`,
+      );
+    }
+
+    try {
+      return await def.pick(args.kind, secret, meta);
+    } catch (cause) {
+      // A connector's picker throws with the provider's own words; they are safe (`invalid_auth`,
+      // `missing_scope`) but they are not the user's language, so only the log gets them.
+      console.error("connections: pick failed", { provider: def.provider, kind: args.kind }, cause);
+      throw new ConnectionRequestError(
+        502,
+        "pick_failed",
+        `Could not load that list from ${def.name}. Re-test the connection and try again.`,
+      );
+    }
+  });
+}
+
 /** How many models the last discovery captured — the number the connections list shows. */
 function modelCount(meta: Record<string, unknown>): number {
   return Array.isArray(meta.models) ? meta.models.length : 0;
@@ -199,16 +286,12 @@ async function testStoredConnection(
 
   let secret: Record<string, string>;
   try {
-    secret = asStringSecret(open(row.secret, aadFor(orgId, connectionId)));
+    secret = openStoredSecret(row, orgId, connectionId);
   } catch {
-    // A wrong KEK, a tampered row, or a create that never got as far as sealing. The error is
-    // swallowed on purpose: its message is about crypto, not about anything the user can fix.
+    // The error is swallowed on purpose: its message is about crypto, not about anything the
+    // user can fix. The row is demoted first, so the connections page shows why.
     await engine.setConnectionStatus({ connectionId, orgId, status: "needs_reconnect" });
-    throw new ConnectionRequestError(
-      400,
-      "secret_unreadable",
-      "This connection's stored credential could not be opened. Please add it again.",
-    );
+    throw new ConnectionRequestError(400, "secret_unreadable", SECRET_UNREADABLE);
   }
 
   const result = await def.test(secret);

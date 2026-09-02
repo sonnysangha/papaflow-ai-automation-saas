@@ -15,8 +15,9 @@
 ## Dashboard steps still needed (only you can do these)
 
 1. **Clerk ↔ Convex integration (required before sign-in works against Convex)** — https://dashboard.clerk.com/apps/setup/convex → select **PapaFlow** (Development) → **Activate Convex integration**. The Frontend API URL shown must be `https://curious-cat-3256.clerk.accounts.dev` (already set on both Convex deployments).
-2. **Clerk webhook endpoint (required for org/plan sync)** — https://dashboard.clerk.com → PapaFlow → Configure → **Webhooks** → Add Endpoint → URL `https://fastidious-puffin-373.convex.site/clerk-webhook` → subscribe `organization.*`, `organizationMembership.*`, `subscription.*`, `subscriptionItem.*` → Create → copy the **Signing Secret** (`whsec_…`) and run: `npx convex env set CLERK_WEBHOOK_SIGNING_SECRET whsec_…` (do this after Phase 1 task 3 has pushed `convex/http.ts`). Repeat with URL `https://content-albatross-126.convex.site/clerk-webhook` + `npx convex env set --prod CLERK_WEBHOOK_SIGNING_SECRET whsec_…` for production.
-3. **Convex preview deploy key (optional; only for PR preview deployments)** — https://dashboard.convex.dev/t/sonny-sangha/papaflow → Project Settings → **Generate Preview Deploy Key** → `vercel env add CONVEX_DEPLOY_KEY preview --value 'preview:…' --yes`.
-4. **Platform email fallback (optional)** — create a key at https://resend.com/api-keys and add `RESEND_API_KEY=` to `.env.local` (+ `vercel env add RESEND_API_KEY production --value … --yes`). Before a domain is verified Resend only delivers to the account's own email from `onboarding@resend.dev`.
+2. **Convex preview deploy key (optional; only for PR preview deployments)** — https://dashboard.convex.dev/t/sonny-sangha/papaflow → Project Settings → **Generate Preview Deploy Key** → `vercel env add CONVEX_DEPLOY_KEY preview --value 'preview:…' --yes`.
+3. **Platform email fallback (optional)** — create a key at https://resend.com/api-keys and add `RESEND_API_KEY=` to `.env.local` (+ `vercel env add RESEND_API_KEY production --value … --yes`). Before a domain is verified Resend only delivers to the account's own email from `onboarding@resend.dev`.
+
+Clerk is the source of truth for organisations, memberships and billing: no Clerk webhook, no mirror tables.
 
 Everything else (AI keys, Slack/Discord/Telegram/Notion/Airtable/Linear/GitHub/Stripe credentials) is entered by users as **connections** inside the app — no operator setup.

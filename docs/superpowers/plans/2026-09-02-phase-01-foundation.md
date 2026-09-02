@@ -40,12 +40,10 @@ components/canvas/{Editor,Canvas,NodeSidebar,WorkflowNode,StatusRing}.tsx
 components/theme-provider.tsx
 convex/lib/auth.ts                         requireOrg(ctx)
 convex/lib/plan.ts                         currentPlan(ctx, orgId) → { slug, features, limits }
-convex/http.ts                             /clerk-webhook httpAction (verifyWebhook)
-convex/clerk.ts                            internal.clerk.handle + upsert helpers
-convex/orgPlans.ts                         orgPlans.current query
+convex/plan.ts                             plan.current query (from token claims)
 convex/workflows.ts                        list/get/create/saveGraph/rename/remove
 convex/test.setup.ts                       import.meta.glob modules for convex-test
-convex/clerk.test.ts                       webhook + upsert tests
+convex/plan.test.ts                        plan-from-claims tests
 nodes/define.ts  nodes/registry.ts  nodes/categories.ts  nodes/schema.ts (zod → JSON schema helper)
 nodes/triggers/manual.ts  nodes/actions/http-request.ts  nodes/actions/email-send.ts
 tests/registry.test.ts  tests/plans.test.ts  tests/nodes.test.ts
@@ -124,86 +122,19 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
 ---
 
-### Task 2: Convex auth helpers, plan lookup, Clerk webhook sync (+ tests)
+### Task 2: Convex auth helpers and plan-from-claims (+ tests)
 
-**Files:** create `convex/lib/auth.ts`, `convex/lib/plan.ts`, `convex/http.ts`, `convex/clerk.ts`, `convex/orgPlans.ts`, `convex/test.setup.ts`, `convex/clerk.test.ts`.
+**Scope change (user):** Clerk is the source of truth for organisations, memberships and billing. There is no Clerk webhook and no `organizations`/`memberships`/`orgPlans` tables (remove them from `convex/schema.ts`).
+
+**Files:** create `convex/lib/auth.ts`, `convex/lib/plan.ts`, `convex/plan.ts`, `convex/test.setup.ts`, `convex/plan.test.ts`; modify `convex/schema.ts` (drop the three tables).
 
 **Interfaces:**
-- `requireOrg(ctx): Promise<{ userId: string; orgId: string; role?: string; plan: string }>` (throws when unauthenticated / no active org).
-- `currentPlan(ctx, orgId): Promise<{ slug: PlanSlug; features: readonly string[]; limits: … }>` reads `orgPlans` by `by_org`, falls back to `free_org`.
-- `internal.clerk.handle({ svixId, type, data })` idempotent on `svixId` (table `webhookEvents`, source `"clerk"`).
-- `api.orgPlans.current()` → `{ slug, features, limits, status }` for the active org.
+- `requireOrg(ctx): Promise<{ userId; orgId; role?; plan: string; features: string[] }>` — org id from `org_id` (only when it starts with `org_`) ?? `o.id`; `plan` from the `pla` claim (`o:<slug>` → slug, missing/unknown → `free_org`); `features` from the `fea` claim (comma-separated, keep `o:`-prefixed entries with the prefix stripped; missing → `featuresForPlan(plan)`).
+- `currentPlan(ctx)` → `{ slug, features, limits }` from `requireOrg` (no table reads).
+- `api.plan.current()` → `{ slug, features, limits }` with `Infinity` mapped to `null`.
 
-- [ ] **Step 1: write the failing tests** in `convex/clerk.test.ts` using `convex-test` (`convex/test.setup.ts` exports `modules = import.meta.glob("./**/*.ts")`). Cover: (a) `organization.created` inserts an `organizations` row keyed by `data.id` and a second call with the same `svixId` is a no-op; (b) `organizationMembership.created` inserts a `memberships` row (`orgId = data.organization.id`, `userId = data.public_user_data.user_id`, `role = data.role`) and `.deleted` removes it; (c) `subscriptionItem.active` with `payer.organization_id` + `plan.slug = "pro"` upserts `orgPlans` with `features = FEATURES.pro`, `subscriptionItem.ended` flips it to `free_org`, and an item without `payer.organization_id` is ignored; (d) `POST /clerk-webhook` with no svix headers returns 400 (`t.fetch("/clerk-webhook", { method: "POST", body: "{}" })`). Run `pnpm test --project convex` → fails (modules missing).
-
-- [ ] **Step 2: `convex/lib/auth.ts`** — defensive claim reading (claim exposure for Clerk v2 tokens is unresolved across docs; log once):
-
-```ts
-import type { GenericQueryCtx, GenericMutationCtx, GenericActionCtx, GenericDataModel } from "convex/server";
-type Ctx = { auth: GenericQueryCtx<GenericDataModel>["auth"] };
-
-export async function requireOrg(ctx: Ctx) {
-  const id = (await ctx.auth.getUserIdentity()) as Record<string, unknown> | null;
-  if (!id) throw new Error("unauthenticated");
-  const rawO = id["o"];
-  const o = (typeof rawO === "string" ? safeParse(rawO) : rawO) as { id?: string; rol?: string } | undefined;
-  const orgId = (id["org_id"] ?? id["o.id"] ?? o?.id) as string | undefined;
-  const role = (id["org_role"] ?? id["o.rol"] ?? o?.rol) as string | undefined;
-  const pla = id["pla"] as string | undefined;
-  const plan = pla?.replace(/^o:/, "") ?? "free_org";
-  if (!orgId) {
-    console.log("requireOrg: no org claim; identity keys:", JSON.stringify(Object.keys(id)));
-    throw new Error("no active organization");
-  }
-  return { userId: id.subject as string, orgId, role, plan };
-}
-function safeParse(s: string) { try { return JSON.parse(s); } catch { return undefined; } }
-```
-
-`convex/lib/plan.ts`: `currentPlan(ctx, orgId)` → query `orgPlans` `by_org`, take the newest row; `slug = row && isPlanSlug(row.planSlug) && row.status !== "ended" ? row.planSlug : "free_org"`; return `{ slug, features: featuresForPlan(slug), limits: limitsForPlan(slug), status: row?.status ?? "none" }`. Import from `../../lib/plans`.
-
-- [ ] **Step 3: `convex/clerk.ts`** — `handle = internalMutation({ args: { svixId: v.string(), type: v.string(), data: v.any() }, handler })`: dedupe (`webhookEvents` `by_source_event` with source `"clerk"`; return early if present, else insert); then switch on `type`:
-  - `organization.created|updated`: upsert `organizations` by `orgId = data.id` (`name`, `slug`, `imageUrl: data.image_url`, `createdBy: data.created_by`, `updatedAt: Date.now()`).
-  - `organization.deleted`: patch `deletedAt` if the row exists.
-  - `organizationMembership.created|updated`: upsert `memberships` by `clerkMembershipId = data.id` (`orgId = data.organization.id`, `userId = data.public_user_data.user_id`, `role = data.role`). `.deleted`: delete by `clerkMembershipId`.
-  - `subscriptionItem.*`: `const orgId = data.payer?.organization_id; const slug = data.plan?.slug; if (!orgId || !slug) return;` ignore statuses `upcoming|abandoned|incomplete`; compute `planSlug = type === "subscriptionItem.ended" || data.status === "ended" || data.status === "expired" ? "free_org" : slug`; upsert `orgPlans` by `by_org`: `{ orgId, planSlug, status: data.status, periodEnd: data.period_end ?? undefined, isFreeTrial: data.is_free_trial ?? undefined, subscriptionItemId: data.id, features: [...featuresForPlan(planSlug)], updatedAt: Date.now() }`. Log the first payload of each `type` with `console.log` (Convex logs) so the real shape is recorded.
-  - anything else: ignore.
-  Also export `upsertOrganization`/`upsertMembership` as plain helper functions (not Convex functions) so tests can target `internal.clerk.handle` only.
-
-- [ ] **Step 4: `convex/http.ts`**:
-
-```ts
-import { httpRouter } from "convex/server";
-import { httpAction } from "./_generated/server";
-import { internal } from "./_generated/api";
-import { verifyWebhook } from "@clerk/backend/webhooks";
-
-const http = httpRouter();
-http.route({
-  path: "/clerk-webhook",
-  method: "POST",
-  handler: httpAction(async (ctx, request) => {
-    const svixId = request.headers.get("svix-id");
-    let event;
-    try {
-      event = await verifyWebhook(request, { signingSecret: process.env.CLERK_WEBHOOK_SIGNING_SECRET });
-    } catch (err) {
-      console.log("clerk-webhook: bad signature", String(err));
-      return new Response("bad signature", { status: 400 });
-    }
-    if (!svixId) return new Response("missing svix-id", { status: 400 });
-    await ctx.runMutation(internal.clerk.handle, { svixId, type: event.type, data: event.data });
-    return new Response(null, { status: 200 });
-  }),
-});
-export default http;
-```
-
-If `npx convex dev --once` fails to bundle `@clerk/backend/webhooks`, replace it with the `standardwebhooks` package (`new Webhook(secret).verify(rawBody, headers)` then `JSON.parse`) — record which one worked in `docs/PROVISIONING.md`.
-
-- [ ] **Step 5: `convex/orgPlans.ts`** — `current = query({ args: {}, handler })` → `requireOrg` then `currentPlan` → `{ slug, features, limits: { …limits, workflows: limits.workflows === Infinity ? null : limits.workflows, … } , status }` (JSON cannot carry `Infinity`; map `Infinity` → `null` in the return value).
-
-- [ ] **Step 6: run** `pnpm test --project convex` → passes; `CONVEX_ALLOW_ANONYMOUS=false npx convex dev --once` → pushes (this also confirms `@clerk/backend/webhooks` bundles). `pnpm typecheck` passes. Commit `feat(convex): clerk webhook sync, org auth helpers, plan lookup`.
+- [ ] Step 1: tests first (`convex/plan.test.ts`): identity with `pla: "o:pro", fea: "o:core_connectors,o:ai_builder,u:ignored"` → slug `pro`, features `["core_connectors","ai_builder"]`, `limits.workflows === null`; missing `pla` → `free_org` with `FEATURES.free_org`; unknown slug → `free_org`; identity without an org claim → throws.
+- [ ] Step 2: implement; `pnpm test --project convex`; push with `CONVEX_ALLOW_ANONYMOUS=false npx convex dev --once`; typecheck. Commit `feat(convex): org auth helpers and plan from Clerk claims`.
 
 ---
 
@@ -292,5 +223,5 @@ Graph validator (reused in later phases): `export const graphValidator = v.objec
 ### Task 7: README + phase check
 
 - [ ] **Step 1:** `README.md`: what PapaFlow is (3 lines), setup (`pnpm install`, `clerk env pull --file .env.local`, `npx convex dev`, `.env.example` vars), commands, links to `docs/PLAN.md`, `docs/PROVISIONING.md`, `docs/research/`.
-- [ ] **Step 2: phase check** (with the user's Clerk Convex integration activated and the webhook endpoint created): sign in with a Clerk **test-mode** identity (`<name>+clerk_test@example.com`, verification code `424242` — Clerk development instances accept these without sending email); create org A, create a workflow, draw Manual → HTTP → Email; switch to a new org B via the switcher → the list is empty; back to A → the workflow is there; Convex data view shows `organizations` and `memberships` rows from the webhook and `workflows.version` > 1 after edits. `pnpm typecheck && pnpm lint && pnpm test` green.
+- [ ] **Step 2: phase check** (with the user's Clerk Convex integration activated): sign in with a Clerk **test-mode** identity (`<name>+clerk_test@example.com`, verification code `424242` — Clerk development instances accept these without sending email); create org A, create a workflow, draw Manual → HTTP → Email; switch to a new org B via the switcher → the list is empty; back to A → the workflow is there; `workflows.version` > 1 after edits and `api.plan.current` returns `free_org`. `pnpm typecheck && pnpm lint && pnpm test` green.
 - [ ] **Step 3: commit + push** `docs: readme and phase 1 check`.

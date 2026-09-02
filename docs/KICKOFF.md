@@ -8,9 +8,9 @@ Read CLAUDE.md and docs/PLAN.md fully before doing anything.
 
 We're starting Phase 1 (Foundation) from the build phases in CLAUDE.md. Scaffold the project:
 
-- Next.js App Router with TypeScript, pnpm, Tailwind, shadcn/ui (button, input, dialog, sheet, dropdown-menu, badge, tabs, tooltip, sonner).
+- Next.js App Router with TypeScript, pnpm, Tailwind, shadcn/ui (button, input, dialog, sheet, dropdown-menu, badge, tabs, tooltip, sonner). shadcn 4.20 defaults to Base UI (`pnpm dlx shadcn@4.20.0 init -d`, style `base-nova`); `sonner` exists for both bases. create-next-app 16.3.4 has no `--turbopack` flag (Turbopack is default) and refuses a directory containing CLAUDE.md — copy CLAUDE.md in after scaffolding.
 - Clerk with Organizations enabled and the native Convex integration (no JWT template; the session token carries `aud: "convex"`). `ConvexProviderWithClerk` in a client provider component.
-- Convex with the initial schema from CLAUDE.md ("Convex tables"), every table indexed by `orgId`. Include the `clerk-webhook` httpAction with svix verification handling `organization.*`, `organizationMembership.*`, and the billing `subscription*.*` events into `organizations`, `memberships`, `orgPlans`.
+- Convex with the initial schema from CLAUDE.md ("Convex tables"), every table indexed by `orgId`. No Clerk webhook: Clerk is the source of truth; Convex reads plan/feature claims from the session token.
 - React Flow canvas at `app/(app)/w/[workflowId]` with a node sidebar, drag-to-add, connect, minimap and controls. Graph JSON saves to Convex on change (debounced) with a `version` counter. Custom node component with a status ring (idle / running / success / failed) we'll drive in Phase 2.
 - `nodes/` with `defineNode` and the registry, plus three real nodes to prove the pattern: `manual.trigger`, `http.request`, `email.send` (Resend).
 - A workflow list page per org and an org switcher in the header.

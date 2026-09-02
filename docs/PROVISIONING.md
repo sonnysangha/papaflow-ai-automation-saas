@@ -5,7 +5,7 @@
 | Resource | Value |
 |---|---|
 | Repo | https://github.com/sonnysangha/papaflow (private, `main`) |
-| Clerk app | **PapaFlow** `app_3ImGFtOGHgLVV1SJa6VTqFeNBJ4`, dev instance `ins_3ImGFp6EL9RZZvowE5Yj2MZAXYf`, Frontend API `https://curious-cat-3256.clerk.accounts.dev`, Organizations enabled (forced selection, unlimited members) |
+| Clerk app | **PapaFlow** `app_3ImGFtOGHgLVV1SJa6VTqFeNBJ4`, dev instance `ins_3ImGFp6EL9RZZvowE5Yj2MZAXYf`, Frontend API `https://curious-cat-3256.clerk.accounts.dev`, Organizations enabled (unlimited members; `force_organization_selection` set to **false** on 2026-09-02 — the app handles org selection at `/select-org` because Clerk's forced choose-organization task did not complete reliably under automation) |
 | Convex project | `papaflow` on team `sonny-sangha` — dev `fastidious-puffin-373` (`https://fastidious-puffin-373.convex.cloud`, HTTP actions at `https://fastidious-puffin-373.convex.site`), prod `content-albatross-126` |
 | Convex env (dev + prod) | `CLERK_FRONTEND_API_URL`, `ENGINE_SECRET` |
 | Vercel project | `papaflow` on `sonnysanghas-projects` (`prj_SP3inlGaaKH8SPSgO9z5HMmYcq4x`), GitHub connected, `vercel.ts` build command |

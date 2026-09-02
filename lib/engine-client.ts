@@ -1,9 +1,10 @@
 import { ConvexHttpClient } from "convex/browser";
-import type { FunctionArgs, FunctionReturnType } from "convex/server";
+import type { FunctionArgs, FunctionReference, FunctionReturnType } from "convex/server";
 import { start } from "workflow/api";
 
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import type { Sealed } from "@/lib/vault";
 import { toRunGraph } from "@/workflows/graph";
 import { runGraph } from "@/workflows/run-graph";
 import type { Trigger } from "@/workflows/types";
@@ -122,6 +123,43 @@ export async function finishExecution(
     executionId: executionRef(executionId),
     status,
     error,
+  });
+}
+
+/**
+ * One connection as a step sees it: the sealed blob plus the non-secret fields needed to open it
+ * (`orgId` is half the AAD) and to decide whether it is usable. `lib/vault.ts#openFresh` is the only
+ * caller — nothing else should ever hold a sealed secret (CLAUDE.md rule 1).
+ */
+export type ConnectionSealed = {
+  orgId: string;
+  provider: string;
+  kind: string;
+  secret: Sealed;
+  expiresAt?: number;
+  status: "active" | "needs_reconnect" | "revoked";
+};
+
+/**
+ * TODO(phase4-task3): `convex/engine.ts` does not export `getConnectionSealed` yet, so the generated
+ * `api.engine` has no such member and the reference is described here instead. Delete this type and
+ * the cast below the moment the Convex query lands; the wrapper's signature does not change.
+ */
+type EngineApi = typeof api.engine & {
+  getConnectionSealed: FunctionReference<
+    "query",
+    "public",
+    { secret: string; connectionId: string },
+    ConnectionSealed
+  >;
+};
+
+/** The sealed credential row for a connection. Secret-checked on the Convex side, like the rest. */
+export async function getConnectionSealed(connectionId: string): Promise<ConnectionSealed> {
+  const { client, secret } = engineClient();
+  return await client.query((api.engine as EngineApi).getConnectionSealed, {
+    secret,
+    connectionId,
   });
 }
 

@@ -1,9 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
-import { MoreHorizontalIcon, RefreshCwIcon, RotateCwIcon, Trash2Icon } from "lucide-react";
+import {
+  CopyIcon,
+  MoreHorizontalIcon,
+  RefreshCwIcon,
+  RotateCwIcon,
+  Trash2Icon,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { NodeIcon } from "@/components/canvas/node-icon";
@@ -68,6 +74,65 @@ function modelCount(meta: unknown): number | null {
   if (typeof meta !== "object" || meta === null) return null;
   const models = (meta as { models?: unknown }).models;
   return Array.isArray(models) ? models.length : null;
+}
+
+/**
+ * Where this connection's provider should send its events. Written by the connector's `afterCreate`
+ * (`connectors/{telegram,stripe}.ts`), because the URL contains the connection id and so cannot
+ * exist before the row does. Absent for every connector that has nothing inbound to offer.
+ */
+function inboundUrl(meta: unknown): string | null {
+  if (typeof meta !== "object" || meta === null) return null;
+  const url = (meta as { inboundUrl?: unknown }).inboundUrl;
+  return typeof url === "string" && url.length > 0 ? url : null;
+}
+
+/**
+ * What the user is supposed to do with that URL, which is the whole difference between the two
+ * inbound connectors: Telegram was told about it automatically (`setWebhook`), Stripe cannot be —
+ * the user has to paste it into their own dashboard before a single event arrives.
+ */
+function inboundHint(provider: string, meta: unknown): string {
+  if (provider === "telegram") {
+    const webhookSet = (meta as { webhookSet?: unknown } | null)?.webhookSet;
+    return webhookSet === false
+      ? "Telegram was not told about this URL — it only accepts https, so reconnect once this app has an https origin"
+      : "Telegram webhook registered";
+  }
+  if (provider === "stripe") return "Paste this URL into Stripe's webhook settings";
+  return "Send this provider's events to this URL";
+}
+
+/** The inbound URL as its own full-width row: read-only, copyable, and long enough to need one. */
+function InboundUrlRow({ connection, url }: { connection: Connection; url: string }) {
+  return (
+    <TableRow className="hover:bg-transparent">
+      <TableCell colSpan={7} className="px-4 pt-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <code className="min-w-0 flex-1 truncate rounded-md bg-muted px-2 py-1 font-mono text-xs text-muted-foreground">
+            {url}
+          </code>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-sm"
+            aria-label={`Copy the inbound URL for ${connection.label}`}
+            onClick={() => {
+              void navigator.clipboard.writeText(url).then(
+                () => toast.success("Inbound URL copied"),
+                () => toast.error("Could not copy — select the URL and copy it yourself"),
+              );
+            }}
+          >
+            <CopyIcon />
+          </Button>
+          <p className="text-xs text-muted-foreground">
+            {inboundHint(connection.provider, connection.meta)}
+          </p>
+        </div>
+      </TableCell>
+    </TableRow>
+  );
 }
 
 function ConnectionStatusBadge({ status }: { status: Connection["status"] }) {
@@ -194,72 +259,77 @@ export function ConnectionList() {
               // `CONNECTORS` is data here: the name, icon and category behind a stored provider.
               const definition = CONNECTORS[connection.provider];
               const models = modelCount(connection.meta);
+              const inbound = inboundUrl(connection.meta);
               const busy = busyId === connection._id;
 
               return (
-                <TableRow key={connection._id} className={cn(busy && "opacity-60")}>
-                  <TableCell className="px-4 font-medium">
-                    <span className="flex items-center gap-2">
-                      <NodeIcon
-                        name={definition?.icon}
-                        className="size-4 shrink-0 text-muted-foreground"
-                      />
-                      {definition?.name ?? connection.provider}
-                    </span>
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">{connection.label}</TableCell>
-                  <TableCell className="font-mono text-xs text-muted-foreground">
-                    ••••{connection.hint}
-                  </TableCell>
-                  <TableCell>
-                    <ConnectionStatusBadge status={connection.status} />
-                  </TableCell>
-                  <TableCell className="text-muted-foreground tabular-nums">
-                    {models === null ? "—" : models}
-                  </TableCell>
-                  <TableCell
-                    className="text-muted-foreground"
-                    title={formatAbsoluteTime(connection.updatedAt)}
-                  >
-                    updated {formatRelativeTime(connection.updatedAt)}
-                  </TableCell>
-                  <TableCell className="px-4 text-right">
-                    <DropdownMenu>
-                      <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" />}>
-                        <MoreHorizontalIcon />
-                        <span className="sr-only">Actions for {connection.label}</span>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" className="min-w-44">
-                        <DropdownMenuItem
-                          disabled={busy}
-                          onClick={() => void runAction(connection, "retest")}
-                        >
-                          <RotateCwIcon />
-                          Re-test
-                        </DropdownMenuItem>
-                        {definition?.category === "ai" && (
+                <Fragment key={connection._id}>
+                  <TableRow className={cn(busy && "opacity-60", inbound && "border-b-0")}>
+                    <TableCell className="px-4 font-medium">
+                      <span className="flex items-center gap-2">
+                        <NodeIcon
+                          name={definition?.icon}
+                          className="size-4 shrink-0 text-muted-foreground"
+                        />
+                        {definition?.name ?? connection.provider}
+                      </span>
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">{connection.label}</TableCell>
+                    <TableCell className="font-mono text-xs text-muted-foreground">
+                      ••••{connection.hint}
+                    </TableCell>
+                    <TableCell>
+                      <ConnectionStatusBadge status={connection.status} />
+                    </TableCell>
+                    <TableCell className="text-muted-foreground tabular-nums">
+                      {models === null ? "—" : models}
+                    </TableCell>
+                    <TableCell
+                      className="text-muted-foreground"
+                      title={formatAbsoluteTime(connection.updatedAt)}
+                    >
+                      updated {formatRelativeTime(connection.updatedAt)}
+                    </TableCell>
+                    <TableCell className="px-4 text-right">
+                      <DropdownMenu>
+                        <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" />}>
+                          <MoreHorizontalIcon />
+                          <span className="sr-only">Actions for {connection.label}</span>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="min-w-44">
                           <DropdownMenuItem
                             disabled={busy}
-                            onClick={() => void runAction(connection, "refresh")}
+                            onClick={() => void runAction(connection, "retest")}
                           >
-                            <RefreshCwIcon />
-                            Refresh models
+                            <RotateCwIcon />
+                            Re-test
                           </DropdownMenuItem>
-                        )}
-                        <DropdownMenuItem
-                          variant="destructive"
-                          onClick={() => {
-                            setDeleteTarget(connection);
-                            setDeleteOpen(true);
-                          }}
-                        >
-                          <Trash2Icon />
-                          Delete
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </TableCell>
-                </TableRow>
+                          {definition?.category === "ai" && (
+                            <DropdownMenuItem
+                              disabled={busy}
+                              onClick={() => void runAction(connection, "refresh")}
+                            >
+                              <RefreshCwIcon />
+                              Refresh models
+                            </DropdownMenuItem>
+                          )}
+                          <DropdownMenuItem
+                            variant="destructive"
+                            onClick={() => {
+                              setDeleteTarget(connection);
+                              setDeleteOpen(true);
+                            }}
+                          >
+                            <Trash2Icon />
+                            Delete
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </TableCell>
+                  </TableRow>
+
+                  {inbound ? <InboundUrlRow connection={connection} url={inbound} /> : null}
+                </Fragment>
               );
             })}
           </TableBody>

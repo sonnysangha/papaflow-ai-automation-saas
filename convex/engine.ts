@@ -203,6 +203,8 @@ const connectionSealedResult = v.union(
     secret: sealedValidator,
     expiresAt: v.optional(v.number()),
     status: connectionStatusValidator,
+    meta: v.any(),
+    requiresFeature: v.optional(v.string()),
   }),
   v.null(),
 );
@@ -256,6 +258,8 @@ export const getConnectionSealed = query({
       secret: row.secret,
       expiresAt: row.expiresAt,
       status: row.status,
+      meta: row.meta ?? {},
+      requiresFeature: row.requiresFeature,
     };
   },
 });

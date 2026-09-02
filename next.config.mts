@@ -17,6 +17,8 @@ const nextConfig: NextConfig = {
 // root — flat layout, no nested `agent/` — and `agents` must never be combined with `eveRoot`.
 // Either wrapper order works (spiked 2026-09-02); this is the documented one.
 // `.mts` because `eve/next` is ESM-only.
+// Two agents, two Build Output services: `runtime` is the Agent node's, `builder` is the chat panel's
+// (`/eve/agents/builder/eve/v1/*`).
 export default withEve(withWorkflow(nextConfig), {
-  agents: { runtime: "./agents/runtime" },
+  agents: { runtime: "./agents/runtime", builder: "./agents/builder" },
 });

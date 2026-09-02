@@ -12,6 +12,7 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { cn } from "@/lib/utils";
 import { NODES } from "@/nodes/registry";
 
+import { BuilderPanel } from "./BuilderPanel";
 import { Canvas } from "./Canvas";
 import { fromStoredGraph, type RunNodeState, type SaveState } from "./graph-io";
 import { NodeSidebar } from "./NodeSidebar";
@@ -129,6 +130,9 @@ export function Editor({
   // for. When a new run starts, this resubscribes and the canvas resets to idle for that run.
   const steps = useQuery(api.steps.byExecution, latest ? { executionId: latest._id } : "skip");
   const [saveState, setSaveState] = useState<SaveState>("saved");
+  // The Builder chat sits beside the canvas rather than over it: the point of the panel is watching
+  // the graph grow while the agent talks, which a dialog would cover up.
+  const [builderOpen, setBuilderOpen] = useState(false);
 
   // One entry per node the latest run touched: the status the ring shows, the branch handle the
   // canvas dims the other edges from, and the output the variable picker reads real paths off.
@@ -178,6 +182,8 @@ export function Editor({
               triggerType={triggerType}
               latest={latest}
               runWorkflow={runWorkflow}
+              builderOpen={builderOpen}
+              onOpenBuilder={() => setBuilderOpen((open) => !open)}
             />
             <div className="min-h-0 flex-1">
               <Canvas
@@ -188,6 +194,10 @@ export function Editor({
               />
             </div>
           </div>
+
+          {builderOpen ? (
+            <BuilderPanel workflowId={workflow._id} onClose={() => setBuilderOpen(false)} />
+          ) : null}
         </div>
       </div>
     </ReactFlowProvider>

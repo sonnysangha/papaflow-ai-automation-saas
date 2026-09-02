@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as builder from "../builder.js";
 import type * as connections from "../connections.js";
 import type * as engine from "../engine.js";
 import type * as executions from "../executions.js";
@@ -28,6 +29,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  builder: typeof builder;
   connections: typeof connections;
   engine: typeof engine;
   executions: typeof executions;

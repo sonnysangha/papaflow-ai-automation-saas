@@ -98,11 +98,16 @@ export function Canvas({ workflow, runByNode, onSaveStateChange }: CanvasProps) 
   const workflowRef = useRef(workflow);
   // Saves are chained so a second one always sees the version the first one came back with.
   const chainRef = useRef<Promise<void>>(Promise.resolve());
+  // Bumped by every `adopt`. A save queued or in flight against an older generation is abandoned
+  // rather than written: the Builder agent's graph is now the truth, and applying a stale
+  // `expectedVersion` (or a stale `savedRef`) after it would undo what the user just watched appear.
+  const generationRef = useRef(0);
 
   /** Replace local state with the server's graph — after a conflict, or a Builder agent edit. */
   const adopt = useCallback(
     (doc: WorkflowDoc) => {
       const graph = fromStoredGraph(doc.graph);
+      generationRef.current += 1;
       versionRef.current = doc.version;
       viewportRef.current = graph.viewport ?? viewportRef.current;
       savedRef.current = serializeGraph(
@@ -118,18 +123,23 @@ export function Canvas({ workflow, runByNode, onSaveStateChange }: CanvasProps) 
   );
 
   const commit = useCallback(
-    async (graph: StoredGraph, serialized: string) => {
+    async (graph: StoredGraph, serialized: string, generation: number) => {
+      // Adopted while this save sat in the chain: what it would write no longer exists.
+      if (generationRef.current !== generation) return;
       try {
         const { version } = await saveGraph({
           id: workflow._id,
           graph,
           expectedVersion: versionRef.current,
         });
+        // …or adopted while it was in flight. The write landed, but this canvas has moved on.
+        if (generationRef.current !== generation) return;
         versionRef.current = version;
         savedRef.current = serialized;
         pendingRef.current = false;
         onSaveStateChange("saved");
       } catch (error) {
+        if (generationRef.current !== generation) return;
         pendingRef.current = false;
         if (convexErrorData(error)?.code === "version_conflict") {
           onSaveStateChange("conflict");
@@ -177,17 +187,26 @@ export function Canvas({ workflow, runByNode, onSaveStateChange }: CanvasProps) 
 
     pendingRef.current = true;
     onSaveStateChange("saving");
+    const generation = generationRef.current;
     const timer = setTimeout(() => {
-      chainRef.current = chainRef.current.then(() => commit(graph, serialized));
+      chainRef.current = chainRef.current.then(() => commit(graph, serialized, generation));
     }, SAVE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [commit, edges, nodes, onSaveStateChange]);
 
-  // The subscription moved ahead of us and we have nothing pending: take the server's graph.
-  // This is what lets the Builder agent draw onto an open canvas in Phase 12.
+  // The subscription moved ahead of us: take the server's graph.
+  //
+  // This is what draws the Builder agent's work onto an open canvas. A Builder edit is adopted even
+  // with a local save pending, which the ordinary case (a second tab) deliberately is not: the agent
+  // is editing *this* user's workflow, in front of them, on their instruction, so its node appearing
+  // is the thing they asked for — while a debounced local edit that has not been written yet is at
+  // most a drag. Adopting cancels that debounce (the save effect re-runs against the adopted graph
+  // and finds nothing to write) and `generationRef` abandons anything already queued, so the version
+  // conflict a Builder session would otherwise raise every few seconds never happens.
   useEffect(() => {
     workflowRef.current = workflow;
-    if (pendingRef.current || workflow.version <= versionRef.current) return;
+    if (workflow.version <= versionRef.current) return;
+    if (pendingRef.current && workflow.lastEditSource !== "builder") return;
     adopt(workflow);
   }, [adopt, workflow]);
 

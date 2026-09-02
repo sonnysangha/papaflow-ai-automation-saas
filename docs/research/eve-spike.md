@@ -690,3 +690,91 @@ The constraint this creates is on the **import graph**, not the syntax: whatever
 reaches gets compiled into the agent bundle. `lib/engine-client.ts` imports `workflows/run-graph.ts`,
 so the Runtime agent reaches Convex through `lib/connections-engine.ts` instead — the same
 `ENGINE_SECRET` conversation with no `"use workflow"` module anywhere in its graph.
+
+---
+
+## Phase 12 addendum (2026-09-03, measured in the repo)
+
+Five things landing the Builder agent turned up. All executed against `eve@0.49.0` in
+`/Users/sonnysangha/Documents/Builds/n8n-clone-demo`; `npx eve info` from `agents/builder/` reports
+`Compile ready`, `0 errors`, 15 tools, `request_connection` as a `workflow-tool` and `remove_node`
+with `requiresApproval: true`.
+
+### 1. A backtick in a comment breaks `"use workflow"` — the error blames the wrong thing
+
+```
+[plugin eve-authored-workflow-directives] agents/builder/tools/request_connection.ts
+Error: "use workflow" in "…/request_connection.ts" is not on its own line. Write it as the first
+statement of the function body, on a line by itself.
+```
+
+It *was* on its own line. eve validates the directive by scanning the **source text**:
+`prepareAuthoredWorkflowDirectives` (`internal/workflow-bundle/authored-workflow-directives.js`)
+calls `detectWorkflowPatterns(source)` from the vendored `@workflow/builders`, which blanks
+**template literals before comments**:
+
+```js
+// compiled/@workflow/builders/index.js
+a = /`(?:\\[\s\S]|[^`\\])*`/g          // template literals, blanked first
+o = /\/\*[\s\S]*?\*\/|\/\/[^\r\n]*/g   // comments, blanked second
+```
+
+A JSDoc block that mentions `` `execute` `` or `` `"use workflow"` `` therefore opens a phantom
+template literal that swallows real code — including the directive's own line — and the scan fails
+before the AST check ever runs. **Rule: no backticks in the comments of a file that carries a
+workflow directive.** Reproduce in one line:
+
+```bash
+node --input-type=module -e "import {detectWorkflowPatterns} from './node_modules/eve/dist/src/compiled/@workflow/builders/index.js';
+import fs from 'node:fs'; console.log(detectWorkflowPatterns(fs.readFileSync(process.argv[1],'utf8')))" <file>
+# hasUseWorkflow must be true
+```
+
+### 2. `clientContext` cannot carry per-session context to a tool
+
+The Phase 12 plan says the tools "resolve the target `workflowId` from the session's client
+context". They cannot. `SendTurnOptions.clientContext`
+(`node_modules/eve/dist/src/client/types.d.ts`) is:
+
+> Ephemeral client/page context for the next model call only. Strings are rendered as user-role
+> model context messages. Objects are JSON-serialized into one user-role model context message.
+> Client context rides along with a message or HITL response; it does not dispatch a turn by itself
+> and is never persisted to durable session history.
+
+So it reaches the **model**, not `ctx`: `ctx.session` exposes `id`, `turn`, `auth` and `parent` and
+nothing else (`guides/session-context.md`), and a value the model retypes into a tool argument is a
+value the model can get wrong.
+
+**What works instead:** send it as a request header and let the channel's `AuthFn` project it.
+`agents/builder/channels/eve.ts` reads `x-papaflow-workflow` off the `Request` and returns it in
+`attributes` alongside `orgId`/`userId`, so every tool reads
+`ctx.session.auth.current.attributes.workflowId` the same way it reads the org. It is not a
+capability — Convex re-checks the workflow against the org on every write — just an address.
+
+### 3. Step arguments must be serializable, so a step cannot take `ctx`
+
+Obvious in hindsight: the Workflow SDK records step inputs. A `"use step"` helper called from a
+durable tool takes a plain identity object (`{ orgId, userId, workflowId }`) read from `ctx` in the
+workflow body, never the `ToolContext` itself.
+
+### 4. The `sleep` race needs an explicit type
+
+`Promise.race([ask(...), sleep("24h")])` infers `ToolInputResponse | void`, and narrowing `void`
+with `=== undefined` does not give TypeScript the other branch. Cast at the race:
+
+```ts
+const answer = (await Promise.race([pending, sleep("24h")])) as ToolInputResponse | undefined;
+```
+
+### 5. A second agent costs one line and one Build Output service
+
+`withEve(withWorkflow(config), { agents: { runtime: "./agents/runtime", builder: "./agents/builder" } })`
+→ `pnpm build` writes both services and their route transforms:
+
+```json
+"services": { "eve-runtime": …, "eve-builder": { "routePrefix": "/eve/agents/builder", … } },
+"routes": [ "^/eve/agents/runtime/eve/v1/(.*)$", "^/eve/agents/builder/eve/v1/(.*)$" ]
+```
+
+and the Workflow SDK still reports `2 workflows` (`run-graph`, `scheduler`) — a workflow-tool inside
+an agent belongs to that agent's service, not to the Next build.

@@ -3,7 +3,7 @@
 import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import type { FunctionReturnType } from "convex/server";
-import { HistoryIcon, PlayIcon } from "lucide-react";
+import { HistoryIcon, PlayIcon, SparklesIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { UpgradeCard } from "@/components/billing/UpgradeCard";
@@ -69,6 +69,9 @@ type RunBarProps = {
   triggerType: string | undefined;
   latest: LatestExecution | undefined;
   runWorkflow: RunWorkflowAction;
+  /** Opens the Builder chat. The editor owns whether the panel is showing. */
+  onOpenBuilder: () => void;
+  builderOpen: boolean;
 };
 
 /**
@@ -76,7 +79,14 @@ type RunBarProps = {
  * trigger sends, the Run button, and how the last run ended. Everything it shows about a run comes
  * from the live `executions` subscription the editor owns, so the badge updates while the run goes.
  */
-export function RunBar({ workflowId, triggerType, latest, runWorkflow }: RunBarProps) {
+export function RunBar({
+  workflowId,
+  triggerType,
+  latest,
+  runWorkflow,
+  onOpenBuilder,
+  builderOpen,
+}: RunBarProps) {
   const [sample, setSample] = useState("{}");
   const [pending, startTransition] = useTransition();
   // Sticky once hit: the wall stays visible under the bar until a run actually starts, because a
@@ -147,6 +157,21 @@ export function RunBar({ workflowId, triggerType, latest, runWorkflow }: RunBarP
         </Button>
 
         <div className="ml-auto flex items-center gap-2">
+          {/*
+            Shown to everyone, on purpose: the panel itself is what puts up the plan wall
+            (`<Show>` → `<UpgradeCard>`), so a free organisation discovers the feature by pressing
+            the button rather than by never seeing it. The refusals that matter are `has()` in
+            `POST /api/builder/session` and the plan check inside every Builder tool.
+          */}
+          <Button
+            size="sm"
+            variant={builderOpen ? "secondary" : "outline"}
+            onClick={onOpenBuilder}
+            aria-pressed={builderOpen}
+          >
+            <SparklesIcon />
+            Build with AI
+          </Button>
           <LastRun latest={latest} />
           <Link
             href={`/w/${workflowId}/runs`}

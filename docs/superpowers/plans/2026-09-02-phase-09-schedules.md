@@ -20,7 +20,7 @@ tests/schedule.test.ts
 ```
 
 ## Tasks
-- [ ] Task 1: cron helpers + tests (`lib/schedule.ts#nextFireTime(spec, from)`, `toCron({ mode, everyMinutes, cron })`, validation with croner; minimum interval check against `limitsForPlan(plan).minScheduleMinutes`).
-- [ ] Task 2: Convex `schedules` functions + engine-secret helpers; `scheduler.ts` loop of 200 iterations with `sleep(new Date(nextAt))` → `fireSchedule` step (returns `false` when the schedule is paused/deleted → return) → after the loop `await start(scheduler, [args], { deploymentId: "latest" })`; the scheduler's `runId` is stored on the schedule row on start and on every continue-as-new (`fireSchedule`/`continue` steps write it).
-- [ ] Task 3: trigger node + `ScheduleConfig` + `/api/schedules` (Enable → `has({ feature: "org:schedules" })` unless `mode === "every"` with `everyMinutes ≥ 60` on `free_org`; start; Pause → cancel + `enabled: false`; editing the cron cancels and restarts).
-- [ ] Phase check: "every 2 minutes" fires twice while watching; pause → no further runs; force continue-as-new in dev with `SCHEDULER_MAX_ITERATIONS=2` and confirm `schedules.runId` changes.
+- [x] Task 1: cron helpers + tests (`lib/schedule.ts#nextFireTime(spec, from)`, `toCron({ mode, everyMinutes, cron })`, validation with croner; minimum interval check against `limitsForPlan(plan).minScheduleMinutes`).
+- [x] Task 2: Convex `schedules` functions + engine-secret helpers; `scheduler.ts` loop of 200 iterations with `sleep(new Date(nextAt))` → `fireSchedule` step (returns `false` when the schedule is paused/deleted → return) → after the loop `await start(scheduler, [args], { deploymentId: "latest" })`; the scheduler's `runId` is stored on the schedule row on start and on every continue-as-new (`fireSchedule`/`continue` steps write it).
+- [x] Task 3: trigger node + `ScheduleConfig` + `/api/schedules` (Enable → `has({ feature: "org:schedules" })` unless `mode === "every"` with `everyMinutes ≥ 60` on `free_org`; start; Pause → cancel + `enabled: false`; editing the cron cancels and restarts).
+- [ ] Phase check (browser): "every 2 minutes" fires twice while watching; pause → no further runs; force continue-as-new in dev with `SCHEDULER_MAX_ITERATIONS=2` and confirm `schedules.runId` changes.

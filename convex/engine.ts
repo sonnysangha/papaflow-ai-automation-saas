@@ -15,6 +15,7 @@ import {
   stepStatusValidator,
 } from "./lib/validators";
 import schema from "./schema";
+import { scheduleRow } from "./schedules";
 import { graphValidator } from "./workflows";
 
 /**
@@ -608,5 +609,111 @@ export const getPublicForm = query({
   handler: async (ctx, { secret, ...args }): Promise<typeof publicFormResult.type> => {
     guard(secret);
     return await ctx.runQuery(internal.engine.publicForm, args);
+  },
+});
+
+/* -------------------------------------------------------------------------------------------------
+ * Schedules.
+ *
+ * The scheduler is a durable run, not a cron server: `workflows/scheduler.ts` sleeps until the next
+ * fire time, starts the graph from a step, and repeats. That run has no session — and neither does
+ * `app/api/schedules/route.ts` once it has finished checking Clerk — so both reach the `schedules`
+ * table through the same secret-checked surface as the rest of the engine, carrying `orgId` for the
+ * internal mutations to re-check against the row.
+ * ---------------------------------------------------------------------------------------------- */
+
+/** One schedule row. Nothing on it is secret: a cron, a timezone, a run id and two timestamps. */
+type ScheduleRow = typeof scheduleRow.type;
+
+const scheduleResult = v.union(scheduleRow, v.null());
+
+/**
+ * The schedule the scheduler run is sleeping on, re-read on every tick.
+ *
+ * Deliberately by id and without an org check: the run's only argument is the `scheduleId` it was
+ * started with, and possession of the shared secret is what authorises the read. The row it hands
+ * back carries the `orgId` the step then uses for everything else.
+ */
+export const getSchedule = query({
+  args: { secret: v.string(), scheduleId: v.id("schedules") },
+  returns: scheduleResult,
+  handler: async (ctx, { secret, ...args }): Promise<ScheduleRow | null> => {
+    guard(secret);
+    return await ctx.runQuery(internal.schedules.byId, args);
+  },
+});
+
+/** A workflow's schedule, or null — including when the workflow is not this org's. */
+export const getScheduleForWorkflow = query({
+  args: { secret: v.string(), workflowId: v.id("workflows"), orgId: v.string() },
+  returns: scheduleResult,
+  handler: async (ctx, { secret, ...args }): Promise<ScheduleRow | null> => {
+    guard(secret);
+    return await ctx.runQuery(internal.schedules.forWorkflow, args);
+  },
+});
+
+/**
+ * Writes a workflow's schedule and hands back its id — which the route needs before it can start
+ * the scheduler, because the id is the run's only argument.
+ */
+export const upsertSchedule = mutation({
+  args: {
+    secret: v.string(),
+    orgId: v.string(),
+    workflowId: v.id("workflows"),
+    cron: v.string(),
+    timezone: v.optional(v.string()),
+    enabled: v.boolean(),
+    nextAt: v.optional(v.number()),
+  },
+  returns: v.id("schedules"),
+  handler: async (ctx, { secret, ...args }): Promise<Id<"schedules">> => {
+    guard(secret);
+    return await ctx.runMutation(internal.schedules.upsertForWorkflow, args);
+  },
+});
+
+/** Pauses or resumes a schedule. Pausing clears the run id the route has just cancelled. */
+export const setScheduleEnabled = mutation({
+  args: {
+    secret: v.string(),
+    scheduleId: v.id("schedules"),
+    orgId: v.string(),
+    enabled: v.boolean(),
+  },
+  returns: v.null(),
+  handler: async (ctx, { secret, ...args }) => {
+    guard(secret);
+    await ctx.runMutation(internal.schedules.setEnabled, args);
+    return null;
+  },
+});
+
+/** Records the scheduler run now sleeping on this schedule — on enable, and on continue-as-new. */
+export const setScheduleRunId = mutation({
+  args: { secret: v.string(), scheduleId: v.id("schedules"), orgId: v.string(), runId: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { secret, ...args }) => {
+    guard(secret);
+    await ctx.runMutation(internal.schedules.setRunId, args);
+    return null;
+  },
+});
+
+/** Claims one tick: `lastFiredAt` is the tick that was due, which is what makes a retry a no-op. */
+export const markScheduleFired = mutation({
+  args: {
+    secret: v.string(),
+    scheduleId: v.id("schedules"),
+    orgId: v.string(),
+    firedAt: v.number(),
+    nextAt: v.optional(v.number()),
+  },
+  returns: v.null(),
+  handler: async (ctx, { secret, ...args }) => {
+    guard(secret);
+    await ctx.runMutation(internal.schedules.markFired, args);
+    return null;
   },
 });

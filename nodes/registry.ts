@@ -23,6 +23,7 @@ import { waitForWebhookNode } from "./logic/wait-for-webhook";
 import { toJsonSchema, type JsonSchema } from "./schema";
 import { formTriggerNode } from "./triggers/form";
 import { manualTrigger } from "./triggers/manual";
+import { scheduleTriggerNode } from "./triggers/schedule";
 import { stripeEventTriggerNode } from "./triggers/stripe-event";
 import { telegramMessageTriggerNode } from "./triggers/telegram-message";
 import { webhookTriggerNode } from "./triggers/webhook";
@@ -32,6 +33,7 @@ const DEFINITIONS: readonly AnyNodeDef[] = [
   manualTrigger,
   webhookTriggerNode,
   formTriggerNode,
+  scheduleTriggerNode,
   telegramMessageTriggerNode,
   stripeEventTriggerNode,
   conditionNode,

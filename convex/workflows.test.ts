@@ -69,6 +69,8 @@ describe("api.workflows", () => {
       status: "draft",
       version: 1,
       updatedAt: expect.any(Number),
+      // Phase 9: the list carries the workflow's enabled schedule, so it can badge one.
+      schedule: null,
     });
     // The list projection never leaks the webhook secret or the graph.
     expect(list[0]).not.toHaveProperty("webhookSecret");

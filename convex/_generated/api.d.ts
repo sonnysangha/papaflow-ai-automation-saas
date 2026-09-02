@@ -15,6 +15,7 @@ import type * as lib_auth from "../lib/auth.js";
 import type * as lib_plan from "../lib/plan.js";
 import type * as lib_validators from "../lib/validators.js";
 import type * as plan from "../plan.js";
+import type * as schedules from "../schedules.js";
 import type * as steps from "../steps.js";
 import type * as usage from "../usage.js";
 import type * as webhookEvents from "../webhookEvents.js";
@@ -34,6 +35,7 @@ declare const fullApi: ApiFromModules<{
   "lib/plan": typeof lib_plan;
   "lib/validators": typeof lib_validators;
   plan: typeof plan;
+  schedules: typeof schedules;
   steps: typeof steps;
   usage: typeof usage;
   webhookEvents: typeof webhookEvents;

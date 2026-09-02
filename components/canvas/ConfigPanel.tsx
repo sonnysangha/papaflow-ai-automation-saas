@@ -36,6 +36,7 @@ import {
 } from "./graph-io";
 import { NodeIcon } from "./node-icon";
 import { resolvePickerKind } from "./picker-kind";
+import { ScheduleConfig } from "./ScheduleConfig";
 import { buildVariableGroups, type VariableGroup } from "./VariablePicker";
 
 /** Property names that are prose rather than a value, and get a textarea. */
@@ -53,6 +54,9 @@ const WEBHOOK_TRIGGER = "webhook.trigger";
 
 /** …and the node whose configuration is the URL that resumes one paused run of this workflow. */
 const WAIT_FOR_WEBHOOK = "logic.waitForWebhook";
+
+/** …and the one whose fields are only half the story: the rest is a sleeping scheduler run. */
+const SCHEDULE_TRIGGER = "schedule.trigger";
 
 type FieldKind =
   | "text"
@@ -386,6 +390,9 @@ export function ConfigPanel({
   // follow it with "This node has no settings."
   const showsUrl = node.data.nodeType === WEBHOOK_TRIGGER;
   const showsResumeUrl = node.data.nodeType === WAIT_FOR_WEBHOOK;
+  // The Schedule trigger's fields describe the repeat; whether it is *running* is a separate piece
+  // of state (a `schedules` row plus a durable run), so it gets a panel of its own below them.
+  const showsSchedule = node.data.nodeType === SCHEDULE_TRIGGER;
   const handles = sourceHandles(node.data.nodeType, node.data.inputs);
   // Read here rather than inside `NodeField`: every picker field on this node reads the same
   // input, and choosing a different connection has to re-load all of them at once.
@@ -518,6 +525,8 @@ export function ConfigPanel({
               );
             })
           )}
+
+          {showsSchedule && <ScheduleConfig workflowId={workflowId} inputs={node.data.inputs} />}
 
           {handles.length > 1 && (
             <div className="space-y-1.5">

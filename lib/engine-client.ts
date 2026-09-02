@@ -401,3 +401,102 @@ export async function getPublicForm(workflowId: string): Promise<PublicForm> {
     workflowId: workflowRef(workflowId),
   });
 }
+
+/* -------------------------------------------------------------------------------------------------
+ * Schedules.
+ *
+ * Two session-less callers share this surface: `workflows/steps/schedule-steps.ts`, which re-reads
+ * the row on every tick of a sleeping scheduler run, and `app/api/schedules/route.ts`, which has a
+ * Clerk session but no Convex token — it has already checked the org itself and passes `orgId` down
+ * for the internal mutations to re-check against the row.
+ * ---------------------------------------------------------------------------------------------- */
+
+/** One `schedules` row: the cron, the run sleeping on it and the two timestamps. Never secret. */
+export type ScheduleRow = NonNullable<FunctionReturnType<typeof api.engine.getSchedule>>;
+
+/** One `upsertSchedule` call — everything the row needs except the run id, which arrives after. */
+export type UpsertScheduleInput = Omit<FunctionArgs<typeof api.engine.upsertSchedule>, "secret">;
+
+/** Ids cross a step or route boundary as plain strings; Convex wants its branded ids back. */
+function scheduleRef(scheduleId: string): Id<"schedules"> {
+  return scheduleId as Id<"schedules">;
+}
+
+/**
+ * The schedule a scheduler run is sleeping on. Read fresh on every tick rather than carried in the
+ * run's arguments, because "is this still enabled?" is exactly the question a days-old argument
+ * cannot answer.
+ */
+export async function getSchedule(scheduleId: string): Promise<ScheduleRow | null> {
+  const { client, secret } = engineClient();
+  return await client.query(api.engine.getSchedule, {
+    secret,
+    scheduleId: scheduleRef(scheduleId),
+  });
+}
+
+/** A workflow's schedule, or null — including when the workflow is not this org's. */
+export async function getScheduleForWorkflow(
+  workflowId: string,
+  orgId: string,
+): Promise<ScheduleRow | null> {
+  const { client, secret } = engineClient();
+  return await client.query(api.engine.getScheduleForWorkflow, {
+    secret,
+    workflowId: workflowRef(workflowId),
+    orgId,
+  });
+}
+
+/** Writes the workflow's schedule and hands back its id — the scheduler run's only argument. */
+export async function upsertSchedule(args: UpsertScheduleInput): Promise<Id<"schedules">> {
+  const { client, secret } = engineClient();
+  return await client.mutation(api.engine.upsertSchedule, { secret, ...args });
+}
+
+/** Pauses or resumes a schedule. Pausing clears the run id the caller has just cancelled. */
+export async function setScheduleEnabled(args: {
+  scheduleId: string;
+  orgId: string;
+  enabled: boolean;
+}): Promise<void> {
+  const { client, secret } = engineClient();
+  await client.mutation(api.engine.setScheduleEnabled, {
+    secret,
+    scheduleId: scheduleRef(args.scheduleId),
+    orgId: args.orgId,
+    enabled: args.enabled,
+  });
+}
+
+/** Records the scheduler run now sleeping on this schedule — on enable, and on continue-as-new. */
+export async function setScheduleRunId(args: {
+  scheduleId: string;
+  orgId: string;
+  runId: string;
+}): Promise<void> {
+  const { client, secret } = engineClient();
+  await client.mutation(api.engine.setScheduleRunId, {
+    secret,
+    scheduleId: scheduleRef(args.scheduleId),
+    orgId: args.orgId,
+    runId: args.runId,
+  });
+}
+
+/** Claims one tick: `firedAt` is the tick that was due, so a retried step writes the same value. */
+export async function markScheduleFired(args: {
+  scheduleId: string;
+  orgId: string;
+  firedAt: number;
+  nextAt?: number;
+}): Promise<void> {
+  const { client, secret } = engineClient();
+  await client.mutation(api.engine.markScheduleFired, {
+    secret,
+    scheduleId: scheduleRef(args.scheduleId),
+    orgId: args.orgId,
+    firedAt: args.firedAt,
+    nextAt: args.nextAt,
+  });
+}

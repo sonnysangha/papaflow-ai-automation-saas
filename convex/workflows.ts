@@ -1,5 +1,6 @@
 import { ConvexError, v } from "convex/values";
 
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type QueryCtx } from "./_generated/server";
 import { requireOrg } from "./lib/auth";
@@ -26,6 +27,12 @@ const workflowSummary = v.object({
   status: v.union(v.literal("draft"), v.literal("active"), v.literal("paused")),
   version: v.number(),
   updatedAt: v.number(),
+  /**
+   * The cron this workflow is currently scheduled on, or null. Only *enabled* schedules are
+   * reported: a paused one is not something the list should claim is running, and the canvas is
+   * where you go to see it.
+   */
+  schedule: v.union(v.object({ cron: v.string(), nextAt: v.optional(v.number()) }), v.null()),
 });
 
 const WEBHOOK_SECRET_LENGTH = 32;
@@ -80,6 +87,21 @@ export const list = query({
       .order("desc")
       .collect();
 
+    // One indexed read for the whole org rather than one per row: a workspace has few schedules,
+    // and the list must not turn into an N+1 as it grows.
+    const schedules = await ctx.db
+      .query("schedules")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .collect();
+    const byWorkflow = new Map(
+      schedules
+        .filter((schedule) => schedule.enabled)
+        .map((schedule) => [
+          schedule.workflowId,
+          { cron: schedule.cron, nextAt: schedule.nextAt },
+        ]),
+    );
+
     return workflows.map((workflow) => ({
       _id: workflow._id,
       _creationTime: workflow._creationTime,
@@ -87,6 +109,7 @@ export const list = query({
       status: workflow.status,
       version: workflow.version,
       updatedAt: workflow.updatedAt,
+      schedule: byWorkflow.get(workflow._id) ?? null,
     }));
   },
 });
@@ -177,7 +200,13 @@ export const rename = mutation({
   },
 });
 
-/** Deletes a workflow. Executions and steps are left alone; Phase 2 decides their retention. */
+/**
+ * Deletes a workflow. Executions and steps are left alone; Phase 2 decides their retention.
+ *
+ * The schedule row goes with it, because it is configuration rather than history. A scheduler run
+ * that was sleeping on it is *not* cancelled here (a mutation cannot reach the Workflow SDK) and
+ * does not need to be: its next `fireSchedule` step finds no row and the run returns.
+ */
 export const remove = mutation({
   args: { id: v.id("workflows") },
   returns: v.null(),
@@ -185,6 +214,7 @@ export const remove = mutation({
     const { orgId } = await requireOrg(ctx);
     await workflowInOrg(ctx, id, orgId);
 
+    await ctx.runMutation(internal.schedules.removeForWorkflow, { workflowId: id });
     await ctx.db.delete(id);
     return null;
   },

@@ -33,3 +33,18 @@ export function featuresForPlan(slug: string): readonly string[] {
 export function limitsForPlan(slug: string) {
   return isPlanSlug(slug) ? PLAN_LIMITS[slug] : PLAN_LIMITS[DEFAULT_PLAN];
 }
+
+/**
+ * The plan a Clerk session token is carrying. `pla` is "<scope>:<slug>" (e.g. "o:pro"); anything
+ * missing or unrecognised is the default plan.
+ *
+ * Server actions and route handlers read it from `auth()`'s `sessionClaims`; Convex reads the same
+ * claim in `convex/lib/auth.ts#requireOrg`. Callers with no session at all (the engine, an inbound
+ * webhook) ask Clerk instead — `lib/billing.ts#getOrgPlan`.
+ */
+export function planFromClaim(pla: unknown): PlanSlug {
+  if (typeof pla !== "string") return DEFAULT_PLAN;
+
+  const slug = pla.replace(/^o:/, "");
+  return isPlanSlug(slug) ? slug : DEFAULT_PLAN;
+}

@@ -34,6 +34,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { describeCron } from "@/lib/schedule";
 import {
   Table,
   TableBody,
@@ -131,12 +132,20 @@ export function WorkflowList() {
                   </Link>
                 </TableCell>
                 <TableCell>
-                  <Badge
-                    variant={STATUS_VARIANT[workflow.status]}
-                    className="capitalize"
-                  >
-                    {workflow.status}
-                  </Badge>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <Badge
+                      variant={STATUS_VARIANT[workflow.status]}
+                      className="capitalize"
+                    >
+                      {workflow.status}
+                    </Badge>
+                    {/* Only enabled schedules appear: a paused one is not something to claim. */}
+                    {workflow.schedule ? (
+                      <Badge variant="secondary">
+                        Scheduled · {describeCron(workflow.schedule.cron)}
+                      </Badge>
+                    ) : null}
+                  </div>
                 </TableCell>
                 <TableCell className="text-muted-foreground tabular-nums">
                   v{workflow.version}

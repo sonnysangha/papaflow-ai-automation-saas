@@ -1,5 +1,8 @@
 import { emailSend } from "./actions/email-send";
 import { httpRequest } from "./actions/http-request";
+import { classifyNode } from "./ai/classify";
+import { extractNode } from "./ai/extract";
+import { llmNode } from "./ai/llm";
 import { categoryOrder } from "./categories";
 import type { AnyNodeDef, NodeCategory } from "./define";
 import { conditionNode } from "./logic/condition";
@@ -14,6 +17,9 @@ const DEFINITIONS: readonly AnyNodeDef[] = [
   conditionNode,
   switchNode,
   setNode,
+  llmNode,
+  extractNode,
+  classifyNode,
   httpRequest,
   emailSend,
 ];

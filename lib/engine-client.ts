@@ -278,7 +278,7 @@ export async function startRun(input: {
 
   const run = await start(
     runGraph,
-    [{ executionId, orgId: input.orgId, graph, trigger: input.trigger }],
+    [{ executionId, orgId: input.orgId, planSlug: input.planSlug, graph, trigger: input.trigger }],
     // Plaintext run metadata, filterable in the run inspector and the Vercel dashboard. Ids only.
     { attributes: { executionId, orgId: input.orgId } },
   );

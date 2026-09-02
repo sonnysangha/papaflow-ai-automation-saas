@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { Doc, Id } from "@/convex/_generated/dataModel";
 import { getStep, markStep } from "@/lib/engine-client";
 import { REDACTED } from "@/lib/redact";
+import { openFresh } from "@/lib/vault";
 import { ConnectorError, type AnyNodeDef, type RunContext } from "@/nodes/define";
 import { runNode } from "@/workflows/steps/run-node";
 import type { NodeInput } from "@/workflows/types";
@@ -52,12 +53,28 @@ vi.mock("@/lib/engine-client", () => ({
   markStep: vi.fn(async () => {}),
 }));
 
+/** The vault is the other side of a Convex deployment, and it is what holds the plaintext. */
+vi.mock("@/lib/vault", () => ({ openFresh: vi.fn() }));
+
 /** The registry the step reads. Hoisted so the `vi.mock` factory can close over it. */
 const { nodes } = vi.hoisted(() => ({ nodes: {} as Record<string, AnyNodeDef> }));
 vi.mock("@/nodes/registry", () => ({ NODES: nodes }));
 
 const getStepMock = vi.mocked(getStep);
 const markStepMock = vi.mocked(markStep);
+const openFreshMock = vi.mocked(openFresh);
+
+/** What a sealed AI connection looks like once the step has opened it. */
+function opened(overrides: Partial<Awaited<ReturnType<typeof openFresh>>> = {}) {
+  return {
+    orgId: "org_1",
+    provider: "openai",
+    kind: "apiKey",
+    secret: { apiKey: "sk-live-xyz" },
+    status: "active" as const,
+    ...overrides,
+  };
+}
 
 type TestInputs = { url: string; apiKey?: string };
 
@@ -90,6 +107,7 @@ function nodeInput(
     nodeType: "test.node",
     executionId: "exec_1",
     orgId: "org_1",
+    planSlug: "free_org",
     node: {
       id: "n1",
       type: "papaflow",
@@ -120,6 +138,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   getStepMock.mockResolvedValue(null);
   markStepMock.mockResolvedValue(undefined);
+  openFreshMock.mockResolvedValue(opened());
   run.mockImplementation(async (ctx) => ({ ok: ctx.inputs.url.length > 0 }));
   for (const key of Object.keys(nodes)) delete nodes[key];
   installNode();
@@ -268,6 +287,132 @@ describe("runNode", () => {
 
     expect(run).toHaveBeenCalledTimes(1);
     expect(markStepMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+/**
+ * The credential half of the step (CLAUDE.md rules 1 and 3): a node that declares a `credential`
+ * has its connection opened here, inside the step, and the plan snapshotted on the execution is the
+ * last word on whether the node — or the connection — may run at all.
+ */
+describe("runNode credentials and plan gating", () => {
+  /** A node that needs an AI connection: `connectionId` is an input like any other. */
+  function installCredentialNode(overrides: Partial<AnyNodeDef> = {}): void {
+    installNode({
+      credential: "ai",
+      inputs: z.object({ connectionId: z.string() }),
+      ...overrides,
+    });
+  }
+
+  const withConnection = { connectionId: "conn_1" };
+
+  it("does not open a connection for a node that declares no credential", async () => {
+    await runNode(nodeInput({ url: "https://api.example.com/things" }));
+
+    expect(openFreshMock).not.toHaveBeenCalled();
+    expect(run.mock.calls[0][0].credential).toBeUndefined();
+  });
+
+  it("opens the connection and hands the node its provider, kind and secret", async () => {
+    installCredentialNode();
+    run.mockImplementation(async () => ({ ok: true }));
+
+    await runNode(nodeInput(withConnection));
+
+    expect(openFreshMock).toHaveBeenCalledWith("conn_1");
+    expect(run.mock.calls[0][0].credential).toEqual({
+      provider: "openai",
+      kind: "apiKey",
+      apiKey: "sk-live-xyz",
+    });
+  });
+
+  it("never lets the opened secret reach the step row or the run log", async () => {
+    installCredentialNode();
+    run.mockImplementation(async () => ({ ok: true }));
+
+    await runNode(nodeInput(withConnection));
+
+    const success = markStepMock.mock.calls[1][0];
+    expect(success).toMatchObject({ status: "success", input: { connectionId: "conn_1" } });
+    expect(success.input).not.toHaveProperty("apiKey");
+    expect(JSON.stringify(markStepMock.mock.calls)).not.toContain("sk-live-xyz");
+  });
+
+  it("refuses a connection that belongs to another org", async () => {
+    installCredentialNode();
+    openFreshMock.mockResolvedValue(opened({ orgId: "org_other" }));
+
+    const error = await runNode(nodeInput(withConnection)).catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(FatalError);
+    expect((error as Error).message).toBe("connection not found");
+    expect(run).not.toHaveBeenCalled();
+    expect(markStepMock.mock.calls[1][0]).toMatchObject({
+      status: "failed",
+      error: "connection not found",
+    });
+  });
+
+  it("fails a node that needs a connection before one has been chosen", async () => {
+    installCredentialNode({ inputs: z.object({ connectionId: z.string().optional() }) });
+
+    const error = await runNode(nodeInput({})).catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(FatalError);
+    expect(openFreshMock).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("refuses a node whose requiresFeature the execution's plan does not cover", async () => {
+    installCredentialNode({ requiresFeature: "pro_connectors" });
+
+    const error = await runNode(nodeInput(withConnection)).catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(FatalError);
+    expect((error as Error).message).toBe("Upgrade required: pro_connectors");
+    // The gate runs before the vault: a plan that cannot use the node never opens its secret.
+    expect(openFreshMock).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
+    expect(markStepMock.mock.calls[1][0]).toMatchObject({
+      status: "failed",
+      error: "Upgrade required: pro_connectors",
+    });
+  });
+
+  it("runs that same node once the plan covers the feature", async () => {
+    installCredentialNode({ requiresFeature: "pro_connectors" });
+    run.mockImplementation(async () => ({ ok: true }));
+
+    const result = await runNode(nodeInput(withConnection, { planSlug: "pro" }));
+
+    expect(result.output).toEqual({ ok: true });
+    expect(markStepMock.mock.calls[1][0]).toMatchObject({ status: "success" });
+  });
+
+  it("refuses a connection whose requiresFeature the plan does not cover", async () => {
+    installCredentialNode();
+    openFreshMock.mockResolvedValue({
+      ...opened(),
+      requiresFeature: "pro_connectors",
+    } as Awaited<ReturnType<typeof openFresh>>);
+
+    const error = await runNode(nodeInput(withConnection)).catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(FatalError);
+    expect((error as Error).message).toBe("Upgrade required: pro_connectors");
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("does not re-open a connection for a node that already succeeded", async () => {
+    installCredentialNode();
+    getStepMock.mockResolvedValue(storedStep({ status: "success", output: { ok: true } }));
+
+    await runNode(nodeInput(withConnection));
+
+    expect(openFreshMock).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
   });
 });
 

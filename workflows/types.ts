@@ -9,10 +9,13 @@ export type RunNode = { id: string; type: string; data: { nodeType: string; key:
 export type RunEdge = { id: string; source: string; target: string; sourceHandle?: string | null; targetHandle?: string | null };
 export type RunGraph = { triggerId: string; nodes: Record<string, RunNode>; edges: RunEdge[] };
 export type Trigger = { type: string; payload: unknown };
-export type RunInput = { executionId: string; orgId: string; graph: RunGraph; trigger: Trigger };
+// `planSlug` is the plan snapshotted on the execution at run start: `runNode` gates a node's
+// (and its connection's) `requiresFeature` against it, so a mid-run downgrade cannot change what a
+// run in flight is allowed to do.
+export type RunInput = { executionId: string; orgId: string; planSlug: string; graph: RunGraph; trigger: Trigger };
 // `outputs` is keyed by node key, and `trigger`/`item` are the two reserved template roots: the
 // step resolves `node.data.inputs` against `{ ...outputs, trigger: trigger.payload, $item: item }`.
-export type NodeInput = { nodeId: string; nodeType: string; executionId: string; orgId: string; node: RunNode; outputs: Record<string, unknown>; trigger: Trigger; item?: unknown };
+export type NodeInput = { nodeId: string; nodeType: string; executionId: string; orgId: string; planSlug: string; node: RunNode; outputs: Record<string, unknown>; trigger: Trigger; item?: unknown };
 export type Control = { kind: "sleep"; ms: number } | { kind: "hook" } | undefined;
 export type NodeResult = { nodeId: string; output: unknown; handle: string | null; control: Control };
 export type HookPayload = Record<string, unknown>;

@@ -17,7 +17,7 @@ import type { HookPayload, RunInput } from "@/workflows/types";
  * The name and the path are permanent — they are the workflow's id
  * (`workflow//./workflows/run-graph//runGraph`).
  */
-export async function runGraph({ executionId, orgId, graph, trigger }: RunInput) {
+export async function runGraph({ executionId, orgId, planSlug, graph, trigger }: RunInput) {
   "use workflow";
 
   // The trigger's payload is its output: `startRun` already wrote its `success` step row.
@@ -42,6 +42,7 @@ export async function runGraph({ executionId, orgId, graph, trigger }: RunInput)
             nodeType: graph.nodes[nodeId].data.nodeType,
             executionId,
             orgId,
+            planSlug,
             node: graph.nodes[nodeId],
             outputs,
             trigger,

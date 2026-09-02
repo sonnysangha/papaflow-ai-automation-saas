@@ -2,7 +2,9 @@ import { FatalError, getStepMetadata, RetryableError } from "workflow";
 import { ZodError } from "zod";
 
 import { getStep, markStep } from "@/lib/engine-client";
+import { featuresForPlan } from "@/lib/plans";
 import { redact } from "@/lib/redact";
+import { openFresh } from "@/lib/vault";
 import { ConnectorError } from "@/nodes/define";
 import { NODES } from "@/nodes/registry";
 import { resolveTemplates } from "@/nodes/templates";
@@ -24,7 +26,7 @@ import type { NodeInput, NodeResult } from "@/workflows/types";
 export async function runNode(input: NodeInput): Promise<NodeResult> {
   "use step";
 
-  const { nodeId, nodeType, executionId, orgId, node, outputs, trigger, item } = input;
+  const { nodeId, nodeType, executionId, orgId, planSlug, node, outputs, trigger, item } = input;
   // Only available inside a real step invocation; `attempt` counts from 1 and rises with retries.
   const { attempt } = getStepMetadata();
 
@@ -62,10 +64,20 @@ export async function runNode(input: NodeInput): Promise<NodeResult> {
       });
       inputs = def.inputs.parse(value);
 
+      // Layer three of the plan gate (CLAUDE.md rule 3): the sidebar dims what the org cannot use
+      // and `/api/connections` refuses to create it, but this is the one that actually stops a run —
+      // against the plan snapshotted on the execution, not the org's plan right now.
+      const features = featuresForPlan(planSlug);
+      assertFeature(features, def.requiresFeature);
+
+      // The secret appears here and goes no further: it is passed to `run` and never stored,
+      // returned or logged (CLAUDE.md rule 1). `inputs` only ever carries the `connectionId`.
+      const credential = def.credential
+        ? await openCredential(inputs, orgId, features)
+        : undefined;
+
       const output: unknown = def.outputs.parse(
-        // `credential` stays undefined until Phase 4 opens the sealed connection here, inside the
-        // step, so the plaintext never crosses a step boundary (CLAUDE.md rule 1).
-        await def.run({ inputs, credential: undefined, orgId, executionId, nodeId }),
+        await def.run({ inputs, credential, orgId, executionId, nodeId }),
       );
 
       const handle = def.handle?.(output) ?? null;
@@ -105,6 +117,51 @@ export async function runNode(input: NodeInput): Promise<NodeResult> {
     }
   } finally {
     console.log("runNode:end", { executionId, nodeId, nodeType, attempt });
+  }
+}
+
+/**
+ * Opens the connection a node asked for, inside the step that is about to use it.
+ *
+ * Three things have to be true before a secret is handed to a connector: the row exists (the vault
+ * throws otherwise), it belongs to the org whose run this is — an id from another org's graph must
+ * look exactly like an id that was never there — and the plan covers whatever feature the connection
+ * itself demands. The returned object is what `RunContext.credential` is: the provider slug and kind
+ * alongside the opened secret's fields, so a node knows which vendor its key belongs to.
+ */
+async function openCredential(
+  inputs: unknown,
+  orgId: string,
+  features: readonly string[],
+): Promise<Record<string, unknown>> {
+  const connectionId = (inputs as { connectionId?: unknown }).connectionId;
+  if (typeof connectionId !== "string" || !connectionId) {
+    throw new FatalError("This node needs a connection: choose one in its configuration.");
+  }
+
+  const row = await openFresh(connectionId);
+  // Not "wrong org": a connection this run may not read is a connection that does not exist.
+  if (row.orgId !== orgId) throw new FatalError("connection not found");
+
+  assertFeature(features, connectionFeature(row));
+
+  return { provider: row.provider, kind: row.kind, ...row.secret };
+}
+
+/**
+ * A connector can demand a plan feature of its own (`pro_connectors` and friends). The vault does
+ * not project the column yet, so it is read defensively rather than assumed absent — the day
+ * `openFresh` starts returning it, the gate below starts enforcing it.
+ */
+function connectionFeature(row: object): string | null {
+  const feature = (row as { requiresFeature?: unknown }).requiresFeature;
+  return typeof feature === "string" ? feature : null;
+}
+
+/** The message the runs drawer shows, and the one the upgrade prompt is keyed off. */
+function assertFeature(features: readonly string[], feature: string | null): void {
+  if (feature && !features.includes(feature)) {
+    throw new FatalError(`Upgrade required: ${feature}`);
   }
 }
 

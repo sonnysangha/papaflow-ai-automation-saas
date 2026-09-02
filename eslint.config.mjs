@@ -9,6 +9,10 @@ const eslintConfig = defineConfig([
   globalIgnores([
     "convex/_generated/**",
     "app/.well-known/**",
+    // eve's build output: `next dev` writes a compiled agent bundle under the repo root and under
+    // each agent root, and linting a 70k-line generated bundle is 7000 warnings about eve's own
+    // code. Both paths are in `.gitignore` for the same reason.
+    "**/.eve/**",
     // Default ignores of eslint-config-next:
     ".next/**",
     "out/**",

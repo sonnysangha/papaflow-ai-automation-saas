@@ -4,6 +4,7 @@ import { limitsForPlan } from "../lib/plans";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internalQuery, mutation, query } from "./_generated/server";
+import { orgConnection } from "./connections";
 import {
   connectionCreateArgs,
   connectionKindValidator,
@@ -294,6 +295,9 @@ export const finishExecution = mutation({
  * halves, and the projected queries a browser may call.
  * ---------------------------------------------------------------------------------------------- */
 
+/** One connection as the eve Runtime agent sees it: identity and status, never a credential. */
+type OrgConnection = typeof orgConnection.type;
+
 /** The sealed row a step gets back, or null when the connection has been deleted. */
 type ConnectionSealed = {
   orgId: string;
@@ -376,6 +380,24 @@ export const getConnectionSealed = query({
       meta: row.meta ?? {},
       requiresFeature: row.requiresFeature,
     };
+  },
+});
+
+/**
+ * The org's connections, without a Clerk session — what the eve Runtime agent builds its per-session
+ * tool list from (`agents/runtime/tools/connectors.ts` → `lib/connections-engine.ts`).
+ *
+ * Deliberately not `api.connections.list`: that one authenticates with a Clerk token the agent does
+ * not have, and it projects `meta` and `hint`, neither of which a tool descriptor should carry. This
+ * returns identity and status only; the secret still leaves exclusively through
+ * `getConnectionSealed`.
+ */
+export const listOrgConnections = query({
+  args: { secret: v.string(), orgId: v.string() },
+  returns: v.array(orgConnection),
+  handler: async (ctx, { secret, orgId }): Promise<OrgConnection[]> => {
+    guard(secret);
+    return await ctx.runQuery(internal.connections.listForOrg, { orgId });
   },
 });
 

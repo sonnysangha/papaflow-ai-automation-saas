@@ -41,8 +41,18 @@ yarn-error.log*
 next-env.d.ts
 
 .workflow-data/
+# eve build artifacts. `.eve/` is written at the repo root (the generated Vercel service) and inside
+# each agent root (the dev host and compiled bundles); `.output/` is what a standalone `eve build`
+# emits. `eve dev` also auto-installs the local sandbox backend into the agent root, writing a
+# `package.json` and a `node_modules/` there — generated, not authored.
 .eve/
+.output/
+agents/*/node_modules/
+agents/*/package.json
 .env*.local
 .clerk/
 .claude/
 /.swc
+
+# keep the template
+!.env.example

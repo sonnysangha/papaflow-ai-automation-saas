@@ -182,6 +182,7 @@ export const mark = internalMutation({
         handle: args.handle,
         hookToken: args.hookToken,
         iteration: args.iteration,
+        parentStepId: args.parentStepId,
         startedAt: now,
         finishedAt,
       });
@@ -197,6 +198,7 @@ export const mark = internalMutation({
     if (args.warnings !== undefined) patch.warnings = args.warnings;
     if (args.handle !== undefined) patch.handle = args.handle;
     if (args.hookToken !== undefined) patch.hookToken = args.hookToken;
+    if (args.parentStepId !== undefined) patch.parentStepId = args.parentStepId;
 
     await ctx.db.patch(existing._id, patch);
     return existing._id;

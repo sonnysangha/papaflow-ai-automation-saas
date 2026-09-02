@@ -8,6 +8,7 @@ import { notionCreatePageNode } from "./actions/notion-create-page";
 import { slackPostNode } from "./actions/slack-post";
 import { teamsPostCardNode } from "./actions/teams-post-card";
 import { telegramSendNode } from "./actions/telegram-send";
+import { agentNode } from "./ai/agent";
 import { classifyNode } from "./ai/classify";
 import { extractNode } from "./ai/extract";
 import { llmNode } from "./ai/llm";
@@ -46,6 +47,7 @@ const DEFINITIONS: readonly AnyNodeDef[] = [
   llmNode,
   extractNode,
   classifyNode,
+  agentNode,
   slackPostNode,
   discordPostNode,
   telegramSendNode,

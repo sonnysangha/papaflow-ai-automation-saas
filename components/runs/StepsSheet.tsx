@@ -60,10 +60,46 @@ function StepStatusBadge({ status }: { status: Step["status"] }) {
   );
 }
 
+/** A tool call the Agent node made, written by `runNode` as `agent.tool:<name>`. */
+const TOOL_PREFIX = "agent.tool:";
+
 /** The step's node type as a person reads it; skipped rows are recorded without one. */
 function stepLabel(step: Step): string {
   if (step.nodeType.length === 0) return "Not reached";
+  // A child row has no registry entry to name it: the tool's own name is the whole label.
+  if (step.nodeType.startsWith(TOOL_PREFIX)) return step.nodeType.slice(TOOL_PREFIX.length);
   return NODES[step.nodeType]?.name ?? step.nodeType;
+}
+
+/** One node's row plus whatever it spawned — the Agent node's tool calls, in the order they ran. */
+export type StepTree = { step: Step; substeps: Step[] };
+
+/**
+ * Groups the flat `steps` list into parents and their children.
+ *
+ * A child carries `parentStepId`; everything else is a top-level row. Order is preserved on both
+ * levels (the query returns oldest first), and a child whose parent is missing from this page is
+ * promoted rather than dropped — a row nobody can see is worse than one at the wrong indent.
+ */
+export function nestSteps(steps: readonly Step[]): StepTree[] {
+  const trees: StepTree[] = [];
+  const byId = new Map<string, StepTree>();
+
+  for (const step of steps) {
+    if (step.parentStepId) continue;
+    const tree = { step, substeps: [] as Step[] };
+    byId.set(step._id, tree);
+    trees.push(tree);
+  }
+
+  for (const step of steps) {
+    if (!step.parentStepId) continue;
+    const parent = byId.get(step.parentStepId);
+    if (parent) parent.substeps.push(step);
+    else trees.push({ step, substeps: [] });
+  }
+
+  return trees;
 }
 
 /**
@@ -137,15 +173,25 @@ function StepDetail({ step }: { step: Step }) {
   );
 }
 
-function StepRows({ step, passes }: { step: Step; passes: number }) {
+function StepRows({
+  step,
+  passes,
+  substeps = [],
+}: {
+  step: Step;
+  passes: number;
+  /** The tool calls this step spawned. Rendered underneath it, indented, and never nested twice. */
+  substeps?: Step[];
+}) {
   const [open, setOpen] = useState(false);
   const detailId = `step-detail-${step._id}`;
   const pass = passLabel(step, passes);
+  const child = step.parentStepId !== undefined;
 
   return (
     <>
       <TableRow>
-        <TableCell className="w-8 pl-4">
+        <TableCell className={child ? "w-8 pl-10" : "w-8 pl-4"}>
           <Button
             variant="ghost"
             size="icon-xs"
@@ -160,15 +206,17 @@ function StepRows({ step, passes }: { step: Step; passes: number }) {
           </Button>
         </TableCell>
         <TableCell>
-          <span className="font-medium">{stepLabel(step)}</span>
+          <span className={child ? "text-muted-foreground" : "font-medium"}>{stepLabel(step)}</span>
           {pass ? (
             <span className="ml-2 text-xs text-muted-foreground tabular-nums" title="Loop pass">
               · {pass}
             </span>
           ) : null}
-          <span className="ml-2 font-mono text-xs text-muted-foreground" title={step.nodeId}>
-            {step.nodeId.slice(0, 8)}
-          </span>
+          {child ? null : (
+            <span className="ml-2 font-mono text-xs text-muted-foreground" title={step.nodeId}>
+              {step.nodeId.slice(0, 8)}
+            </span>
+          )}
         </TableCell>
         <TableCell>
           <StepStatusBadge status={step.status} />
@@ -190,6 +238,9 @@ function StepRows({ step, passes }: { step: Step; passes: number }) {
           </TableCell>
         </TableRow>
       ) : null}
+      {substeps.map((substep) => (
+        <StepRows key={substep._id} step={substep} passes={0} />
+      ))}
     </>
   );
 }
@@ -217,6 +268,8 @@ export function StepsSheet({
   const steps = useQuery(api.steps.byExecution, { executionId });
   // One pass count per node, computed once for the whole table rather than per row.
   const passes = useMemo(() => passCounts(steps ?? []), [steps]);
+  // Tool calls hang under the node that made them rather than sitting between unrelated nodes.
+  const trees = useMemo(() => nestSteps(steps ?? []), [steps]);
 
   return (
     <Sheet
@@ -260,8 +313,13 @@ export function StepsSheet({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {steps.map((step) => (
-                  <StepRows key={step._id} step={step} passes={passes[step.nodeId] ?? 0} />
+                {trees.map((tree) => (
+                  <StepRows
+                    key={tree.step._id}
+                    step={tree.step}
+                    passes={passes[tree.step.nodeId] ?? 0}
+                    substeps={tree.substeps}
+                  />
                 ))}
               </TableBody>
             </Table>

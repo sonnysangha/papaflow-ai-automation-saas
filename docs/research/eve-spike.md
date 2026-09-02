@@ -613,3 +613,80 @@ what `MessageResult.inputRequests` and the raw `input.requested` event carry —
 > `ctx.session.auth.current.attributes` (`principalType: "service"`). A separate Clerk `AuthFn` in the
 > same walk handles browser callers as `principalType: "user"`. No Clerk token is minted server-side,
 > and a user's session token never leaves the browser.
+
+---
+
+## Phase 10 implementation addendum (2026-09-03, measured in the repo)
+
+Four things the spike could not see, found while landing the Runtime agent. All executed against
+`eve@0.49.0` in `/Users/sonnysangha/Documents/Builds/n8n-clone-demo`.
+
+### 1. Under `pnpm dev`, an unauthenticated session is **202**, not 401
+
+`next dev` starts `eve dev`, which sets `EVE_DEV=1`, which makes `localDev()` the entry that wins the
+auth walk. So the fail-closed behaviour in §3 is a *production* property and cannot be observed on a
+dev server. Measured both ways on the finished agent:
+
+| server | request | result |
+|---|---|---|
+| `next dev` (port 3000) | `GET /eve/agents/runtime/eve/v1/health` | `200 {"ok":true,"status":"ready",…}` |
+| `next dev` | `POST …/eve/v1/session`, no auth | `202` (via `localDev()`) |
+| `next dev` | `POST …/eve/v1/session`, `mintEngineToken()` bearer | `202` |
+| `eve start`, `EVE_DEV` unset (port 3997) | `GET /eve/v1/health` | `200` |
+| `eve start` | `POST /eve/v1/session`, no auth | `401`, `www-authenticate: Bearer` |
+| `eve start` | `POST /eve/v1/session`, junk bearer | `401` |
+| `eve start` | `POST /eve/v1/session`, `mintEngineToken()` bearer | `202` |
+
+The last row is the one that matters: a token signed by `lib/eve.ts#mintEngineToken` is accepted by
+`jwtHmac()` in a real deployment, and `tests/eve-token.test.ts` pins the same round trip by running
+eve's own `jwtHmac()` over a fabricated `Request`.
+
+### 2. A channel module is evaluated at **build** time
+
+`eve build` evaluates `channels/eve.ts`, so reading a runtime secret at module scope turns a missing
+build-time variable into a failed build:
+
+```
+Failed to evaluate authored module:
+  agents/runtime/channels/eve.ts
+  Caused by: runtime agent: ENGINE_SECRET is required to verify the engine's own token.
+```
+
+`jwtHmac({ secret })` therefore has to be constructed **inside** the `AuthFn`, per request, not once
+at module load. Same rule applies to any authored module eve compiles.
+
+### 3. A `skills/` directory makes the agent prewarm a sandbox at boot
+
+Isolated by bisection: with `agents/runtime/skills/` present, `eve start` dies before listening —
+
+```
+eve: failed to initialize sandbox template "root" on backend "microsandbox":
+  The microsandbox sandbox backend requires the `microsandbox` package, which is not bundled with eve.
+```
+
+— and with the directory moved away it starts and serves normally. Static markdown skills do not
+*need* a sandbox (`load_skill` returns their body from the compiled agent), but the build still
+registers a template for them and `eve start` prewarms it eagerly.
+
+Consequences:
+- **Local `eve dev` / `pnpm dev`: fine.** eve dev auto-installs microsandbox into the agent root
+  (writing `agents/runtime/{package.json,node_modules/}` — both now `.gitignore`d as generated).
+- **Local standalone `eve start`: needs microsandbox or Docker**, or the skills directory moved.
+- **Vercel: works, but pays for it.** `defaultBackend()` picks Vercel Sandbox when `process.env.VERCEL`
+  is set, so the Runtime service will prewarm a hosted sandbox for an agent whose `bash`,
+  `read_file`, `write_file` tools are all disabled and whose tools never call `getSandbox()`.
+  Not changed here (it is the default eve behaviour the spike validated); worth revisiting with
+  `defineSandbox({ backend: justbash() })` if the prewarm shows up in cost or cold starts.
+
+### 4. `@/…` imports from an authored module resolve against the root tsconfig
+
+`agents/runtime/**` imports `@/lib/...` and `@/nodes/...` and compiles. The boundary plugin treats a
+`@/`-prefixed specifier as a path import, not a package import
+(`internal/authored-package-boundary.js`, `isPackageImport`), and
+`internal/authored-package-tsconfig-paths.js` says outright: *"Rolldown handles the root app
+tsconfig; this only fills the package-local config gap for sources outside the app root."*
+
+The constraint this creates is on the **import graph**, not the syntax: whatever an authored module
+reaches gets compiled into the agent bundle. `lib/engine-client.ts` imports `workflows/run-graph.ts`,
+so the Runtime agent reaches Convex through `lib/connections-engine.ts` instead — the same
+`ENGINE_SECRET` conversation with no `"use workflow"` module anywhere in its graph.

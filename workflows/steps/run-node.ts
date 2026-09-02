@@ -1,6 +1,7 @@
 import { FatalError, getStepMetadata, RetryableError } from "workflow";
 import { ZodError } from "zod";
 
+import type { Id } from "@/convex/_generated/dataModel";
 import { getStep, markStep } from "@/lib/engine-client";
 import { featuresForPlan } from "@/lib/plans";
 import { redact } from "@/lib/redact";
@@ -102,7 +103,16 @@ export async function runNode(input: NodeInput): Promise<NodeResult> {
       const hookToken = hookTokenFor(executionId, nodeId, iteration);
 
       const output: unknown = def.outputs.parse(
-        await def.run({ inputs, credential, orgId, executionId, nodeId, hookToken, stepId }),
+        await def.run({
+          inputs,
+          credential,
+          orgId,
+          executionId,
+          nodeId,
+          planSlug,
+          hookToken,
+          stepId,
+        }),
       );
 
       const handle = def.handle?.(output) ?? null;
@@ -134,6 +144,11 @@ export async function runNode(input: NodeInput): Promise<NodeResult> {
         warnings,
         iteration,
       });
+
+      // A node whose output describes sub-steps (the Agent node's tool calls) gets one child row
+      // each, hanging off the row this step just wrote. After the parent mark on purpose: a child
+      // pointing at a `parentStepId` that does not exist yet would be an orphan in the drawer.
+      await recordChildren(def, output, { executionId, orgId, nodeId, stepId, attempt });
 
       // A Loop hands back the list it is iterating: the orchestrator needs the items themselves,
       // and this is the one place they exist without being copied into a step argument.
@@ -178,6 +193,49 @@ function expansion(
 
   const { value } = resolveTemplates(raw, context);
   return { items: def.expand(def.inputs.parse(value)) };
+}
+
+/**
+ * Writes one `steps` row per sub-step a node's output describes — today, one per tool call the
+ * Agent node's agent made.
+ *
+ * The rows are addressed `${nodeId}#${index}` so each has its own identity in
+ * `by_execution_node` (a `#` cannot appear in a graph node id, so they can never collide with a real
+ * node), and `parentStepId` is what the runs drawer nests them under. `nodeType` carries the tool's
+ * name behind an `agent.tool:` prefix: there is no registry entry to look a label up in, and the
+ * name is the only interesting thing about the row.
+ *
+ * Idempotent by construction: `children` is a pure function of the output, `markStep` upserts by
+ * that address, and a step replaying from its own successful row returns before it gets here.
+ */
+async function recordChildren(
+  def: AnyNodeDef,
+  output: unknown,
+  context: {
+    executionId: string;
+    orgId: string;
+    nodeId: string;
+    stepId: Id<"steps">;
+    attempt: number;
+  },
+): Promise<void> {
+  const children = def.children?.(output);
+  if (!children || children.length === 0) return;
+
+  for (const [index, child] of children.entries()) {
+    await markStep({
+      executionId: context.executionId,
+      orgId: context.orgId,
+      nodeId: `${context.nodeId}#${index}`,
+      nodeType: `agent.tool:${child.name}`,
+      status: child.error ? "failed" : "success",
+      attempt: context.attempt,
+      input: redact(child.input),
+      output: child.output,
+      error: child.error,
+      parentStepId: context.stepId,
+    });
+  }
 }
 
 /**

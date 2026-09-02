@@ -20,3 +20,4 @@ minimumReleaseAgeExclude:
   - '@ai-sdk/provider@4.0.10'
   - '@ai-sdk/xai@4.0.53'
   - ai@7.0.90
+  - eve@0.49.0

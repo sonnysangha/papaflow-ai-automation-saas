@@ -14,6 +14,12 @@ const PRO_NODES = [
   "slack.postMessage",
 ];
 
+/** Every node gated on a plan feature, and which one. Phase 10 added the Agent node's `ai_agent`. */
+const GATED_NODES: Record<string, string> = {
+  ...Object.fromEntries(PRO_NODES.map((type) => [type, "pro_connectors"])),
+  "ai.agent": "ai_agent",
+};
+
 describe("node registry", () => {
   it("keys every definition by its own unique, well-formed type", () => {
     const entries = Object.entries(NODES);
@@ -42,8 +48,9 @@ describe("node registry", () => {
 
   it("builds a catalogue for a plan's features", () => {
     const catalogue = nodeCatalogue(["core_connectors"]);
-    expect(catalogue).toHaveLength(26);
+    expect(catalogue).toHaveLength(27);
     expect(catalogue.map((entry) => entry.type).sort()).toEqual([
+      "ai.agent",
       "ai.classify",
       "ai.extract",
       "ai.llm",
@@ -73,8 +80,9 @@ describe("node registry", () => {
     ]);
 
     for (const entry of catalogue) {
-      // `core_connectors` is what `free_org` carries, so the Pro four are listed but not allowed.
-      expect(entry.allowed).toBe(!PRO_NODES.includes(entry.type));
+      // `core_connectors` is what `free_org` carries, so the Pro four and the Agent node are
+      // listed but not allowed.
+      expect(entry.allowed).toBe(!(entry.type in GATED_NODES));
       expect(entry.version).toBe("v1");
       expect(entry.inputsSchema.type).toBe("object");
       expect(entry.outputsSchema.type).toBe("object");
@@ -117,6 +125,7 @@ describe("node registry", () => {
       "ai",
       "ai",
       "ai",
+      "ai",
       "chat",
       "chat",
       "chat",
@@ -130,25 +139,31 @@ describe("node registry", () => {
     ]);
   });
 
-  it("dims exactly the Pro nodes for an org with no paid features", () => {
+  it("dims exactly the gated nodes for an org with no paid features", () => {
     const catalogue = nodeCatalogue([]);
-    expect(catalogue).toHaveLength(26);
+    expect(catalogue).toHaveLength(27);
 
     const blocked = catalogue.filter((entry) => !entry.allowed).map((entry) => entry.type);
-    expect(blocked.sort()).toEqual(PRO_NODES);
+    expect(blocked.sort()).toEqual(Object.keys(GATED_NODES).sort());
 
     for (const entry of catalogue) {
-      expect(entry.requiresFeature).toBe(
-        PRO_NODES.includes(entry.type) ? "pro_connectors" : null,
-      );
-      expect(entry.allowed).toBe(!PRO_NODES.includes(entry.type));
+      expect(entry.requiresFeature).toBe(GATED_NODES[entry.type] ?? null);
+      expect(entry.allowed).toBe(!(entry.type in GATED_NODES));
     }
   });
 
   it("allows every node on Pro", () => {
     const catalogue = nodeCatalogue(featuresForPlan("pro"));
-    expect(catalogue).toHaveLength(26);
+    expect(catalogue).toHaveLength(27);
     for (const entry of catalogue) expect(entry.allowed).toBe(true);
+  });
+
+  it("gates the Agent node on `ai_agent`, the feature Pro and Team carry", () => {
+    // The node is useless without the eve Runtime agent, which is a paid surface: `runNode` refuses
+    // it for a free org (CLAUDE.md rule 3), so the sidebar must dim it rather than offer it.
+    expect(NODES["ai.agent"].requiresFeature).toBe("ai_agent");
+    expect(featuresForPlan("free_org")).not.toContain("ai_agent");
+    expect(featuresForPlan("pro")).toContain("ai_agent");
   });
 
   it("keeps each Pro node's feature in step with the connector it needs", () => {

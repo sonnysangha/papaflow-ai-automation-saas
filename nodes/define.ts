@@ -9,6 +9,20 @@ export type NodeCategory = "trigger" | "logic" | "ai" | "chat" | "data" | "actio
 /** Returned by `control` so the engine can suspend the run: Wait → sleep, Approval → hook. */
 export type Control = { kind: "sleep"; ms: number } | { kind: "hook" } | undefined;
 
+/**
+ * A sub-row a node's output implies: one tool call the Agent node's agent made, and nothing else so
+ * far. `runNode` writes each of these as a `steps` row whose `parentStepId` is the node's own, so
+ * the runs drawer can nest what happened inside a single step.
+ */
+export type ChildStep = {
+  /** What the row is called in the drawer — the tool's name. */
+  name: string;
+  input?: unknown;
+  output?: unknown;
+  /** Set when the call failed; the row is recorded `failed` rather than `success`. */
+  error?: string;
+};
+
 export interface RunContext<I> {
   inputs: I;
   /** Decrypted connection secret, opened inside the step. Never logged, never returned. */
@@ -16,6 +30,12 @@ export interface RunContext<I> {
   orgId: string;
   executionId: string;
   nodeId: string;
+  /**
+   * The org's plan as it was when the run started, snapshotted on the execution. Optional because
+   * only the Agent node needs it — it hands the plan to the eve agent so the agent's tool list is
+   * gated the same way `runNode` gates the node itself (CLAUDE.md rule 3).
+   */
+  planSlug?: string;
   hookToken?: string;
   /**
    * The Convex id of this node's `steps` row, for a node that has to hand out a short address for
@@ -68,6 +88,12 @@ export interface NodeDef<I extends z.ZodType = z.ZodType, O extends z.ZodType = 
    * step that short-circuits on its own step row still knows what it was iterating.
    */
   expand?: (inputs: z.infer<I>) => unknown[];
+  /**
+   * The sub-steps this node's output describes — the Agent node's tool calls, and nothing else so
+   * far. Pure and derived from the output, like `handle` and `control`, so a replayed step that
+   * short-circuits on its own row does not write the children twice.
+   */
+  children?: (out: z.infer<O>) => ChildStep[];
   run: (ctx: RunContext<z.infer<I>>) => Promise<z.infer<O>>;
 }
 

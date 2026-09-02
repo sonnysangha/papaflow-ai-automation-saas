@@ -662,3 +662,100 @@ describe("runNode expansion", () => {
     expect(result.items).toBeUndefined();
   });
 });
+
+/**
+ * Sub-rows (`NodeDef.children`). The Agent node is the only definition that has them today: its
+ * output lists the tool calls its agent made, and each one becomes a `steps` row hanging off the
+ * node's own so the runs drawer can nest them.
+ */
+describe("runNode child steps", () => {
+  /** A node whose output describes two tool calls, the second of which failed. */
+  function installAgentLike(): void {
+    installNode({
+      outputs: z.object({
+        text: z.string(),
+        toolCalls: z.array(
+          z.object({
+            name: z.string(),
+            input: z.any(),
+            output: z.any(),
+            error: z.string().optional(),
+          }),
+        ),
+      }),
+      children: (out: { toolCalls: { name: string; input: unknown; output: unknown; error?: string }[] }) =>
+        out.toolCalls.map((call) => ({
+          name: call.name,
+          input: call.input,
+          output: call.output,
+          error: call.error,
+        })),
+    });
+
+    run.mockImplementation(async () => ({
+      text: "posted it",
+      toolCalls: [
+        { name: "slack_post", input: { channel: "#general", text: "hi" }, output: { ts: "1.2" } },
+        { name: "telegram_send", input: { chatId: "1" }, output: null, error: "chat not found" },
+      ],
+    }) as never);
+  }
+
+  it("writes one row per tool call under the node's own step", async () => {
+    installAgentLike();
+
+    await runNode(nodeInput({ url: "https://api.example.com/things" }));
+
+    // running, success, then one mark per child.
+    expect(markStepMock).toHaveBeenCalledTimes(4);
+
+    expect(markStepMock.mock.calls[2][0]).toMatchObject({
+      executionId: "exec_1",
+      orgId: "org_1",
+      nodeId: "n1#0",
+      nodeType: "agent.tool:slack_post",
+      status: "success",
+      parentStepId: "step_1",
+      output: { ts: "1.2" },
+    });
+
+    // A refused call is a failed row, not a missing one: the drawer has to show what was attempted.
+    expect(markStepMock.mock.calls[3][0]).toMatchObject({
+      nodeId: "n1#1",
+      nodeType: "agent.tool:telegram_send",
+      status: "failed",
+      error: "chat not found",
+      parentStepId: "step_1",
+    });
+  });
+
+  it("redacts a child's input the same way it redacts the node's", async () => {
+    installAgentLike();
+    run.mockImplementation(async () => ({
+      text: "",
+      toolCalls: [{ name: "http_request", input: { url: "https://x.test", apiKey: "sk-live-1" }, output: null }],
+    }) as never);
+
+    await runNode(nodeInput({ url: "https://api.example.com/things" }));
+
+    expect(markStepMock.mock.calls[2][0].input).toMatchObject({
+      url: "https://x.test",
+      apiKey: REDACTED,
+    });
+  });
+
+  it("writes nothing for a node with no children, and nothing on a replay", async () => {
+    await runNode(nodeInput({ url: "https://api.example.com/things" }));
+    expect(markStepMock).toHaveBeenCalledTimes(2);
+
+    // A step that came back off its own successful row must not write the children twice.
+    vi.clearAllMocks();
+    installAgentLike();
+    getStepMock.mockResolvedValue(
+      storedStep({ status: "success", output: { text: "posted it", toolCalls: [] } }),
+    );
+
+    await runNode(nodeInput({ url: "https://api.example.com/things" }));
+    expect(markStepMock).not.toHaveBeenCalled();
+  });
+});

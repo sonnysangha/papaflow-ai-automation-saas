@@ -70,6 +70,11 @@ export const stepMarkArgs = {
   hookToken: v.optional(v.string()),
   /** The Loop pass this row belongs to; absent for a node that runs once. Part of its identity. */
   iteration: v.optional(v.number()),
+  /**
+   * The row this one hangs under: the Agent node writes one child per tool call so the runs drawer
+   * can nest them (`NodeDef.children`). Absent for every row a graph node writes for itself.
+   */
+  parentStepId: v.optional(v.id("steps")),
 } as const;
 
 /** One execution row, as the engine creates it at run start. */

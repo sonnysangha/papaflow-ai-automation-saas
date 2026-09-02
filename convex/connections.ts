@@ -75,6 +75,19 @@ const connectionSummary = v.object({
 
 export type ConnectionSummary = typeof connectionSummary.type;
 
+/**
+ * The session-less projection: what a connection *is*, with nothing a credential could hide behind.
+ * Shared by `listForOrg` here and `api.engine.listOrgConnections`, so the two cannot drift.
+ */
+export const orgConnection = v.object({
+  id: v.id("connections"),
+  provider: v.string(),
+  kind: connectionKindValidator,
+  label: v.string(),
+  status: connectionStatusValidator,
+  requiresFeature: v.optional(v.string()),
+});
+
 /** Builds the summary field by field. Spreading the document would ship the ciphertext. */
 function project(connection: Doc<"connections">): ConnectionSummary {
   return {
@@ -256,4 +269,35 @@ export const getSealed = internalQuery({
   args: { connectionId: v.id("connections") },
   returns: v.union(schema.doc("connections"), v.null()),
   handler: async (ctx, { connectionId }) => await ctx.db.get(connectionId),
+});
+
+/**
+ * What the eve Runtime agent is allowed to know about an org's connections: which ones exist, what
+ * they are and whether they still work. No secret, no `meta`, no `hint` — the agent turns this into
+ * a tool list, and a tool descriptor is written into the durable session, so nothing that could
+ * become a credential may travel with it (CLAUDE.md rule 1).
+ *
+ * `internalQuery` again: the only caller is the secret-guarded `api.engine.listOrgConnections`,
+ * which `lib/connections-engine.ts` calls with `ENGINE_SECRET` from inside a tool resolver that has
+ * no Clerk session of its own.
+ */
+export const listForOrg = internalQuery({
+  args: { orgId: v.string() },
+  returns: v.array(orgConnection),
+  handler: async (ctx, { orgId }) => {
+    const connections = await ctx.db
+      .query("connections")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .order("desc")
+      .collect();
+
+    return connections.map((connection) => ({
+      id: connection._id,
+      provider: connection.provider,
+      kind: connection.kind,
+      label: connection.label,
+      status: connection.status,
+      requiresFeature: connection.requiresFeature,
+    }));
+  },
 });

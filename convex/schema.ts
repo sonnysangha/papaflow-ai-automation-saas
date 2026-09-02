@@ -1,0 +1,180 @@
+import { defineSchema, defineTable } from "convex/server";
+import { v } from "convex/values";
+
+// Every table carries orgId (Clerk organisation id) and is indexed by it. createdBy is informational.
+const sealed = v.object({ v: v.literal(1), keyId: v.string(), iv: v.string(), tag: v.string(), ct: v.string() });
+const executionStatus = v.union(
+  v.literal("queued"), v.literal("running"), v.literal("waiting"),
+  v.literal("completed"), v.literal("failed"), v.literal("cancelled"),
+);
+const stepStatus = v.union(
+  v.literal("running"), v.literal("success"), v.literal("failed"), v.literal("waiting"), v.literal("skipped"),
+);
+
+export default defineSchema({
+  organizations: defineTable({
+    orgId: v.string(),
+    name: v.string(),
+    slug: v.optional(v.string()),
+    imageUrl: v.optional(v.string()),
+    createdBy: v.optional(v.string()),
+    deletedAt: v.optional(v.number()),
+    updatedAt: v.number(),
+  }).index("by_org", ["orgId"]),
+
+  memberships: defineTable({
+    orgId: v.string(),
+    userId: v.string(),
+    role: v.string(),
+    clerkMembershipId: v.string(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_user", ["userId"])
+    .index("by_clerkMembershipId", ["clerkMembershipId"]),
+
+  orgPlans: defineTable({
+    orgId: v.string(),
+    planSlug: v.string(), // "free_org" (Clerk's auto-created default) | "pro" | "team"
+    status: v.string(), // snake_case from the webhook: active | canceled | ended | past_due | upcoming | …
+    periodEnd: v.optional(v.number()),
+    isFreeTrial: v.optional(v.boolean()),
+    subscriptionItemId: v.optional(v.string()),
+    features: v.array(v.string()),
+    updatedAt: v.number(),
+  }).index("by_org", ["orgId"]),
+
+  workflows: defineTable({
+    orgId: v.string(),
+    createdBy: v.string(),
+    name: v.string(),
+    description: v.optional(v.string()),
+    graph: v.object({
+      nodes: v.array(v.any()),
+      edges: v.array(v.any()),
+      viewport: v.optional(v.any()),
+      triggerId: v.optional(v.string()),
+    }),
+    version: v.number(),
+    status: v.union(v.literal("draft"), v.literal("active"), v.literal("paused")),
+    webhookSecret: v.string(),
+    lastEditSource: v.optional(v.union(v.literal("canvas"), v.literal("builder"))),
+    lastEditedBy: v.optional(v.string()),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_updated", ["orgId", "updatedAt"]),
+
+  executions: defineTable({
+    orgId: v.string(),
+    workflowId: v.id("workflows"),
+    workflowVersion: v.number(),
+    status: executionStatus,
+    trigger: v.object({ type: v.string(), payload: v.any() }),
+    runId: v.optional(v.string()),
+    startedBy: v.optional(v.string()),
+    startedAt: v.number(),
+    finishedAt: v.optional(v.number()),
+    error: v.optional(v.string()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_workflow", ["workflowId"])
+    .index("by_runId", ["runId"])
+    .index("by_org_started", ["orgId", "startedAt"]),
+
+  steps: defineTable({
+    orgId: v.string(),
+    executionId: v.id("executions"),
+    nodeId: v.string(),
+    nodeType: v.string(),
+    status: stepStatus,
+    attempt: v.number(),
+    input: v.optional(v.any()),
+    output: v.optional(v.any()),
+    error: v.optional(v.string()),
+    handle: v.optional(v.string()),
+    hookToken: v.optional(v.string()),
+    parentStepId: v.optional(v.id("steps")),
+    startedAt: v.number(),
+    finishedAt: v.optional(v.number()),
+  })
+    .index("by_execution", ["executionId"])
+    .index("by_execution_node", ["executionId", "nodeId"])
+    .index("by_org", ["orgId"])
+    .index("by_hookToken", ["hookToken"]),
+
+  connections: defineTable({
+    orgId: v.string(),
+    createdBy: v.string(),
+    provider: v.string(),
+    kind: v.union(
+      v.literal("apiKey"), v.literal("oauth2"), v.literal("webhookUrl"),
+      v.literal("botToken"), v.literal("signingSecret"),
+    ),
+    label: v.string(),
+    secret: sealed,
+    hint: v.string(),
+    expiresAt: v.optional(v.number()),
+    scopes: v.array(v.string()),
+    meta: v.any(),
+    status: v.union(v.literal("active"), v.literal("needs_reconnect"), v.literal("revoked")),
+    requiresFeature: v.optional(v.string()),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_provider", ["orgId", "provider"]),
+
+  schedules: defineTable({
+    orgId: v.string(),
+    workflowId: v.id("workflows"),
+    cron: v.string(),
+    timezone: v.optional(v.string()),
+    enabled: v.boolean(),
+    runId: v.optional(v.string()),
+    nextAt: v.optional(v.number()),
+    lastFiredAt: v.optional(v.number()),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_workflow", ["workflowId"]),
+
+  usage: defineTable({
+    orgId: v.string(),
+    month: v.string(), // "2026-09"
+    runs: v.number(),
+    builderTurns: v.number(),
+    houseModelCalls: v.number(),
+  }).index("by_org_month", ["orgId", "month"]),
+
+  oauthStates: defineTable({
+    orgId: v.string(),
+    userId: v.string(),
+    provider: v.string(),
+    state: v.string(),
+    codeVerifier: v.optional(v.string()),
+    redirectTo: v.optional(v.string()),
+    expiresAt: v.number(),
+  })
+    .index("by_state", ["state"])
+    .index("by_expiresAt", ["expiresAt"]),
+
+  builderSessions: defineTable({
+    orgId: v.string(),
+    userId: v.string(),
+    workflowId: v.id("workflows"),
+    eveSessionId: v.string(),
+    status: v.union(v.literal("active"), v.literal("finished"), v.literal("cancelled")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_workflow", ["workflowId"])
+    .index("by_eveSessionId", ["eveSessionId"]),
+
+  // Dedupe store for Clerk (svix-id), Stripe (event.id) and GitHub (delivery id) deliveries.
+  webhookEvents: defineTable({
+    source: v.string(),
+    eventId: v.string(),
+    receivedAt: v.number(),
+  }).index("by_source_event", ["source", "eventId"]),
+});

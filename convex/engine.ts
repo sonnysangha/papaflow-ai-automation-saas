@@ -205,7 +205,7 @@ const connectionSealedResult = v.union(
     secret: sealedValidator,
     expiresAt: v.optional(v.number()),
     status: connectionStatusValidator,
-    meta: v.any(),
+    meta: v.optional(v.any()),
     requiresFeature: v.optional(v.string()),
   }),
   v.null(),

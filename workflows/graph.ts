@@ -11,6 +11,9 @@ const PAPAFLOW_NODE_TYPE = "papaflow";
 /** Default source handle: the canvas leaves `sourceHandle` null for a node's single output. */
 const DEFAULT_HANDLE = "out";
 
+/** A node key is a template root (`{{ http_request_1.body }}`), so it has to look like one. */
+const NODE_KEY = /^[a-z][a-z0-9_]*$/;
+
 /**
  * The graph as it comes back from Convex, where `workflows.graph` is `v.any()`. Everything is
  * optional and `unknown`: a stored graph is user data that an older app version wrote, so
@@ -30,7 +33,26 @@ function toNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-function toRunNode(raw: unknown): RunNode | null {
+/**
+ * The node's template key. The canvas generates one on drop and stores it, so the common case is
+ * "use what is there". A graph saved before keys existed — or one whose key could never appear in
+ * a template, or that repeats a key another node already took — gets one derived from its type and
+ * its position in the stored array: the same stored graph always yields the same keys, which is
+ * what makes a template written after the migration keep resolving.
+ */
+function keyFor(stored: unknown, nodeType: string, index: number, taken: Set<string>): string {
+  const key = toNonEmptyString(stored);
+  if (key && NODE_KEY.test(key) && !taken.has(key)) return key;
+
+  const derived = `${nodeType.replace(/\./g, "_")}_${index + 1}`;
+  if (!taken.has(derived)) return derived;
+  // Only reachable when an earlier node stored the very key this one would derive.
+  let suffix = 2;
+  while (taken.has(`${derived}_${suffix}`)) suffix++;
+  return `${derived}_${suffix}`;
+}
+
+function toRunNode(raw: unknown, index: number, takenKeys: Set<string>): RunNode | null {
   if (!isRecord(raw)) return null;
 
   const id = toNonEmptyString(raw.id);
@@ -47,6 +69,7 @@ function toRunNode(raw: unknown): RunNode | null {
     type: toNonEmptyString(raw.type) ?? PAPAFLOW_NODE_TYPE,
     data: {
       nodeType,
+      key: keyFor(data.key, nodeType, index, takenKeys),
       label: toNonEmptyString(data.label) ?? NODES[nodeType]?.name ?? nodeType,
       inputs: isRecord(data.inputs) ? data.inputs : {},
       ...(connectionId ? { connectionId } : {}),
@@ -73,7 +96,9 @@ function toRunEdge(raw: unknown): RunEdge | null {
 
 /**
  * Stored graph → the shape `runGraph` walks: nodes keyed by id so the workflow can look one up
- * without scanning, edges kept in stored order so fan-out is deterministic across replays.
+ * without scanning, edges kept in stored order so fan-out is deterministic across replays. Every
+ * node also comes out with a template `key` — its own if the canvas stored a usable one, a derived
+ * one otherwise (see `keyFor`) — because the run's `outputs` are keyed by key, not by id.
  *
  * The trigger is `stored.triggerId` when that node still exists (the canvas derives it on every
  * save), otherwise the first node whose definition is in the `trigger` category — which is what
@@ -87,11 +112,15 @@ export function toRunGraph(stored: StoredGraphInput): RunGraph {
   // Object key order is not insertion order for numeric-looking ids, so the stored order is
   // tracked separately: "first trigger on the canvas wins" has to mean the same thing here.
   const order: string[] = [];
-  for (const raw of stored.nodes ?? []) {
-    const node = toRunNode(raw);
+  // Two nodes sharing a template key would share an entry in the run's `outputs`.
+  const takenKeys = new Set<string>();
+  const storedNodes = stored.nodes ?? [];
+  for (let index = 0; index < storedNodes.length; index++) {
+    const node = toRunNode(storedNodes[index], index, takenKeys);
     if (!node || nodes[node.id]) continue;
     nodes[node.id] = node;
     order.push(node.id);
+    takenKeys.add(node.data.key);
   }
 
   const edges: RunEdge[] = [];

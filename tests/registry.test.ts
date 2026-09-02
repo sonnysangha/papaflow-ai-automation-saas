@@ -33,10 +33,13 @@ describe("node registry", () => {
 
   it("builds a catalogue for a plan's features", () => {
     const catalogue = nodeCatalogue(["core_connectors"]);
-    expect(catalogue).toHaveLength(3);
+    expect(catalogue).toHaveLength(6);
     expect(catalogue.map((entry) => entry.type).sort()).toEqual([
       "email.send",
       "http.request",
+      "logic.condition",
+      "logic.set",
+      "logic.switch",
       "manual.trigger",
     ]);
 
@@ -45,15 +48,37 @@ describe("node registry", () => {
       expect(entry.version).toBe("v1");
       expect(entry.inputsSchema.type).toBe("object");
       expect(entry.outputsSchema.type).toBe("object");
-      expect(entry.handles).toEqual(["out"]);
       expect(entry.icon).toBeTruthy();
       expect(entry.description).toBeTruthy();
     }
   });
 
+  it("lists the branch handles a node advertises for its default configuration", () => {
+    const handles = Object.fromEntries(
+      nodeCatalogue([]).map((entry) => [entry.type, entry.handles]),
+    );
+
+    // A Switch with no cases yet still offers somewhere for the run to go.
+    expect(handles["logic.condition"]).toEqual(["true", "false"]);
+    expect(handles["logic.switch"]).toEqual(["default"]);
+    expect(handles["logic.set"]).toEqual(["out"]);
+    expect(handles["http.request"]).toEqual(["out"]);
+  });
+
+  it("groups the catalogue by category in sidebar order", () => {
+    expect(nodeCatalogue([]).map((entry) => entry.category)).toEqual([
+      "trigger",
+      "logic",
+      "logic",
+      "logic",
+      "action",
+      "action",
+    ]);
+  });
+
   it("still allows nodes whose requiresFeature is null when the org has no features", () => {
     const catalogue = nodeCatalogue([]);
-    expect(catalogue).toHaveLength(3);
+    expect(catalogue).toHaveLength(6);
     for (const entry of catalogue) {
       expect(entry.requiresFeature).toBeNull();
       expect(entry.allowed).toBe(true);

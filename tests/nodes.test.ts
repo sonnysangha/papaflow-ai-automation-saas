@@ -49,22 +49,32 @@ describe("manual.trigger", () => {
     expect(manualTrigger.requiresFeature).toBeNull();
   });
 
-  it("returns the parsed sample payload", async () => {
-    await expect(manualTrigger.run(ctx({ sample: '{"a":1}' }))).resolves.toEqual({
-      payload: { a: 1 },
-    });
+  it("outputs the sample object itself, so templates read {{ key.field }}", async () => {
+    await expect(manualTrigger.run(ctx({ sample: '{"lead":{"email":"a@b.com"},"score":7}' })))
+      .resolves.toEqual({ lead: { email: "a@b.com" }, score: 7 });
   });
 
   it("falls back to an empty payload for invalid JSON", async () => {
-    await expect(manualTrigger.run(ctx({ sample: "not json at all" }))).resolves.toEqual({
-      payload: {},
-    });
+    await expect(manualTrigger.run(ctx({ sample: "not json at all" }))).resolves.toEqual({});
+  });
+
+  it("falls back to an empty payload for JSON that is not an object", async () => {
+    // The run's outputs are addressed by key, and only an object has keys to address.
+    await expect(manualTrigger.run(ctx({ sample: "[1,2,3]" }))).resolves.toEqual({});
+    await expect(manualTrigger.run(ctx({ sample: '"hello"' }))).resolves.toEqual({});
+    await expect(manualTrigger.run(ctx({ sample: "null" }))).resolves.toEqual({});
   });
 
   it("defaults the sample to an empty object", async () => {
     const inputs = manualTrigger.inputs.parse({});
     expect(inputs.sample).toBe("{}");
-    await expect(manualTrigger.run(ctx(inputs))).resolves.toEqual({ payload: {} });
+    await expect(manualTrigger.run(ctx(inputs))).resolves.toEqual({});
+  });
+
+  it("parses its own output as a record of anything", async () => {
+    const output = await manualTrigger.run(ctx({ sample: '{"a":1}' }));
+    expect(manualTrigger.outputs.parse(output)).toEqual({ a: 1 });
+    expect(manualTrigger.outputs.safeParse([1, 2]).success).toBe(false);
   });
 });
 

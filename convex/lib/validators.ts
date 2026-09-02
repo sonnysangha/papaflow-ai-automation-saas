@@ -32,6 +32,8 @@ export const stepMarkArgs = {
   input: v.optional(v.any()),
   output: v.optional(v.any()),
   error: v.optional(v.string()),
+  /** `resolveTemplates` could not find these paths; the step ran anyway. */
+  warnings: v.optional(v.array(v.string())),
   handle: v.optional(v.string()),
   hookToken: v.optional(v.string()),
 } as const;

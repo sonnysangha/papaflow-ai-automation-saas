@@ -66,6 +66,7 @@ export const mark = internalMutation({
         input: args.input,
         output: args.output,
         error: args.error,
+        warnings: args.warnings,
         handle: args.handle,
         hookToken: args.hookToken,
         startedAt: now,
@@ -79,6 +80,7 @@ export const mark = internalMutation({
     if (args.input !== undefined) patch.input = args.input;
     if (args.output !== undefined) patch.output = args.output;
     if (args.error !== undefined) patch.error = args.error;
+    if (args.warnings !== undefined) patch.warnings = args.warnings;
     if (args.handle !== undefined) patch.handle = args.handle;
     if (args.hookToken !== undefined) patch.hookToken = args.hookToken;
 

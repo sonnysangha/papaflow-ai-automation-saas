@@ -5,6 +5,7 @@ import { getStep, markStep } from "@/lib/engine-client";
 import { redact } from "@/lib/redact";
 import { ConnectorError } from "@/nodes/define";
 import { NODES } from "@/nodes/registry";
+import { resolveTemplates } from "@/nodes/templates";
 import type { NodeInput, NodeResult } from "@/workflows/types";
 
 /**
@@ -23,7 +24,7 @@ import type { NodeInput, NodeResult } from "@/workflows/types";
 export async function runNode(input: NodeInput): Promise<NodeResult> {
   "use step";
 
-  const { nodeId, nodeType, executionId, orgId, node } = input;
+  const { nodeId, nodeType, executionId, orgId, node, outputs, trigger, item } = input;
   // Only available inside a real step invocation; `attempt` counts from 1 and rises with retries.
   const { attempt } = getStepMetadata();
 
@@ -50,9 +51,16 @@ export async function runNode(input: NodeInput): Promise<NodeResult> {
 
     let inputs: unknown;
     try {
-      // Phase 3 resolves `{{ nodeId.field }}` templates (and `input.item` for Loop) before this
-      // parse; today the stored configuration is used as-is.
-      inputs = def.inputs.parse(node.data.inputs);
+      // `{{ key.path }}` first, schema second. The context is the run's outputs keyed by node key
+      // plus the two reserved roots — `trigger` (the payload that started the run) and `$item` (the
+      // current element, once Loop exists). A template that is exactly one reference keeps the raw
+      // type it points at, so this is also how a node input becomes an object or a number.
+      const { value, warnings } = resolveTemplates(node.data.inputs, {
+        ...outputs,
+        trigger: trigger.payload,
+        $item: item,
+      });
+      inputs = def.inputs.parse(value);
 
       const output: unknown = def.outputs.parse(
         // `credential` stays undefined until Phase 4 opens the sealed connection here, inside the
@@ -75,6 +83,9 @@ export async function runNode(input: NodeInput): Promise<NodeResult> {
         input: redact(inputs),
         output,
         handle: handle ?? undefined,
+        // Unresolved paths are configuration mistakes, not failures: the node ran with `""` where
+        // the template was, and the row carries the explanation to the canvas.
+        warnings,
       });
 
       return { nodeId, output, handle, control };

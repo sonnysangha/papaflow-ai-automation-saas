@@ -7,7 +7,7 @@ type StoredNodeLike = {
   id: string;
   type?: string;
   position?: { x: number; y: number };
-  data: { nodeType: string; label?: string; inputs?: Record<string, unknown> };
+  data: { nodeType: string; key?: unknown; label?: string; inputs?: Record<string, unknown> };
 };
 
 function storedNode(id: string, nodeType: string, label = id): StoredNodeLike {
@@ -17,6 +17,16 @@ function storedNode(id: string, nodeType: string, label = id): StoredNodeLike {
     position: { x: 0, y: 0 },
     data: { nodeType, label, inputs: {} },
   };
+}
+
+/** A node as the canvas saves it today: with the key it generated on drop. */
+function keyedNode(id: string, nodeType: string, key: unknown): StoredNodeLike {
+  const node = storedNode(id, nodeType);
+  return { ...node, data: { ...node.data, key } };
+}
+
+function keysOf(graph: RunGraph): Record<string, string> {
+  return Object.fromEntries(Object.values(graph.nodes).map((node) => [node.id, node.data.key]));
 }
 
 function storedEdge(
@@ -53,10 +63,87 @@ describe("toRunGraph", () => {
     expect(graph.nodes.a).toEqual({
       id: "a",
       type: "papaflow",
-      data: { nodeType: "http.request", label: "a", inputs: {} },
+      data: { nodeType: "http.request", key: "http_request_2", label: "a", inputs: {} },
     });
     expect(graph.edges).toHaveLength(2);
     expect(graph.edges[0]).toMatchObject({ source: "t", target: "a" });
+  });
+
+  it("keeps the key the canvas generated", () => {
+    const graph = toRunGraph({
+      nodes: [
+        keyedNode("t", "manual.trigger", "manual_trigger_1"),
+        keyedNode("a", "http.request", "fetch_lead"),
+        keyedNode("b", "email.send", "email_send_1"),
+      ],
+      edges: [],
+      triggerId: "t",
+    });
+
+    expect(keysOf(graph)).toEqual({
+      t: "manual_trigger_1",
+      a: "fetch_lead",
+      b: "email_send_1",
+    });
+  });
+
+  it("derives a key for a node saved before keys existed", () => {
+    // `<nodeType with '.' → '_'>_<index + 1>`: the same stored graph always produces the same
+    // keys, so a template written against a migrated graph keeps working.
+    const stored = {
+      nodes: [
+        storedNode("t", "manual.trigger"),
+        storedNode("a", "http.request"),
+        storedNode("b", "http.request"),
+      ],
+      edges: [],
+      triggerId: "t",
+    };
+
+    expect(keysOf(toRunGraph(stored))).toEqual({
+      t: "manual_trigger_1",
+      a: "http_request_2",
+      b: "http_request_3",
+    });
+    expect(keysOf(toRunGraph(stored))).toEqual(keysOf(toRunGraph(stored)));
+  });
+
+  it("derives a key when the stored one could never appear in a template", () => {
+    const graph = toRunGraph({
+      nodes: [
+        keyedNode("t", "manual.trigger", "Manual Trigger"),
+        keyedNode("a", "http.request", "9lives"),
+        keyedNode("b", "email.send", ""),
+        keyedNode("c", "email.send", 7),
+      ],
+      edges: [],
+      triggerId: "t",
+    });
+
+    expect(keysOf(graph)).toEqual({
+      t: "manual_trigger_1",
+      a: "http_request_2",
+      b: "email_send_3",
+      c: "email_send_4",
+    });
+  });
+
+  it("keeps keys unique when two nodes claim the same one", () => {
+    const graph = toRunGraph({
+      nodes: [
+        keyedNode("t", "manual.trigger", "manual_trigger_1"),
+        keyedNode("a", "http.request", "lookup"),
+        keyedNode("b", "http.request", "lookup"),
+      ],
+      edges: [],
+      triggerId: "t",
+    });
+
+    expect(keysOf(graph)).toEqual({
+      t: "manual_trigger_1",
+      a: "lookup",
+      b: "http_request_3",
+    });
   });
 
   it("uses the stored triggerId when that node still exists", () => {

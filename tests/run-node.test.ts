@@ -81,14 +81,23 @@ function installNode(overrides: Partial<AnyNodeDef> = {}): void {
   } as AnyNodeDef;
 }
 
-function nodeInput(inputs: Record<string, unknown>): NodeInput {
+function nodeInput(
+  inputs: Record<string, unknown>,
+  rest: Partial<NodeInput> = {},
+): NodeInput {
   return {
     nodeId: "n1",
     nodeType: "test.node",
     executionId: "exec_1",
     orgId: "org_1",
-    node: { id: "n1", type: "papaflow", data: { nodeType: "test.node", label: "Test", inputs } },
+    node: {
+      id: "n1",
+      type: "papaflow",
+      data: { nodeType: "test.node", key: "test_node_1", label: "Test", inputs },
+    },
     outputs: {},
+    trigger: { type: "manual", payload: {} },
+    ...rest,
   };
 }
 
@@ -146,6 +155,7 @@ describe("runNode", () => {
       // The key the user typed a token into never reaches the step row or the run log.
       input: { url: "https://api.example.com/things", apiKey: REDACTED },
       output: { ok: true },
+      warnings: [],
     });
 
     expect(result).toEqual({ nodeId: "n1", output: { ok: true }, handle: null, control: undefined });
@@ -258,5 +268,94 @@ describe("runNode", () => {
 
     expect(run).toHaveBeenCalledTimes(1);
     expect(markStepMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+/**
+ * The templates half of the step: `node.data.inputs` is resolved against the run's outputs (keyed
+ * by node *key*, not id) plus the two reserved roots before zod ever sees it. `nodes/templates.ts`
+ * has its own unit tests; these pin the wiring — which context the step builds, and what happens to
+ * the warnings it comes back with.
+ */
+describe("runNode templates", () => {
+  it("resolves a template against an upstream node's output before parsing", async () => {
+    await runNode(
+      nodeInput(
+        { url: "https://api.example.com/{{ http_request_1.body.path }}" },
+        { outputs: { http_request_1: { body: { path: "things" } } } },
+      ),
+    );
+
+    expect(run.mock.calls[0][0].inputs).toEqual({ url: "https://api.example.com/things" });
+    expect(markStepMock.mock.calls[1][0]).toMatchObject({ status: "success", warnings: [] });
+  });
+
+  it("resolves the reserved trigger root from the payload that started the run", async () => {
+    await runNode(
+      nodeInput(
+        { url: "https://api.example.com/{{ trigger.path }}" },
+        { trigger: { type: "manual", payload: { path: "leads" } } },
+      ),
+    );
+
+    expect(run.mock.calls[0][0].inputs.url).toBe("https://api.example.com/leads");
+  });
+
+  it("resolves the reserved $item root for a node running over one item", async () => {
+    await runNode(
+      nodeInput({ url: "https://api.example.com/{{ $item.id }}" }, { item: { id: "42" } }),
+    );
+
+    expect(run.mock.calls[0][0].inputs.url).toBe("https://api.example.com/42");
+  });
+
+  it("keeps the raw type of an input that is exactly one template", async () => {
+    installNode({ inputs: z.object({ payload: z.any() }) });
+    run.mockImplementation(async () => ({ ok: true }));
+
+    await runNode(
+      nodeInput(
+        { payload: "{{ http_request_1.body }}" },
+        { outputs: { http_request_1: { body: { items: [1, 2], ok: true } } } },
+      ),
+    );
+
+    // Not the JSON text of the body: the object itself, so the schema can be anything but a string.
+    expect(markStepMock.mock.calls[1][0]).toMatchObject({
+      status: "success",
+      input: { payload: { items: [1, 2], ok: true } },
+    });
+  });
+
+  it("stores a warning on the step row when a path is not there", async () => {
+    await runNode(nodeInput({ url: "https://api.example.com/{{ nope.field }}" }));
+
+    // A missing path resolves to "" and the node still runs: the row is what explains the gap.
+    expect(run.mock.calls[0][0].inputs.url).toBe("https://api.example.com/");
+    expect(markStepMock.mock.calls[1][0]).toMatchObject({
+      status: "success",
+      warnings: ["{{ nope.field }}: not found"],
+    });
+  });
+
+  it("stores the warnings of a node that is left waiting on a hook", async () => {
+    installNode({ control: () => ({ kind: "hook" }) });
+
+    await runNode(nodeInput({ url: "https://api.example.com/{{ nope.field }}" }));
+
+    expect(markStepMock.mock.calls[1][0]).toMatchObject({
+      status: "waiting",
+      warnings: ["{{ nope.field }}: not found"],
+    });
+  });
+
+  it("still fails the step when a resolved input does not match the schema", async () => {
+    const error = await runNode(nodeInput({ url: "{{ nope.url }}" })).catch(
+      (thrown: unknown) => thrown,
+    );
+
+    expect(error).toBeInstanceOf(FatalError);
+    expect(run).not.toHaveBeenCalled();
+    expect(markStepMock.mock.calls[1][0]).toMatchObject({ status: "failed" });
   });
 });

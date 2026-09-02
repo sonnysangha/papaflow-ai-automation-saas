@@ -21,7 +21,13 @@ export async function runGraph({ executionId, orgId, graph, trigger }: RunInput)
   "use workflow";
 
   // The trigger's payload is its output: `startRun` already wrote its `success` step row.
-  const outputs: Record<string, unknown> = { [graph.triggerId]: trigger.payload };
+  //
+  // `outputs` is keyed by each node's template key, not by its id, because that is what a user
+  // writes: `{{ manual_trigger_1.lead.email }}`. `runNode` resolves against this map plus the two
+  // reserved roots (`trigger`, `$item`); edges and step rows keep using ids.
+  const outputs: Record<string, unknown> = {
+    [graph.nodes[graph.triggerId].data.key]: trigger.payload,
+  };
   const visited = new Set<string>([graph.triggerId]);
   let frontier = nextNodes(graph, graph.triggerId, null);
 
@@ -38,6 +44,7 @@ export async function runGraph({ executionId, orgId, graph, trigger }: RunInput)
             orgId,
             node: graph.nodes[nodeId],
             outputs,
+            trigger,
           }),
         ),
       );
@@ -57,7 +64,7 @@ export async function runGraph({ executionId, orgId, graph, trigger }: RunInput)
           await recordResume(executionId, r.nodeId, output);
         }
 
-        outputs[r.nodeId] = output;
+        outputs[graph.nodes[r.nodeId].data.key] = output;
 
         // A Condition/Switch node returns the handle to follow; everything else returns null and
         // follows its default output. `visited` keeps a diamond from running a node twice.

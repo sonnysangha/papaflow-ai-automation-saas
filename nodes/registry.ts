@@ -2,11 +2,21 @@ import { emailSend } from "./actions/email-send";
 import { httpRequest } from "./actions/http-request";
 import { categoryOrder } from "./categories";
 import type { AnyNodeDef, NodeCategory } from "./define";
+import { conditionNode } from "./logic/condition";
+import { setNode } from "./logic/set";
+import { switchNode } from "./logic/switch";
 import { toJsonSchema, type JsonSchema } from "./schema";
 import { manualTrigger } from "./triggers/manual";
 
 /** Adding a connector = one file here + one line in this array. */
-const DEFINITIONS: readonly AnyNodeDef[] = [manualTrigger, httpRequest, emailSend];
+const DEFINITIONS: readonly AnyNodeDef[] = [
+  manualTrigger,
+  conditionNode,
+  switchNode,
+  setNode,
+  httpRequest,
+  emailSend,
+];
 
 export function buildRegistry(definitions: readonly AnyNodeDef[]): Record<string, AnyNodeDef> {
   const registry: Record<string, AnyNodeDef> = {};

@@ -66,6 +66,9 @@ export default defineSchema({
     input: v.optional(v.any()),
     output: v.optional(v.any()),
     error: v.optional(v.string()),
+    // Templates that resolved to nothing (`"{{ a.b }}: not found"`). Not an error: the node ran
+    // with "" where the reference was, and the canvas shows these on the step.
+    warnings: v.optional(v.array(v.string())),
     handle: v.optional(v.string()),
     hookToken: v.optional(v.string()),
     parentStepId: v.optional(v.id("steps")),

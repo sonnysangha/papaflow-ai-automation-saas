@@ -24,3 +24,4 @@
 - Config panel field labels are raw input names (`connectionId`, `authHeader`, `url`). Humanise them: prefer a zod `.meta({ label })` when present, else split camelCase and capitalise (`connectionId` → "Connection", `authHeader` → "Auth header", `url` → "URL"). Keep the code key visible in the "Referenced in templates as" hint only.
 - The disabled PickerField (e.g. Airtable table before a base is chosen) renders an empty Base UI Select; give it the hint text inline so the state is obvious.
 - Runs drawer rows show the definition name ("Set") rather than the node's own label ("Greet", "Collect"); show the custom label with the node key underneath, and use the same in the canvas StatusRing tooltips.
+- Pricing page, Free card: "Manual and event triggers only" is wrong — `PLAN_LIMITS.free_org.minScheduleMinutes` is 60, so say "Schedules every hour or slower" (derive the line from `minScheduleMinutes` like the Pro/Team cards do).

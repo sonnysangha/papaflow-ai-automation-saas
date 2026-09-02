@@ -5,15 +5,10 @@
 // (`createGoogle`, not `createGoogleGenerativeAI`; `createDeepSeek`, not `createDeepseek`;
 // `createOpenRouter` from `@openrouter/ai-sdk-provider`). The AI nodes only ever call these through
 // `modelFor`, so a new provider is one `case` here plus a connector file.
-import { createAnthropic } from "@ai-sdk/anthropic";
-import { createDeepSeek } from "@ai-sdk/deepseek";
-import { createGoogle } from "@ai-sdk/google";
-import { createGroq } from "@ai-sdk/groq";
-import { createMistral } from "@ai-sdk/mistral";
-import { createOpenAI } from "@ai-sdk/openai";
-import { createXai } from "@ai-sdk/xai";
-import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import type { LanguageModel } from "ai";
+// Provider packages are loaded lazily inside providerFor(): node definitions are imported by the
+// canvas (client bundle) for their schemas, and a static import here would drag every @ai-sdk/*
+// package into the browser. Steps run in Node, where the dynamic import resolves normally.
 
 import { ConnectorError } from "@/nodes/define";
 
@@ -48,24 +43,24 @@ export function isTextProvider(provider: string): provider is TextProvider {
  * A key must never end up in a module-level singleton: this is called per node run, inside the
  * step, with the secret `vault.openFresh()` just opened.
  */
-export function providerFor(provider: string, apiKey: string): ModelFactory {
+export async function providerFor(provider: string, apiKey: string): Promise<ModelFactory> {
   switch (provider) {
     case "openai":
-      return createOpenAI({ apiKey });
+      return (await import("@ai-sdk/openai")).createOpenAI({ apiKey });
     case "anthropic":
-      return createAnthropic({ apiKey });
+      return (await import("@ai-sdk/anthropic")).createAnthropic({ apiKey });
     case "google":
-      return createGoogle({ apiKey });
+      return (await import("@ai-sdk/google")).createGoogle({ apiKey });
     case "xai":
-      return createXai({ apiKey });
+      return (await import("@ai-sdk/xai")).createXai({ apiKey });
     case "mistral":
-      return createMistral({ apiKey });
+      return (await import("@ai-sdk/mistral")).createMistral({ apiKey });
     case "groq":
-      return createGroq({ apiKey });
+      return (await import("@ai-sdk/groq")).createGroq({ apiKey });
     case "deepseek":
-      return createDeepSeek({ apiKey });
+      return (await import("@ai-sdk/deepseek")).createDeepSeek({ apiKey });
     case "openrouter":
-      return createOpenRouter({ apiKey });
+      return (await import("@openrouter/ai-sdk-provider")).createOpenRouter({ apiKey });
     default:
       // A user's connection pointing at a provider with no text model (ElevenLabs, fal) is a
       // configuration mistake, not a transient failure: 400 so `runNode` refuses to retry it.
@@ -74,8 +69,8 @@ export function providerFor(provider: string, apiKey: string): ModelFactory {
 }
 
 /** `providerFor(provider, apiKey)(modelId)` — the only shape the AI nodes need. */
-export function modelFor(provider: string, apiKey: string, modelId: string): LanguageModel {
-  return providerFor(provider, apiKey)(modelId);
+export async function modelFor(provider: string, apiKey: string, modelId: string): Promise<LanguageModel> {
+  return (await providerFor(provider, apiKey))(modelId);
 }
 
 /**

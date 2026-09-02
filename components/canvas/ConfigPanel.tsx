@@ -17,6 +17,7 @@ import { toJsonSchema, type JsonSchema } from "@/nodes/schema";
 import { renameKeyInTemplates } from "@/nodes/templates";
 
 import { BooleanSwitch } from "./fields/BooleanSwitch";
+import { ConnectionField } from "./fields/ConnectionField";
 import { EnumSelect } from "./fields/EnumSelect";
 import { JsonField } from "./fields/JsonField";
 import { KeyValueList, type KeyValuePair } from "./fields/KeyValueList";
@@ -38,6 +39,9 @@ const MULTILINE_NAMES = new Set(["text", "body", "prompt", "instructions", "samp
 const MULTILINE_HINT = /multi-line/i;
 
 const KEY_HELP = "Lower-case letters, digits and underscores, starting with a letter.";
+
+/** The input a node with a `credential` stores its chosen connection in. */
+const CONNECTION_INPUT = "connectionId";
 
 type FieldKind =
   | "text"
@@ -135,6 +139,7 @@ function NodeField({
   schema,
   value,
   groups,
+  credential,
   onChange,
 }: {
   id: string;
@@ -142,10 +147,18 @@ function NodeField({
   schema: JsonSchema;
   value: unknown;
   groups: VariableGroup[];
+  /** The node definition's `credential`, so `connectionId` becomes a picker instead of a text box. */
+  credential: string | null;
   onChange: (value: unknown) => void;
 }) {
   const kind = fieldKind(name, schema);
   const fallback = typeof schema.default === "string" ? schema.default : undefined;
+
+  // A node that needs a connection stores its id here; the schema only says `z.string()`, so the
+  // picker has to be chosen by name rather than by shape.
+  if (credential && name === CONNECTION_INPUT) {
+    return <ConnectionField id={id} credential={credential} value={value} onChange={onChange} />;
+  }
 
   // Anything holding a template is edited as text, whatever the schema says it should become.
   if (isTemplate(value) && kind !== "json") {
@@ -416,6 +429,7 @@ export function ConfigPanel({
                     schema={property}
                     value={node.data.inputs[name]}
                     groups={groups}
+                    credential={definition?.credential ?? null}
                     onChange={(value) => setInput(name, value)}
                   />
                   {description && <p className="text-xs text-muted-foreground">{description}</p>}

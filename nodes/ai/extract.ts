@@ -1,4 +1,3 @@
-import { generateText, Output } from "ai";
 import { z } from "zod";
 
 import { aiCredential, modelFor } from "@/lib/ai/providers";
@@ -64,8 +63,9 @@ export const extractNode = defineNode({
       shape[field.name] = field.description ? base.describe(field.description) : base;
     }
 
+    const { generateText, Output } = await import("ai"); // lazy: keeps the ai package out of the client bundle
     const result = await generateText({
-      model: modelFor(provider, apiKey, inputs.model),
+      model: await modelFor(provider, apiKey, inputs.model),
       prompt: inputs.prompt,
       output: Output.object({ schema: z.object(shape) }),
     });

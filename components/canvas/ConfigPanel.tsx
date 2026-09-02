@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import type { Id } from "@/convex/_generated/dataModel";
 import { categoryLabel } from "@/nodes/categories";
 import type { AnyNodeDef } from "@/nodes/define";
 import { NODES } from "@/nodes/registry";
@@ -24,6 +25,7 @@ import { KeyValueList, type KeyValuePair } from "./fields/KeyValueList";
 import { NumberInput } from "./fields/NumberInput";
 import { TagList } from "./fields/TagList";
 import { TemplateInput } from "./fields/TemplateInput";
+import { TriggerUrl } from "./fields/TriggerUrl";
 import {
   NODE_KEY_PATTERN,
   sourceHandles,
@@ -42,6 +44,9 @@ const KEY_HELP = "Lower-case letters, digits and underscores, starting with a le
 
 /** The input a node with a `credential` stores its chosen connection in. */
 const CONNECTION_INPUT = "connectionId";
+
+/** The trigger whose configuration is not inputs at all, but the URL the workflow listens on. */
+const WEBHOOK_TRIGGER = "webhook.trigger";
 
 type FieldKind =
   | "text"
@@ -234,6 +239,9 @@ export type ConfigPanelProps = {
   node: WorkflowNodeType;
   nodes: WorkflowNodeType[];
   edges: Edge[];
+  /** The workflow being edited: the Webhook trigger's URL is built from these two. */
+  workflowId: Id<"workflows">;
+  webhookSecret: string;
   /** Latest run output per node id, for the observed half of the variable picker. */
   runOutputs: Record<string, unknown>;
   setNodes: (updater: (nodes: WorkflowNodeType[]) => WorkflowNodeType[]) => void;
@@ -250,6 +258,8 @@ export function ConfigPanel({
   node,
   nodes,
   edges,
+  workflowId,
+  webhookSecret,
   runOutputs,
   setNodes,
   onClose,
@@ -329,6 +339,9 @@ export function ConfigPanel({
 
   const properties = isRecord(schema?.properties) ? schema.properties : {};
   const required = Array.isArray(schema?.required) ? schema.required : [];
+  // The Webhook trigger has no inputs — its URL is the configuration — so the panel must not
+  // follow it with "This node has no settings."
+  const showsUrl = node.data.nodeType === WEBHOOK_TRIGGER;
   const handles = sourceHandles(node.data.nodeType, node.data.inputs);
 
   return (
@@ -396,11 +409,22 @@ export function ConfigPanel({
 
           <Separator />
 
+          {showsUrl && (
+            <div className="space-y-1.5">
+              <Label htmlFor={`${node.id}-webhook-url`}>Webhook URL</Label>
+              <TriggerUrl
+                id={`${node.id}-webhook-url`}
+                workflowId={workflowId}
+                webhookSecret={webhookSecret}
+              />
+            </div>
+          )}
+
           {schema === null ? (
             <p className="text-sm text-muted-foreground">
               This node type is not installed, so there is nothing to configure.
             </p>
-          ) : Object.keys(properties).length === 0 ? (
+          ) : Object.keys(properties).length === 0 && !showsUrl ? (
             <p className="text-sm text-muted-foreground">This node has no settings.</p>
           ) : (
             Object.entries(properties).map(([name, raw]) => {

@@ -286,3 +286,71 @@ export async function startRun(input: {
   await setRunId(executionId, run.runId);
   return { executionId, runId: run.runId };
 }
+
+/* -------------------------------------------------------------------------------------------------
+ * Triggers.
+ *
+ * The inbound routes (`/api/hooks/…`, `/api/events/…`, `/api/forms/…`) and the public form page are
+ * session-less too, so they talk to Convex through the same guarded surface. Ids reach them as
+ * plain strings out of the URL: `workflowRef` hands them back to Convex branded, and an id that is
+ * not even shaped like one is refused by the validator — which the routes turn into a 404.
+ * ---------------------------------------------------------------------------------------------- */
+
+/** `{ orgId, webhookSecret, hasTrigger }`, or null when no workflow has that id. */
+export type WorkflowPublic = FunctionReturnType<typeof api.engine.getWorkflowPublic>;
+
+/** One workflow a trigger should start: enough to call `startRun`, nothing more. */
+export type WorkflowForTrigger = FunctionReturnType<
+  typeof api.engine.listWorkflowsByTrigger
+>[number];
+
+/** `{ name, form }` for the public form page, or null when the workflow has no form trigger. */
+export type PublicForm = FunctionReturnType<typeof api.engine.getPublicForm>;
+
+function workflowRef(workflowId: string): Id<"workflows"> {
+  return workflowId as Id<"workflows">;
+}
+
+/**
+ * What a webhook route may know before it has proved anything: the owning org, the secret to
+ * compare the URL segment against (in the route, with `lib/timing.ts#safeEqual` — Convex has no
+ * constant-time compare) and which trigger nodes the stored graph actually has.
+ */
+export async function getWorkflowPublic(workflowId: string): Promise<WorkflowPublic> {
+  const { client, secret } = engineClient();
+  return await client.query(api.engine.getWorkflowPublic, {
+    secret,
+    workflowId: workflowRef(workflowId),
+  });
+}
+
+/** The workflows whose graph has this trigger node — optionally only those on one connection. */
+export async function listWorkflowsByTrigger(args: {
+  orgId?: string;
+  triggerType: string;
+  connectionId?: string;
+}): Promise<WorkflowForTrigger[]> {
+  const { client, secret } = engineClient();
+  return await client.query(api.engine.listWorkflowsByTrigger, { secret, ...args });
+}
+
+/**
+ * Claims an inbound delivery before it starts a run. `{ duplicate: true }` means this exact event
+ * has been seen before (providers retry) and the route should answer 200 without running anything.
+ */
+export async function recordWebhookEvent(args: {
+  source: string;
+  eventId: string;
+}): Promise<{ duplicate: boolean }> {
+  const { client, secret } = engineClient();
+  return await client.mutation(api.engine.recordWebhookEvent, { secret, ...args });
+}
+
+/** The form trigger's configuration for the public page. No org check: the page is public. */
+export async function getPublicForm(workflowId: string): Promise<PublicForm> {
+  const { client, secret } = engineClient();
+  return await client.query(api.engine.getPublicForm, {
+    secret,
+    workflowId: workflowRef(workflowId),
+  });
+}

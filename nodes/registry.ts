@@ -10,10 +10,16 @@ import { setNode } from "./logic/set";
 import { switchNode } from "./logic/switch";
 import { toJsonSchema, type JsonSchema } from "./schema";
 import { manualTrigger } from "./triggers/manual";
+import { stripeEventTriggerNode } from "./triggers/stripe-event";
+import { telegramMessageTriggerNode } from "./triggers/telegram-message";
+import { webhookTriggerNode } from "./triggers/webhook";
 
 /** Adding a connector = one file here + one line in this array. */
 const DEFINITIONS: readonly AnyNodeDef[] = [
   manualTrigger,
+  webhookTriggerNode,
+  telegramMessageTriggerNode,
+  stripeEventTriggerNode,
   conditionNode,
   switchNode,
   setNode,

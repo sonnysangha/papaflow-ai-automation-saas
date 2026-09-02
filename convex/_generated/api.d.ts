@@ -17,6 +17,7 @@ import type * as lib_validators from "../lib/validators.js";
 import type * as plan from "../plan.js";
 import type * as steps from "../steps.js";
 import type * as usage from "../usage.js";
+import type * as webhookEvents from "../webhookEvents.js";
 import type * as workflows from "../workflows.js";
 
 import type {
@@ -35,6 +36,7 @@ declare const fullApi: ApiFromModules<{
   plan: typeof plan;
   steps: typeof steps;
   usage: typeof usage;
+  webhookEvents: typeof webhookEvents;
   workflows: typeof workflows;
 }>;
 

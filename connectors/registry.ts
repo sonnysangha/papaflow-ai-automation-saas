@@ -8,6 +8,8 @@ import { groqConnector } from "./groq";
 import { mistralConnector } from "./mistral";
 import { openaiConnector } from "./openai";
 import { openrouterConnector } from "./openrouter";
+import { stripeConnector } from "./stripe";
+import { telegramConnector } from "./telegram";
 import { xaiConnector } from "./xai";
 
 /** Adding a provider = one file here + one line in this array. */
@@ -22,6 +24,8 @@ const DEFINITIONS: readonly ConnectorDef[] = [
   openrouterConnector,
   elevenlabsConnector,
   falConnector,
+  telegramConnector,
+  stripeConnector,
 ];
 
 export function buildConnectorRegistry(definitions: readonly ConnectorDef[]): Record<string, ConnectorDef> {

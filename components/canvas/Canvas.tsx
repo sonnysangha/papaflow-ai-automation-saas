@@ -323,6 +323,10 @@ export function Canvas({ workflow, runByNode, onSaveStateChange }: CanvasProps) 
           node={selected}
           nodes={nodes}
           edges={edges}
+          workflowId={workflow._id}
+          // Read straight off the live document, not the seeded snapshot: rotating the secret in
+          // another tab has to change the URL this panel shows.
+          webhookSecret={workflow.webhookSecret}
           runOutputs={runOutputs}
           setNodes={setNodes}
           onClose={deselect}

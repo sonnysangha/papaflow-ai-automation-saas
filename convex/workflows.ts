@@ -189,3 +189,24 @@ export const remove = mutation({
     return null;
   },
 });
+
+/**
+ * Issues a new webhook secret, which invalidates every URL handed out so far
+ * (`/api/hooks/<id>/<secret>`). The canvas' "Rotate secret" button is the only caller; the new
+ * secret reaches it through the live `workflows.get` subscription rather than this return value,
+ * so a second tab's URL updates at the same moment.
+ *
+ * Deliberately not a version bump: the graph did not change, so no canvas has a conflict to
+ * resolve — only `updatedAt` moves.
+ */
+export const rotateWebhookSecret = mutation({
+  args: { id: v.id("workflows") },
+  returns: v.null(),
+  handler: async (ctx, { id }) => {
+    const { orgId } = await requireOrg(ctx);
+    await workflowInOrg(ctx, id, orgId);
+
+    await ctx.db.patch(id, { webhookSecret: randomWebhookSecret(), updatedAt: Date.now() });
+    return null;
+  },
+});

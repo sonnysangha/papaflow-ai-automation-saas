@@ -41,13 +41,15 @@ function findFunctions(value: unknown, path = "$"): string[] {
 }
 
 describe("connector registry", () => {
-  it("keys the ten AI connectors by their own unique provider", () => {
+  it("keys every connector by its own unique provider (ten AI + telegram + stripe)", () => {
     const entries = Object.entries(CONNECTORS);
-    expect(entries).toHaveLength(10);
+    expect(entries).toHaveLength(12);
 
     const providers = entries.map(([, def]) => def.provider);
     expect(new Set(providers).size).toBe(providers.length);
-    expect([...providers].sort()).toEqual(AI_PROVIDERS);
+    expect(providers.filter((p) => CONNECTORS[p].category === "ai").sort()).toEqual(AI_PROVIDERS);
+    expect(providers).toContain("telegram");
+    expect(providers).toContain("stripe");
 
     for (const [key, def] of entries) {
       expect(def.provider).toBe(key);
@@ -60,7 +62,7 @@ describe("connector registry", () => {
   });
 
   it("describes every AI connector as a single free-to-add api key", () => {
-    for (const def of Object.values(CONNECTORS)) {
+    for (const def of Object.values(CONNECTORS).filter((d) => d.category === "ai")) {
       expect(def.category).toBe("ai");
       expect(def.kind).toBe("apiKey");
       expect(def.requiresFeature).toBeNull();
@@ -77,19 +79,19 @@ describe("connector registry", () => {
   it("builds a catalogue that carries no functions across the wire", () => {
     const catalogue = connectorCatalogue([]);
 
-    expect(catalogue).toHaveLength(10);
+    expect(catalogue).toHaveLength(12);
     expect(findFunctions(catalogue)).toEqual([]);
     expect(JSON.parse(JSON.stringify(catalogue))).toEqual(catalogue);
 
     for (const entry of catalogue) {
       expect(Object.keys(entry).sort()).toEqual(CATALOGUE_KEYS);
-      expect(entry.fields[0].name).toBe("apiKey");
+      if (entry.category === "ai") expect(entry.fields[0].name).toBe("apiKey");
     }
   });
 
-  it("marks every AI connector allowed for an org with no paid features", () => {
+  it("marks every connector allowed for an org with no paid features", () => {
     const catalogue = connectorCatalogue([]);
-    expect(catalogue).toHaveLength(10);
+    expect(catalogue).toHaveLength(12);
     for (const entry of catalogue) {
       expect(entry.requiresFeature).toBeNull();
       expect(entry.allowed).toBe(true);
@@ -104,10 +106,12 @@ describe("connector registry", () => {
 
   it("groups the catalogue by category and then by name", () => {
     const catalogue = connectorCatalogue([]);
-    expect(new Set(catalogue.map((entry) => entry.category))).toEqual(new Set(["ai"]));
-    expect(catalogue.map((entry) => entry.name)).toEqual(
-      [...catalogue.map((entry) => entry.name)].sort((a, b) => a.localeCompare(b)),
-    );
+    expect(new Set(catalogue.map((entry) => entry.category))).toEqual(new Set(["ai", "chat", "payments"]));
+    const order = ["ai", "chat", "data", "email", "payments"];
+    const categories = catalogue.map((entry) => order.indexOf(entry.category));
+    expect(categories).toEqual([...categories].sort((a, b) => a - b));
+    const aiNames = catalogue.filter((e) => e.category === "ai").map((entry) => entry.name);
+    expect(aiNames).toEqual([...aiNames].sort((a, b) => a.localeCompare(b)));
   });
 
   it("hints at a secret with its last four characters only", () => {

@@ -19,3 +19,7 @@
 - [ ] Task 4: app polish pass (headers, empty states, skeletons, shortcuts, sidebar search, runs filters, connections grouping).
 - [ ] Task 5: onboarding checklist + templates dialog (creates workflows via `api.workflows.create` + `saveGraph`).
 - [ ] Phase check: Lighthouse ≥ 90 on landing/pricing (performance, a11y, best practices); a new user can go from landing → sign up → first run in under 3 minutes following only on-screen hints.
+
+### Polish items noted during Phase 6 (2026-09-02)
+- Config panel field labels are raw input names (`connectionId`, `authHeader`, `url`). Humanise them: prefer a zod `.meta({ label })` when present, else split camelCase and capitalise (`connectionId` → "Connection", `authHeader` → "Auth header", `url` → "URL"). Keep the code key visible in the "Referenced in templates as" hint only.
+- The disabled PickerField (e.g. Airtable table before a base is chosen) renders an empty Base UI Select; give it the hint text inline so the state is obvious.

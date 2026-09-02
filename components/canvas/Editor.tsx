@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { ReactFlowProvider } from "@xyflow/react";
 import { useMutation, useQuery } from "convex/react";
 import { toast } from "sonner";
@@ -10,10 +10,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { cn } from "@/lib/utils";
+import { NODES } from "@/nodes/registry";
 
 import { Canvas } from "./Canvas";
-import type { SaveState } from "./graph-io";
+import { fromStoredGraph, type NodeStatus, type SaveState } from "./graph-io";
 import { NodeSidebar } from "./NodeSidebar";
+import { RunBar, type RunWorkflowAction } from "./RunBar";
 
 /** The editor fills what is left of the viewport under the 3.5rem app header. */
 const SHELL = "flex h-[calc(100vh-3.5rem)] flex-col";
@@ -95,8 +97,13 @@ function EditorSkeleton() {
             <Skeleton key={key} className="h-14 w-full" />
           ))}
         </div>
-        <div className="min-w-0 flex-1 p-3">
-          <Skeleton className="h-full w-full" />
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-3">
+            <Skeleton className="h-8 w-28" />
+          </div>
+          <div className="min-h-0 flex-1 p-3">
+            <Skeleton className="h-full w-full" />
+          </div>
         </div>
       </div>
     </div>
@@ -105,11 +112,37 @@ function EditorSkeleton() {
 
 /**
  * The workflow editor: a live `workflows.get` subscription, the node palette and the canvas.
- * Save state is owned here so the header strip can report it while `Canvas` does the work.
+ * Save state is owned here so the header strip can report it while `Canvas` does the work, and so
+ * are the two run subscriptions — the latest execution and its steps — which the RunBar reports
+ * and the canvas paints onto its nodes.
  */
-export function Editor({ workflowId }: { workflowId: Id<"workflows"> }) {
+export function Editor({
+  workflowId,
+  runWorkflow,
+}: {
+  workflowId: Id<"workflows">;
+  runWorkflow: RunWorkflowAction;
+}) {
   const workflow = useQuery(api.workflows.get, { id: workflowId });
+  const latest = useQuery(api.executions.latestByWorkflow, { workflowId });
+  // `latest` is undefined while it loads and null before the first run; neither has steps to ask
+  // for. When a new run starts, this resubscribes and the canvas resets to idle for that run.
+  const steps = useQuery(api.steps.byExecution, latest ? { executionId: latest._id } : "skip");
   const [saveState, setSaveState] = useState<SaveState>("saved");
+
+  const statusByNode = useMemo(() => {
+    const byNode: Record<string, NodeStatus> = {};
+    for (const step of steps ?? []) byNode[step.nodeId] = step.status;
+    return byNode;
+  }, [steps]);
+
+  // The trigger of the *saved* graph, which is the graph a run interprets — an unsaved trigger the
+  // user just dropped is 600ms away from being the real one, and `startRun` would not see it yet.
+  const triggerType = useMemo(() => {
+    if (!workflow) return undefined;
+    const { nodes } = fromStoredGraph(workflow.graph);
+    return nodes.find((node) => NODES[node.data.nodeType]?.category === "trigger")?.data.nodeType;
+  }, [workflow]);
 
   if (workflow === undefined) return <EditorSkeleton />;
 
@@ -127,8 +160,21 @@ export function Editor({ workflowId }: { workflowId: Id<"workflows"> }) {
 
         <div className="flex min-h-0 flex-1">
           <NodeSidebar />
-          <div className="min-w-0 flex-1">
-            <Canvas key={workflow._id} workflow={workflow} onSaveStateChange={setSaveState} />
+          <div className="flex min-w-0 flex-1 flex-col">
+            <RunBar
+              workflowId={workflow._id}
+              triggerType={triggerType}
+              latest={latest}
+              runWorkflow={runWorkflow}
+            />
+            <div className="min-h-0 flex-1">
+              <Canvas
+                key={workflow._id}
+                workflow={workflow}
+                statusByNode={statusByNode}
+                onSaveStateChange={setSaveState}
+              />
+            </div>
           </div>
         </div>
       </div>

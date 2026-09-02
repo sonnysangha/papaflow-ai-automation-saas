@@ -31,6 +31,7 @@ import {
   PAPAFLOW_NODE_TYPE,
   serializeGraph,
   toStoredGraph,
+  type NodeStatus,
   type SaveState,
   type StoredGraph,
   type WorkflowNodeType,
@@ -46,6 +47,8 @@ export type WorkflowDoc = FunctionReturnType<typeof api.workflows.get>;
 
 type CanvasProps = {
   workflow: WorkflowDoc;
+  /** Live status per node id from the latest run; anything missing is idle. */
+  statusByNode: Record<string, NodeStatus>;
   onSaveStateChange: (state: SaveState) => void;
 };
 
@@ -62,7 +65,7 @@ function convexErrorData(error: unknown): Record<string, unknown> | null {
  * `workflows.saveGraph` with the version we last saw, so a Builder agent or a second tab
  * writing at the same time is detected instead of silently overwritten.
  */
-export function Canvas({ workflow, onSaveStateChange }: CanvasProps) {
+export function Canvas({ workflow, statusByNode, onSaveStateChange }: CanvasProps) {
   const saveGraph = useMutation(api.workflows.saveGraph);
   const { screenToFlowPosition, setViewport } = useReactFlow<WorkflowNodeType, Edge>();
 
@@ -134,6 +137,24 @@ export function Canvas({ workflow, onSaveStateChange }: CanvasProps) {
     },
     [adopt, onSaveStateChange, saveGraph, workflow._id],
   );
+
+  // Live run status from the `steps` subscription, merged into the nodes React Flow renders.
+  // `toStoredGraph` drops `data.status`, so the save effect below sees an unchanged graph and
+  // nothing is written — a run lighting the canvas up never bumps the workflow version.
+  // The map is returned untouched when every node already has its status, which makes this a
+  // no-op re-render rather than a loop.
+  useEffect(() => {
+    setNodes((current) => {
+      let changed = false;
+      const next = current.map((node) => {
+        const status = statusByNode[node.id] ?? "idle";
+        if (node.data.status === status) return node;
+        changed = true;
+        return { ...node, data: { ...node.data, status } };
+      });
+      return changed ? next : current;
+    });
+  }, [setNodes, statusByNode]);
 
   // Debounced save. Re-running the effect clears the previous timer, so a drag saves 600ms
   // after it stops rather than once per frame.

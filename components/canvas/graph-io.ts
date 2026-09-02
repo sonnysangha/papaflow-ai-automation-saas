@@ -11,8 +11,11 @@ export const PAPAFLOW_NODE_TYPE = "papaflow";
 /** Drag payload: the sidebar writes a node `type` here, the canvas reads it on drop. */
 export const NODE_DRAG_MIME = "application/papaflow-node";
 
-/** Runtime-only; Phase 2 feeds it from the `steps` table. Never stored. */
-export type NodeStatus = "idle" | "running" | "success" | "failed" | "waiting";
+/**
+ * Runtime-only; fed from the `steps` table. Never stored. Every `steps.status` value plus `idle`
+ * for a node the latest run has no row for, so a step status assigns straight into node data.
+ */
+export type NodeStatus = "idle" | "running" | "success" | "failed" | "waiting" | "skipped";
 
 export type WorkflowNodeData = {
   /** Key into `NODES`, e.g. `http.request`. */

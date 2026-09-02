@@ -35,3 +35,9 @@ Decoded in the app after the Clerk Convex integration was activated and `clerk c
 - `{{org.id}}` / `{{org.role}}` shortcodes DO resolve (research had marked this unverified). `org_role` is the prefixed form (`org:admin`), `o.rol` the bare form (`admin`).
 - `pla` / `fea` are absent until Clerk Billing is enabled in Phase 11 → `requireOrg()` falls back to `free_org`.
 - QA fixture: user `qa+clerk_test@example.com` (`user_3ImKEBIo4EWm1INJJWXKaL6BhOq`, no password; signed in via `clerk impersonate … --print` tickets on `http://localhost:3000/sign-in?__clerk_ticket=…`). Delete it with `clerk api /users/user_3ImKEBIo4EWm1INJJWXKaL6BhOq -X DELETE --yes` when no longer needed.
+
+## Live-check stop points (you supply these inside the app; nothing goes into env files)
+
+- **AI key (Phase 4 check)** — Connections → Add connection → e.g. Anthropic → paste your own key → "Test & save". The model list fills from the provider; the LLM/Extract/Classify nodes then run.
+- **Telegram bot (Phase 5 check)** — create a bot with @BotFather, then Connections → Telegram → paste the token. PapaFlow registers the webhook automatically when `APP_ORIGIN` is https (on localhost it stores the inbound URL and skips `setWebhook`; use the Vercel preview URL or a tunnel for inbound tests).
+- **Stripe (Phase 5 check)** — run `stripe login` in a terminal (the CLI's saved test key has expired), then `stripe listen --forward-to localhost:3000/api/events/stripe/<connectionId>` prints a `whsec_…`; paste it into Connections → Stripe. `stripe trigger payment_intent.succeeded` then starts a run.

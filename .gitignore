@@ -44,3 +44,4 @@ next-env.d.ts
 .eve/
 .env*.local
 .clerk/
+.claude/

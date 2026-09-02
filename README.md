@@ -1,36 +1,35 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# PapaFlow
 
-## Getting Started
+n8n-style workflow automation SaaS. Teams (Clerk organisations) bring their own AI keys and connect chat/app services as **connections** inside the product, draw workflows on a React Flow canvas (or describe them to a Builder agent), and every run executes durably on Vercel Workflows.
 
-First, run the development server:
+Stack: Next.js 16 · Convex · Clerk (Organizations + Billing) · Workflow SDK 5 · eve · AI SDK 7 · React Flow · shadcn/ui (Base UI).
+
+## Setup
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+pnpm install
+clerk env pull --file .env.local          # Clerk dev keys (app is linked: `clerk whoami`)
+CONVEX_ALLOW_ANONYMOUS=false npx convex dev # first run creates/links the Convex dev deployment and writes CONVEX_* vars
+cp .env.example .env.example.check         # compare variable names with .env.local
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+`.env.example` lists every variable. `ENGINE_SECRET` must also be set on Convex (`npx convex env set ENGINE_SECRET …`) and `CLERK_FRONTEND_API_URL` points Convex at the Clerk Frontend API. See `docs/PROVISIONING.md` for what exists and the dashboard-only steps.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Commands
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+pnpm dev            # Next.js (Turbopack) — also boots the Workflow Local World and the eve dev server once those phases land
+pnpm convex:dev     # Convex dev push/watch
+pnpm typecheck      # tsc --noEmit
+pnpm lint
+pnpm test           # vitest: `unit` (node) + `convex` (edge-runtime, convex-test)
+pnpm workflow:web   # local workflow run inspector (Phase 2+)
+```
 
-## Learn More
+## Docs
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- `CLAUDE.md` — rules, layout, phases (corrected against installed versions on 2026-09-02)
+- `docs/PLAN.md` — the full plan with research and code sketches
+- `docs/PROVISIONING.md` — created resources and remaining dashboard steps
+- `docs/research/` — verified API/version research digests used by every phase
+- `docs/superpowers/plans/` — per-phase implementation plans

@@ -129,6 +129,8 @@ type RunBarProps = {
   workflowId: Id<"workflows">;
   /** The trigger node's type on the *saved* graph — the graph a run actually interprets. */
   triggerType: string | undefined;
+  /** The Manual trigger's configured sample, shown in the payload box until the user edits it. */
+  triggerSample?: string;
   latest: LatestExecution | undefined;
   runWorkflow: RunWorkflowAction;
   /** Opens the Builder chat. The editor owns whether the panel is showing. */
@@ -148,8 +150,12 @@ export function RunBar({
   runWorkflow,
   onOpenBuilder,
   builderOpen,
+  triggerSample,
 }: RunBarProps) {
-  const [sample, setSample] = useState("{}");
+  // What the user typed wins; until then the box mirrors the trigger node's own sample.
+  const [typed, setTyped] = useState<string | null>(null);
+  const sample = typed ?? triggerSample ?? "{}";
+  const setSample = setTyped;
   const [pending, startTransition] = useTransition();
   // Sticky once hit: the wall stays visible under the bar until a run actually starts, because a
   // toast that has faded is no explanation for a Run button that keeps doing nothing.

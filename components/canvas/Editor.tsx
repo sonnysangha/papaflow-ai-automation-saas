@@ -168,6 +168,15 @@ export function Editor({
     return nodes.find((node) => NODES[node.data.nodeType]?.category === "trigger")?.data.nodeType;
   }, [workflow]);
 
+  // The saved Manual trigger's sample, so the run bar shows the payload a run will actually get.
+  const triggerSample = useMemo(() => {
+    if (!workflow) return undefined;
+    const { nodes } = fromStoredGraph(workflow.graph);
+    const trigger = nodes.find((node) => NODES[node.data.nodeType]?.category === "trigger");
+    const sample = (trigger?.data.inputs as { sample?: unknown } | undefined)?.sample;
+    return typeof sample === "string" ? sample : undefined;
+  }, [workflow]);
+
   if (workflow === undefined) return <EditorSkeleton />;
 
   return (
@@ -188,6 +197,7 @@ export function Editor({
             <RunBar
               workflowId={workflow._id}
               triggerType={triggerType}
+              triggerSample={triggerSample}
               latest={latest}
               runWorkflow={runWorkflow}
               builderOpen={builderOpen}

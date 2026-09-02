@@ -156,7 +156,7 @@ export async function runNode(input: NodeInput): Promise<NodeResult> {
 
       return { nodeId, output, handle, control, ...(items ? { items } : {}) };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = describeError(error, node.data.label ?? nodeType);
       await markStep({
         executionId,
         orgId,
@@ -306,7 +306,7 @@ function asStepError(error: unknown, message: string): unknown {
     if (error.status >= 400 && error.status < 500) return new FatalError(message);
   }
 
-  if (isZodError(error)) return new FatalError(`Invalid node configuration: ${message}`);
+  if (isZodError(error)) return new FatalError(message);
 
   return error;
 }
@@ -326,6 +326,28 @@ function retryAfter(value: string | undefined): number | Date | "30s" {
 }
 
 /** `instanceof` plus the name, so a second copy of zod in the bundle still classifies correctly. */
+/**
+ * What the runs page shows for a failed step. A zod failure means the node's settings are
+ * incomplete, which is the user's to fix in the config panel, so it reads as such instead of a
+ * dumped issue list; everything else keeps the connector's own message.
+ */
+export function describeError(error: unknown, nodeLabel: string): string {
+  if (isZodError(error)) {
+    const issues = (error as { issues?: Array<{ path?: PropertyKey[]; message?: string }> }).issues ?? [];
+    const parts = issues.slice(0, 3).map((issue) => {
+      const field = String(issue.path?.[0] ?? "input");
+      if (field === "connectionId") return "Connection: choose a connection in the node's settings";
+      const label = field
+        .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+        .toLowerCase()
+        .replace(/^./, (c) => c.toUpperCase());
+      return `${label}: ${issue.message ?? "invalid"}`;
+    });
+    return `"${nodeLabel}" is not set up yet — ${parts.join("; ") || "check its settings"}.`;
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
 function isZodError(error: unknown): boolean {
   return error instanceof ZodError || (error instanceof Error && error.name === "ZodError");
 }

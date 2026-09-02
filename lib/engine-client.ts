@@ -302,12 +302,15 @@ export async function startRun(input: {
   if (!workflow) throw new Error("workflow not found");
 
   const graph = toRunGraph(workflow.graph);
+  // A Manual run pressed with an empty payload falls back to the trigger node's own sample, so a
+  // template that reads `{{ start.items }}` works before anyone touches the run bar.
+  const trigger = withTriggerSample(input.trigger, graph);
   const executionId = await createExecution({
     orgId: input.orgId,
     workflowId: input.workflowId,
     workflowVersion: workflow.version,
     planSlug: input.planSlug,
-    trigger: input.trigger,
+    trigger,
     startedBy: input.startedBy,
   });
 
@@ -320,12 +323,12 @@ export async function startRun(input: {
     nodeType: graph.nodes[graph.triggerId].data.nodeType,
     status: "success",
     attempt: 1,
-    output: input.trigger.payload,
+    output: trigger.payload,
   });
 
   const run = await start(
     runGraph,
-    [{ executionId, orgId: input.orgId, planSlug: input.planSlug, graph, trigger: input.trigger }],
+    [{ executionId, orgId: input.orgId, planSlug: input.planSlug, graph, trigger }],
     // Plaintext run metadata, filterable in the run inspector and the Vercel dashboard. Ids only.
     { attributes: { executionId, orgId: input.orgId } },
   );
@@ -499,4 +502,32 @@ export async function markScheduleFired(args: {
     firedAt: args.firedAt,
     nextAt: args.nextAt,
   });
+}
+
+/**
+ * Manual runs started with an empty payload take the trigger node's configured `sample` instead,
+ * so a template whose first node reads `{{ start.items }}` runs the moment it is added. Anything
+ * the caller typed wins; an invalid or empty sample leaves the payload as it was.
+ */
+export function withTriggerSample(trigger: Trigger, graph: ReturnType<typeof toRunGraph>): Trigger {
+  if (trigger.type !== "manual") return trigger;
+  const payload: unknown = trigger.payload;
+  const empty =
+    payload === null ||
+    payload === undefined ||
+    (typeof payload === "object" && !Array.isArray(payload) && Object.keys(payload).length === 0);
+  if (!empty) return trigger;
+  const node = graph.nodes[graph.triggerId];
+  if (node?.data.nodeType !== "manual.trigger") return trigger;
+  const sample = (node.data.inputs as { sample?: unknown } | undefined)?.sample;
+  if (typeof sample !== "string" || !sample.trim()) return trigger;
+  try {
+    const parsed: unknown = JSON.parse(sample);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && Object.keys(parsed).length > 0) {
+      return { ...trigger, payload: parsed };
+    }
+  } catch {
+    // An unparsable sample is the user's to fix in the node; the run still starts.
+  }
+  return trigger;
 }

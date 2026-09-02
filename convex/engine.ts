@@ -189,6 +189,8 @@ type ConnectionSealed = {
   secret: Doc<"connections">["secret"];
   expiresAt?: number;
   status: Doc<"connections">["status"];
+  meta: unknown;
+  requiresFeature?: string;
 } | null;
 
 /**

@@ -4,7 +4,10 @@ import { ConnectionPicker } from "@/components/connections/ConnectionPicker";
 
 export type ConnectionFieldProps = {
   id: string;
-  /** The node definition's `credential`: `"ai"` for any AI provider, otherwise a provider name. */
+  /**
+   * The node definition's `credential`: `"ai"` for any AI provider, `"any"` for any connection
+   * holding a single token, otherwise a provider name (or a family like `discord`).
+   */
   credential: string;
   value: unknown;
   onChange: (value: string | undefined) => void;

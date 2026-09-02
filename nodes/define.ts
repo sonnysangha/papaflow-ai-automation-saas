@@ -27,7 +27,10 @@ export interface NodeDef<I extends z.ZodType = z.ZodType, O extends z.ZodType = 
   category: NodeCategory;
   /** lucide icon name, resolved by the sidebar/canvas at render time. */
   icon: string;
-  /** Connection kind this node needs, or null. */
+  /**
+   * Connection this node needs, or null: a provider slug (`slack`), a family whose providers share
+   * a prefix (`discord`), `ai` for any AI provider, or `any` for any single-token connection.
+   */
   credential: string | null;
   /**
    * Set when that connection is a choice rather than a requirement: `email.send` uses the org's

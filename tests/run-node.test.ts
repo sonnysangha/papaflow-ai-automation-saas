@@ -328,6 +328,25 @@ describe("runNode credentials and plan gating", () => {
     });
   });
 
+  it("opens any provider's connection for a node whose credential is \"any\"", async () => {
+    // The HTTP node takes whatever single token the user points it at, so the step must not
+    // second-guess the provider the row turned out to hold.
+    installCredentialNode({ credential: "any" });
+    openFreshMock.mockResolvedValue(
+      opened({ provider: "slack", kind: "botToken", secret: { botToken: "xoxb-live" } }),
+    );
+    run.mockImplementation(async () => ({ ok: true }));
+
+    const result = await runNode(nodeInput(withConnection));
+
+    expect(result.output).toEqual({ ok: true });
+    expect(run.mock.calls[0][0].credential).toEqual({
+      provider: "slack",
+      kind: "botToken",
+      botToken: "xoxb-live",
+    });
+  });
+
   it("never lets the opened secret reach the step row or the run log", async () => {
     installCredentialNode();
     run.mockImplementation(async () => ({ ok: true }));

@@ -34,6 +34,7 @@ import {
   type WorkflowNodeType,
 } from "./graph-io";
 import { NodeIcon } from "./node-icon";
+import { resolvePickerKind } from "./picker-kind";
 import { buildVariableGroups, type VariableGroup } from "./VariablePicker";
 
 /** Property names that are prose rather than a value, and get a textarea. */
@@ -154,6 +155,7 @@ function NodeField({
   name,
   schema,
   value,
+  inputs,
   groups,
   credential,
   connectionId,
@@ -163,6 +165,8 @@ function NodeField({
   name: string;
   schema: JsonSchema;
   value: unknown;
+  /** Every input of this node: a picker kind may name a sibling (`tables:{baseId}`). */
+  inputs: Record<string, unknown>;
   groups: VariableGroup[];
   /** The node definition's `credential`, so `connectionId` becomes a picker instead of a text box. */
   credential: string | null;
@@ -183,13 +187,18 @@ function NodeField({
   // nothing to ask, so it stays the text box the schema would otherwise have produced.
   const picker = kind === "text" || kind === "textarea" ? pickerKind(schema) : null;
   if (picker && connectionId) {
+    // A kind may be relative to another input (`tables:{baseId}`): the list cannot be asked for
+    // until that sibling has a value, so the field waits, named after the one it is waiting on.
+    const { kind: resolved, missing } = resolvePickerKind(picker, inputs);
     return (
       <PickerField
         id={id}
-        kind={picker}
+        kind={resolved}
         connectionId={connectionId}
         value={asText(value)}
         groups={groups}
+        disabled={missing.length > 0}
+        hint={missing.length > 0 ? `Choose ${missing.join(" and ")} first` : undefined}
         onChange={(next) => onChange(next.length === 0 ? undefined : next)}
       />
     );
@@ -486,6 +495,7 @@ export function ConfigPanel({
                     name={name}
                     schema={property}
                     value={node.data.inputs[name]}
+                    inputs={node.data.inputs}
                     groups={groups}
                     credential={definition?.credential ?? null}
                     connectionId={connectionId}

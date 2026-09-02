@@ -12,6 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { ANY_CREDENTIAL, isTokenKind } from "@/connectors/define";
 import { CONNECTORS } from "@/connectors/registry";
 import { api } from "@/convex/_generated/api";
 
@@ -21,13 +22,14 @@ import { AddConnectionDialog } from "./AddConnectionDialog";
  * Which of the org's connections a node may use, and a way to add one without leaving the canvas.
  *
  * `credential` is the node definition's own field: `"ai"` means any AI-category connector (the LLM
- * node runs against whichever provider you point it at), anything else names one provider exactly.
+ * node runs against whichever provider you point it at), `"any"` means any connection holding a
+ * single token (the HTTP node sends it as a header), anything else names one provider exactly.
  * Only connection ids cross into `node.data.inputs` — the secret is opened inside the step
  * (CLAUDE.md rule 1).
  */
 export type ConnectionPickerProps = {
   id?: string;
-  /** The node's `credential`: `"ai"` for any AI provider, otherwise a provider name. */
+  /** The node's `credential`: `"ai"`, `"any"`, a provider name or a provider family. */
   credential: string;
   value: string | undefined;
   onChange: (connectionId: string | undefined) => void;
@@ -46,15 +48,28 @@ function providersFor(credential: string): string[] {
   return Object.keys(CONNECTORS).filter((provider) => provider.startsWith(`${credential}-`));
 }
 
+/**
+ * Which of the org's connections this node may be pointed at.
+ *
+ * `"any"` is not a provider and cannot be answered by provider at all: the HTTP node sends
+ * whatever single token a connection holds, so every API key and bot token qualifies — and a
+ * webhook URL or a signing secret, which are not tokens to send, does not.
+ */
+function acceptsConnection(
+  credential: string,
+): (connection: { provider: string; kind: string }) => boolean {
+  if (credential === ANY_CREDENTIAL) return (connection) => isTokenKind(connection.kind);
+
+  const providers = new Set(providersFor(credential));
+  return (connection) => providers.has(connection.provider);
+}
+
 export function ConnectionPicker({ id, credential, value, onChange }: ConnectionPickerProps) {
   const connections = useQuery(api.connections.list);
   const [addOpen, setAddOpen] = useState(false);
 
-  const providers = useMemo(() => new Set(providersFor(credential)), [credential]);
-  const matching = useMemo(
-    () => (connections ?? []).filter((connection) => providers.has(connection.provider)),
-    [connections, providers],
-  );
+  const accepts = useMemo(() => acceptsConnection(credential), [credential]);
+  const matching = useMemo(() => (connections ?? []).filter(accepts), [accepts, connections]);
 
   const selected = matching.find((connection) => connection._id === value);
   // A category picker (`credential: "ai"`) opens on step one, filtered; a single-provider node

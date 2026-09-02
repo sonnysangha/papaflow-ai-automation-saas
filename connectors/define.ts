@@ -27,3 +27,33 @@ export type ConnectorDef = {
 export function defineConnector(def: ConnectorDef): ConnectorDef {
   return def;
 }
+
+/**
+ * A `NodeDef.credential` naming a *set* of connections rather than one provider: the HTTP node
+ * sends whichever token the chosen connection holds, so any provider will do.
+ */
+export const ANY_CREDENTIAL = "any";
+
+/**
+ * The kinds that hold exactly one bearer-style token — the only ones a node can authenticate with
+ * generically. A `webhookUrl` is an address, a `signingSecret` verifies what arrives; neither is
+ * something to send in a header.
+ */
+export const TOKEN_KINDS: readonly ConnectorDef["kind"][] = ["apiKey", "botToken"];
+
+export function isTokenKind(kind: string): boolean {
+  return (TOKEN_KINDS as readonly string[]).includes(kind);
+}
+
+/**
+ * The name of the one field that is a connector's credential: `apiKey` for most, `token` for
+ * GitHub, `botToken` for Slack and Telegram. Optional secrets do not count — Slack stores a
+ * `signingSecret` beside its bot token — so a connector with anything other than exactly one
+ * required secret field has no single token to send, and answers `null`.
+ */
+export function tokenFieldName(def: ConnectorDef | undefined): string | null {
+  const names = (def?.fields ?? [])
+    .filter((field) => field.kind === "secret" && field.required !== false)
+    .map((field) => field.name);
+  return names.length === 1 ? names[0] : null;
+}

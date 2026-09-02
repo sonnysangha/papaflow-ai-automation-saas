@@ -8,9 +8,14 @@
  * @module
  */
 
+import type * as engine from "../engine.js";
+import type * as executions from "../executions.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_plan from "../lib/plan.js";
+import type * as lib_validators from "../lib/validators.js";
 import type * as plan from "../plan.js";
+import type * as steps from "../steps.js";
+import type * as usage from "../usage.js";
 import type * as workflows from "../workflows.js";
 
 import type {
@@ -20,9 +25,14 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  engine: typeof engine;
+  executions: typeof executions;
   "lib/auth": typeof lib_auth;
   "lib/plan": typeof lib_plan;
+  "lib/validators": typeof lib_validators;
   plan: typeof plan;
+  steps: typeof steps;
+  usage: typeof usage;
   workflows: typeof workflows;
 }>;
 

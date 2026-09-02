@@ -40,6 +40,9 @@ export default defineSchema({
     orgId: v.string(),
     workflowId: v.id("workflows"),
     workflowVersion: v.number(),
+    // The org's Clerk plan at the moment the run started. Snapshotted because the engine has no
+    // session and plans change: usage limits and history retention are judged against this value.
+    planSlug: v.string(),
     status: executionStatus,
     trigger: v.object({ type: v.string(), payload: v.any() }),
     runId: v.optional(v.string()),

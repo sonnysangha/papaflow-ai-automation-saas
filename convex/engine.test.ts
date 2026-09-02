@@ -512,6 +512,83 @@ describe("api.engine", () => {
     ).toEqual({ code: "unauthorized" });
   });
 
+  test("getStepById turns an Approval button's callback id back into a resumable step", async () => {
+    const { t, workflowId } = await setup();
+    const executionId = await createExecution({ t, workflowId });
+    const token = `${executionId}:approval_1:2`;
+
+    // `markStep` hands back the row id, which is exactly what the node puts in its buttons.
+    const stepId = await t.mutation(api.engine.markStep, {
+      secret: SECRET,
+      executionId,
+      orgId: ORG,
+      nodeId: "approval_1",
+      nodeType: "logic.approval",
+      status: "waiting",
+      attempt: 1,
+      output: { posted: true, provider: "slack" },
+      hookToken: token,
+      iteration: 2,
+    });
+
+    const found = await t.query(api.engine.getStepById, { secret: SECRET, stepId });
+    expect(found).toEqual({
+      _id: stepId,
+      executionId,
+      orgId: ORG,
+      nodeId: "approval_1",
+      nodeType: "logic.approval",
+      status: "waiting",
+      iteration: 2,
+      hookToken: token,
+    });
+    // Ids and status only: a resume route has proved a provider signature, not a right to read the
+    // run's data, so the node's `input` and `output` never leave through here (CLAUDE.md rule 1).
+    expect(Object.keys(found ?? {}).sort()).toEqual([
+      "_id",
+      "executionId",
+      "hookToken",
+      "iteration",
+      "nodeId",
+      "nodeType",
+      "orgId",
+      "status",
+    ]);
+
+    expect(
+      await convexErrorData(t.query(api.engine.getStepById, { secret: "not-the-secret", stepId })),
+    ).toEqual({ code: "unauthorized" });
+  });
+
+  test("setExecutionStatus moves a run in and out of waiting, and never reopens a finished one", async () => {
+    const { t, workflowId } = await setup();
+    const executionId = await createExecution({ t, workflowId });
+
+    const statusOf = async () => (await t.run(async (ctx) => ctx.db.get(executionId)))?.status;
+
+    await t.mutation(api.engine.setExecutionStatus, { secret: SECRET, executionId, status: "waiting" });
+    expect(await statusOf()).toBe("waiting");
+
+    await t.mutation(api.engine.setExecutionStatus, { secret: SECRET, executionId, status: "running" });
+    expect(await statusOf()).toBe("running");
+
+    await t.mutation(api.engine.finishExecution, { secret: SECRET, executionId, status: "completed" });
+
+    // A record step that lands after the run ended must not resurrect it.
+    await t.mutation(api.engine.setExecutionStatus, { secret: SECRET, executionId, status: "waiting" });
+    expect(await statusOf()).toBe("completed");
+
+    expect(
+      await convexErrorData(
+        t.mutation(api.engine.setExecutionStatus, {
+          secret: "not-the-secret",
+          executionId,
+          status: "waiting",
+        }),
+      ),
+    ).toEqual({ code: "unauthorized" });
+  });
+
   test("markSkipped only writes rows for nodes that never ran", async () => {
     const { t, workflowId } = await setup();
     const executionId = await createExecution({ t, workflowId });

@@ -2,7 +2,14 @@ import { createHook, sleep } from "workflow";
 
 import { DONE_HANDLE } from "@/nodes/logic/loop";
 import { loopBody, loopBodyNodes, nextNodes, unvisited } from "@/workflows/graph";
-import { recordFinish, recordLoop, recordResume, recordSkipped } from "@/workflows/steps/record";
+import {
+  recordFinish,
+  recordLoop,
+  recordResume,
+  recordSkipped,
+  recordSlept,
+  recordSuspend,
+} from "@/workflows/steps/record";
 import { runNode } from "@/workflows/steps/run-node";
 import { hookTokenFor, type HookPayload, type RunInput } from "@/workflows/types";
 
@@ -80,14 +87,23 @@ export async function runGraph({ executionId, orgId, planSlug, graph, trigger }:
         let output = r.output;
         let handle = r.handle;
 
-        // Wait node: suspends the run without holding compute.
-        if (r.control?.kind === "sleep") await sleep(r.control.ms);
+        // Wait node: suspends the run without holding compute. `runNode` left the step row open
+        // (`waiting`), so the canvas says "Waiting" for the whole sleep and `recordSlept` is what
+        // finally turns it green.
+        if (r.control?.kind === "sleep") {
+          await recordSuspend(executionId);
+          await sleep(r.control.ms);
+          await recordSlept(executionId, r.nodeId, output);
+        }
 
         // Approval and Wait-for-webhook: suspend until something outside calls
         // `resumeHook(token, payload)`. The token is derived from the run, so the resumer only
         // needs ids it already has.
         if (r.control?.kind === "hook") {
           using hook = createHook<HookPayload>({ token: hookTokenFor(executionId, r.nodeId) });
+          // Last thing before the await, on purpose: `createHook()` does not register its token
+          // until the workflow suspends, and a step call is a suspension.
+          await recordSuspend(executionId);
           output = await hook;
           // The branch can only be known now: an Approval's `approved`/`rejected` handle is the
           // resumer's answer, not the node's. A payload that names one wins over `handle(out)`.
@@ -130,11 +146,16 @@ export async function runGraph({ executionId, orgId, planSlug, graph, trigger }:
               let bodyOutput = b.output;
               // Wait and Approval work inside a body too; the hook token carries the pass so two
               // suspended iterations of the same node cannot share an address.
-              if (b.control?.kind === "sleep") await sleep(b.control.ms);
+              if (b.control?.kind === "sleep") {
+                await recordSuspend(executionId);
+                await sleep(b.control.ms);
+                await recordSlept(executionId, bodyId, bodyOutput, iteration);
+              }
               if (b.control?.kind === "hook") {
                 using hook = createHook<HookPayload>({
                   token: hookTokenFor(executionId, bodyId, iteration),
                 });
+                await recordSuspend(executionId);
                 bodyOutput = await hook;
                 await recordResume(
                   executionId,

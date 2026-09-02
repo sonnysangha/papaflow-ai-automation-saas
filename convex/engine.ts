@@ -176,14 +176,61 @@ export const getStepByHookToken = query({
   },
 });
 
-/** Upserts the one row per execution+node: `running` first, then the terminal status. */
+/**
+ * The step one Convex id names — how an Approval button becomes a hook token.
+ *
+ * The button carries `approve:<stepRowId>` because Telegram caps `callback_data` at 64 bytes and a
+ * hook token is not bounded; the route reads the row here and derives the token from the ids on it.
+ * Like `getStepByHookToken` this is ids and status only, and the caller re-checks `orgId` against
+ * the connection the delivery arrived on before it resumes anything.
+ */
+type StepById = {
+  _id: Id<"steps">;
+  executionId: Id<"executions">;
+  orgId: string;
+  nodeId: string;
+  nodeType: string;
+  status: Doc<"steps">["status"];
+  iteration?: number;
+  hookToken?: string;
+} | null;
+
+const stepByIdResult = v.union(
+  v.object({
+    _id: v.id("steps"),
+    executionId: v.id("executions"),
+    orgId: v.string(),
+    nodeId: v.string(),
+    nodeType: v.string(),
+    status: stepStatusValidator,
+    iteration: v.optional(v.number()),
+    hookToken: v.optional(v.string()),
+  }),
+  v.null(),
+);
+
+/** The step row an Approval callback id names, or null when there is no such row. */
+export const getStepById = query({
+  args: { secret: v.string(), stepId: v.id("steps") },
+  returns: stepByIdResult,
+  handler: async (ctx, { secret, ...args }): Promise<StepById> => {
+    guard(secret);
+    return await ctx.runQuery(internal.steps.byId, args);
+  },
+});
+
+/**
+ * Upserts the one row per execution+node: `running` first, then the terminal status.
+ *
+ * Returns the row's id, which is what an Approval node puts inside its buttons: `run` needs a short,
+ * stable address for this node of this run, and the row it is already being written into is one.
+ */
 export const markStep = mutation({
   args: { secret: v.string(), ...stepMarkArgs },
-  returns: v.null(),
-  handler: async (ctx, { secret, ...args }) => {
+  returns: v.id("steps"),
+  handler: async (ctx, { secret, ...args }): Promise<Id<"steps">> => {
     guard(secret);
-    await ctx.runMutation(internal.steps.mark, args);
-    return null;
+    return await ctx.runMutation(internal.steps.mark, args);
   },
 });
 
@@ -199,6 +246,24 @@ export const markSkipped = mutation({
   handler: async (ctx, { secret, ...args }) => {
     guard(secret);
     await ctx.runMutation(internal.steps.markSkipped, args);
+    return null;
+  },
+});
+
+/**
+ * Moves a run between `running` and `waiting` while it is suspended — a Wait's `sleep()`, an
+ * Approval's hook. Terminal rows are left alone, so a late call cannot reopen a finished run.
+ */
+export const setExecutionStatus = mutation({
+  args: {
+    secret: v.string(),
+    executionId: v.id("executions"),
+    status: v.union(v.literal("running"), v.literal("waiting")),
+  },
+  returns: v.null(),
+  handler: async (ctx, { secret, ...args }) => {
+    guard(secret);
+    await ctx.runMutation(internal.executions.setStatus, args);
     return null;
   },
 });

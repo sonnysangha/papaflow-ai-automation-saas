@@ -33,7 +33,7 @@ describe("node registry", () => {
 
   it("builds a catalogue for a plan's features", () => {
     const catalogue = nodeCatalogue(["core_connectors"]);
-    expect(catalogue).toHaveLength(24);
+    expect(catalogue).toHaveLength(25);
     expect(catalogue.map((entry) => entry.type).sort()).toEqual([
       "ai.classify",
       "ai.extract",
@@ -45,6 +45,7 @@ describe("node registry", () => {
       "github.createIssue",
       "http.request",
       "linear.createIssue",
+      "logic.approval",
       "logic.condition",
       "logic.loop",
       "logic.set",
@@ -78,6 +79,8 @@ describe("node registry", () => {
 
     // A Switch with no cases yet still offers somewhere for the run to go.
     expect(handles["logic.condition"]).toEqual(["true", "false"]);
+    // The answer picks the branch: the resumed payload's `handle` is one of exactly these two.
+    expect(handles["logic.approval"]).toEqual(["approved", "rejected"]);
     expect(handles["logic.switch"]).toEqual(["default"]);
     // The body hangs off `each`; the run carries on from `done` when the items run out.
     expect(handles["logic.loop"]).toEqual(["each", "done"]);
@@ -92,6 +95,7 @@ describe("node registry", () => {
       "trigger",
       "trigger",
       "trigger",
+      "logic",
       "logic",
       "logic",
       "logic",
@@ -116,7 +120,7 @@ describe("node registry", () => {
 
   it("still allows nodes whose requiresFeature is null when the org has no features", () => {
     const catalogue = nodeCatalogue([]);
-    expect(catalogue).toHaveLength(24);
+    expect(catalogue).toHaveLength(25);
     for (const entry of catalogue) {
       expect(entry.requiresFeature).toBeNull();
       expect(entry.allowed).toBe(true);

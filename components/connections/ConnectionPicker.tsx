@@ -12,7 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ANY_CREDENTIAL, isTokenKind } from "@/connectors/define";
+import { ANY_CREDENTIAL, CHAT_CREDENTIAL, CHAT_PROVIDERS, isTokenKind } from "@/connectors/define";
 import { CONNECTORS } from "@/connectors/registry";
 import { api } from "@/convex/_generated/api";
 
@@ -37,6 +37,10 @@ export type ConnectionPickerProps = {
 
 /** The providers a node with this `credential` accepts. */
 function providersFor(credential: string): string[] {
+  // `chat` is not a category and not a prefix: it is the three chat apps that can render buttons a
+  // person presses back. A Discord *webhook* and a Teams Workflows URL post messages and can never
+  // answer one, so an Approval node must not offer them.
+  if (credential === CHAT_CREDENTIAL) return [...CHAT_PROVIDERS];
   if (credential === "ai") {
     return Object.values(CONNECTORS)
       .filter((definition) => definition.category === "ai")
@@ -146,7 +150,9 @@ export function ConnectionPicker({ id, credential, value, onChange }: Connection
         open={addOpen}
         onOpenChange={setAddOpen}
         provider={preselect}
-        category={credential === "ai" ? "ai" : undefined}
+        category={
+          credential === "ai" ? "ai" : credential === CHAT_CREDENTIAL ? "chat" : undefined
+        }
         onCreated={(created) => onChange(created.id)}
       />
     </div>

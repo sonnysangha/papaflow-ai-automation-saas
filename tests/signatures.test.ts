@@ -1,15 +1,20 @@
-import { createHmac } from "node:crypto";
+import { createHmac, generateKeyPairSync, sign as signEd25519, type KeyObject } from "node:crypto";
 
 import { describe, expect, it } from "vitest";
 
+import { verifyDiscord } from "@/lib/signatures/discord";
+import { verifySlack } from "@/lib/signatures/slack";
 import { verifyStripe } from "@/lib/signatures/stripe";
 import { verifyTelegram } from "@/lib/signatures/telegram";
 import { safeEqual } from "@/lib/signatures/timing";
 
 /**
- * Signature verification is the only code in the app a stranger can call at will, so every case
- * here is built from a signature computed with Node crypto rather than a fixture: a test that
+ * Signature verification is the only code in the app a stranger can call at will, so almost every
+ * case here is built from a signature computed with Node crypto rather than a fixture: a test that
  * hardcoded a digest would keep passing if the signed payload silently changed shape.
+ *
+ * The one deliberate exception is Slack's own published example vector, which pins the *shape* of
+ * the signed string (`v0:{ts}:{body}`) that a computed expectation could not catch drifting.
  */
 
 const SECRET = "whsec_test_ZmFrZS1zaWduaW5nLXNlY3JldA";
@@ -181,5 +186,218 @@ describe("verifyTelegram", () => {
     expect(verifyTelegram("", "")).toBe(false);
     expect(verifyTelegram(TOKEN, "")).toBe(false);
     expect(verifyTelegram(null, "")).toBe(false);
+  });
+});
+
+describe("verifySlack", () => {
+  /**
+   * Slack's own published example (docs.slack.dev, "Verifying requests from Slack"): this exact
+   * secret, timestamp and body produce this exact signature. It is the one hardcoded digest in this
+   * file, and it is here on purpose — a computed expectation would keep passing if the string being
+   * signed silently changed from `v0:{ts}:{body}` to something else.
+   */
+  const DOC_SECRET = "8f742231b10e8888abcd99yyyzzz85a5";
+  const DOC_TIMESTAMP = "1531420618";
+  const DOC_BODY =
+    "token=xyzz0WbapA4vBCDEFasx0q6G&team_id=T1DC2JH3J&team_domain=testteamnow&channel_id=G8PSS9T3V&channel_name=foobar&user_id=U2CERLKJA&user_name=roadrunner&command=%2Fwebhook-collect&text=&response_url=https%3A%2F%2Fhooks.slack.com%2Fcommands%2FT1DC2JH3J%2F397700885554%2F96rGlfmibIGlgcZRskXaIFfN&trigger_id=398738663015.47445629121.803a0bc887a14d10d2c447fce8b6703c";
+  const DOC_SIGNATURE = "v0=a2114d57b48eac39b9ad189dd8316235a7b4a8d21a10bd27519666489c69b503";
+  /** The clock the doc vector was signed under, so its five-minute window is open. */
+  const DOC_NOW = Number(DOC_TIMESTAMP) * 1000;
+
+  const SIGNING_SECRET = "slack-signing-secret-abcdef0123456789";
+  const PAYLOAD = `payload=${encodeURIComponent(JSON.stringify({ type: "block_actions" }))}`;
+
+  /** Exactly what Slack does: `v0=` plus the hex HMAC-SHA256 over `v0:{ts}:{rawBody}`. */
+  function slackSignature(timestamp: number | string, body: string, secret = SIGNING_SECRET): string {
+    return `v0=${createHmac("sha256", secret).update(`v0:${timestamp}:${body}`).digest("hex")}`;
+  }
+
+  it("accepts Slack's own documented vector", () => {
+    expect(
+      verifySlack(DOC_BODY, DOC_TIMESTAMP, DOC_SIGNATURE, DOC_SECRET, { now: DOC_NOW }),
+    ).toEqual({ ok: true });
+  });
+
+  it("rejects that vector under a different signing secret", () => {
+    expect(
+      verifySlack(DOC_BODY, DOC_TIMESTAMP, DOC_SIGNATURE, "someone-elses-secret", { now: DOC_NOW }),
+    ).toEqual({ ok: false, reason: "no_matching_signature" });
+  });
+
+  it("accepts a freshly computed form-encoded interactivity payload", () => {
+    expect(
+      verifySlack(PAYLOAD, String(T), slackSignature(T, PAYLOAD), SIGNING_SECRET, { now: NOW }),
+    ).toEqual({ ok: true });
+  });
+
+  it("rejects a body tampered with after signing", () => {
+    const signed = slackSignature(T, PAYLOAD);
+    const tampered = `${PAYLOAD}&extra=1`;
+
+    expect(verifySlack(tampered, String(T), signed, SIGNING_SECRET, { now: NOW })).toEqual({
+      ok: false,
+      reason: "no_matching_signature",
+    });
+  });
+
+  it("rejects a signature lifted onto a different timestamp", () => {
+    const signed = slackSignature(T, PAYLOAD);
+
+    expect(verifySlack(PAYLOAD, String(T - 1), signed, SIGNING_SECRET, { now: NOW })).toEqual({
+      ok: false,
+      reason: "no_matching_signature",
+    });
+  });
+
+  it("rejects a stale timestamp and accepts one inside the five-minute window", () => {
+    const stale = T - 301;
+    expect(
+      verifySlack(PAYLOAD, String(stale), slackSignature(stale, PAYLOAD), SIGNING_SECRET, {
+        now: NOW,
+      }),
+    ).toEqual({ ok: false, reason: "timestamp_out_of_tolerance" });
+
+    const recent = T - 3;
+    expect(
+      verifySlack(PAYLOAD, String(recent), slackSignature(recent, PAYLOAD), SIGNING_SECRET, {
+        now: NOW,
+      }),
+    ).toEqual({ ok: true });
+  });
+
+  it("rejects a timestamp too far in the future, and honours a custom tolerance", () => {
+    const ahead = T + 600;
+    expect(
+      verifySlack(PAYLOAD, String(ahead), slackSignature(ahead, PAYLOAD), SIGNING_SECRET, {
+        now: NOW,
+      }),
+    ).toEqual({ ok: false, reason: "timestamp_out_of_tolerance" });
+
+    expect(
+      verifySlack(PAYLOAD, String(ahead), slackSignature(ahead, PAYLOAD), SIGNING_SECRET, {
+        now: NOW,
+        toleranceSeconds: 900,
+      }),
+    ).toEqual({ ok: true });
+  });
+
+  it("names each way the headers can be unusable", () => {
+    const signature = slackSignature(T, PAYLOAD);
+
+    expect(verifySlack(PAYLOAD, null, signature, SIGNING_SECRET, { now: NOW })).toEqual({
+      ok: false,
+      reason: "missing_headers",
+    });
+    expect(verifySlack(PAYLOAD, String(T), null, SIGNING_SECRET, { now: NOW })).toEqual({
+      ok: false,
+      reason: "missing_headers",
+    });
+    expect(verifySlack(PAYLOAD, "later", signature, SIGNING_SECRET, { now: NOW })).toEqual({
+      ok: false,
+      reason: "malformed_timestamp",
+    });
+    // A bare hex digest without the `v0=` prefix is not the header Slack sends.
+    expect(
+      verifySlack(PAYLOAD, String(T), signature.slice(3), SIGNING_SECRET, { now: NOW }),
+    ).toEqual({ ok: false, reason: "no_matching_signature" });
+  });
+
+  it("refuses to verify anything when the connection has no signing secret", () => {
+    expect(verifySlack(PAYLOAD, String(T), slackSignature(T, PAYLOAD), "", { now: NOW })).toEqual({
+      ok: false,
+      reason: "missing_secret",
+    });
+  });
+
+  it("defaults the tolerance to five minutes against the real clock", () => {
+    const fresh = Math.floor(Date.now() / 1000);
+    expect(
+      verifySlack(PAYLOAD, String(fresh), slackSignature(fresh, PAYLOAD), SIGNING_SECRET),
+    ).toEqual({ ok: true });
+
+    const stale = fresh - 3600;
+    expect(
+      verifySlack(PAYLOAD, String(stale), slackSignature(stale, PAYLOAD), SIGNING_SECRET),
+    ).toEqual({ ok: false, reason: "timestamp_out_of_tolerance" });
+  });
+});
+
+describe("verifyDiscord", () => {
+  /**
+   * A real Ed25519 keypair, generated here rather than fixed: Discord's public key is 32 raw bytes
+   * as hex and the signature is over `timestamp + rawBody`, so the only honest way to test the
+   * verifier is to sign the same way Discord does and then break it in each direction.
+   */
+  function keypair(): { publicKeyHex: string; privateKey: KeyObject } {
+    const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+    // The JWK `x` is the raw 32-byte point, base64url — exactly what the dashboard prints as hex.
+    const jwk = publicKey.export({ format: "jwk" }) as { x?: string };
+    return {
+      publicKeyHex: Buffer.from(jwk.x ?? "", "base64url").toString("hex"),
+      privateKey,
+    };
+  }
+
+  function discordSignature(timestamp: string, body: string, privateKey: KeyObject): string {
+    return signEd25519(null, Buffer.from(`${timestamp}${body}`, "utf8"), privateKey).toString("hex");
+  }
+
+  const TIMESTAMP = "1756800000";
+  const BODY = JSON.stringify({ type: 3, data: { custom_id: "approve:st_1" } });
+
+  it("accepts an interaction signed by the application's own key", () => {
+    const { publicKeyHex, privateKey } = keypair();
+    expect(publicKeyHex).toHaveLength(64);
+
+    const signature = discordSignature(TIMESTAMP, BODY, privateKey);
+    expect(verifyDiscord(BODY, TIMESTAMP, signature, publicKeyHex)).toBe(true);
+    // Case does not matter: the dashboard prints lower case, but hex is hex.
+    expect(verifyDiscord(BODY, TIMESTAMP, signature.toUpperCase(), publicKeyHex)).toBe(true);
+  });
+
+  it("rejects a body tampered with after signing", () => {
+    const { publicKeyHex, privateKey } = keypair();
+    const signature = discordSignature(TIMESTAMP, BODY, privateKey);
+    const tampered = BODY.replace("approve", "reject");
+
+    expect(verifyDiscord(tampered, TIMESTAMP, signature, publicKeyHex)).toBe(false);
+  });
+
+  it("rejects a signature lifted onto a different timestamp", () => {
+    const { publicKeyHex, privateKey } = keypair();
+    const signature = discordSignature(TIMESTAMP, BODY, privateKey);
+
+    expect(verifyDiscord(BODY, "1756800001", signature, publicKeyHex)).toBe(false);
+  });
+
+  it("rejects a valid signature made with somebody else's key", () => {
+    const mine = keypair();
+    const theirs = keypair();
+    const signature = discordSignature(TIMESTAMP, BODY, theirs.privateKey);
+
+    expect(verifyDiscord(BODY, TIMESTAMP, signature, mine.publicKeyHex)).toBe(false);
+    // …and the same signature is fine against the key that actually made it.
+    expect(verifyDiscord(BODY, TIMESTAMP, signature, theirs.publicKeyHex)).toBe(true);
+  });
+
+  it("rejects missing, short and non-hex headers rather than throwing", () => {
+    const { publicKeyHex, privateKey } = keypair();
+    const signature = discordSignature(TIMESTAMP, BODY, privateKey);
+
+    expect(verifyDiscord(BODY, null, signature, publicKeyHex)).toBe(false);
+    expect(verifyDiscord(BODY, TIMESTAMP, null, publicKeyHex)).toBe(false);
+    expect(verifyDiscord(BODY, TIMESTAMP, "", publicKeyHex)).toBe(false);
+    expect(verifyDiscord(BODY, TIMESTAMP, signature.slice(0, -2), publicKeyHex)).toBe(false);
+    expect(verifyDiscord(BODY, TIMESTAMP, `zz${signature.slice(2)}`, publicKeyHex)).toBe(false);
+  });
+
+  it("rejects everything when the connection stored no usable public key", () => {
+    const { privateKey } = keypair();
+    const signature = discordSignature(TIMESTAMP, BODY, privateKey);
+
+    expect(verifyDiscord(BODY, TIMESTAMP, signature, "")).toBe(false);
+    expect(verifyDiscord(BODY, TIMESTAMP, signature, "not-hex")).toBe(false);
+    // Right length, wrong alphabet.
+    expect(verifyDiscord(BODY, TIMESTAMP, signature, "z".repeat(64))).toBe(false);
   });
 });

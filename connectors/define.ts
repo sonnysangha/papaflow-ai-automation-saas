@@ -35,6 +35,24 @@ export function defineConnector(def: ConnectorDef): ConnectorDef {
 export const ANY_CREDENTIAL = "any";
 
 /**
+ * A `NodeDef.credential` naming the chat apps that can render *buttons* a person presses, which is
+ * a smaller set than "the chat category": a Discord webhook posts a message and can never receive
+ * an interaction back, and a Teams Workflows webhook explicitly does not support buttons
+ * (docs/research/connectors-chat.md). The Approval node uses this.
+ */
+export const CHAT_CREDENTIAL = "chat";
+
+/** The three providers `CHAT_CREDENTIAL` accepts, each with a signed inbound route of its own. */
+export const CHAT_PROVIDERS: readonly string[] = ["slack", "discord-bot", "telegram"];
+
+/**
+ * The picker kind a node asks for when it needs "somewhere to post" and does not care which of the
+ * three chat providers answers: each connector aliases it onto its own list (Slack channels,
+ * Discord channels, Telegram chats), so one field works for all three.
+ */
+export const TARGETS_PICKER = "targets";
+
+/**
  * The kinds that hold exactly one bearer-style token — the only ones a node can authenticate with
  * generically. A `webhookUrl` is an address, a `signingSecret` verifies what arrives; neither is
  * something to send in a header.

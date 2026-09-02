@@ -6,7 +6,7 @@
 // The generated token is stored *inside* the sealed secret rather than in `meta`: `meta` is
 // projected to the client by the connections list, and this value is what authenticates every
 // inbound update (CLAUDE.md rule 1).
-import { defineConnector } from "./define";
+import { defineConnector, TARGETS_PICKER } from "./define";
 
 const TIMEOUT_MS = 15_000;
 
@@ -147,7 +147,8 @@ export const telegramConnector = defineConnector({
    * options the Send-message node's picker shows.
    */
   async pick(kind, _secret, meta) {
-    if (kind !== "chats") return [];
+    // `targets` is the Approval node's provider-agnostic kind; a Telegram "target" is a chat.
+    if (kind !== "chats" && kind !== TARGETS_PICKER) return [];
     return knownChats(meta).map((chat) => ({ id: String(chat.id), label: chatLabel(chat) }));
   },
 });

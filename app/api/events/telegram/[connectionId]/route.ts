@@ -1,6 +1,8 @@
 import { updateConnectionMeta } from "@/lib/engine-client";
+import { resumeByStepId } from "@/lib/hooks";
 import { fanOut, loadConnection } from "@/lib/inbound";
 import { verifyTelegram } from "@/lib/signatures/telegram";
+import { parseApprovalCallback } from "@/nodes/logic/approval";
 
 /**
  * `POST /api/events/telegram/:connectionId` — every update the connected bot receives.
@@ -10,6 +12,10 @@ import { verifyTelegram } from "@/lib/signatures/telegram";
  * `X-Telegram-Bot-Api-Secret-Token` on every delivery. That header is the whole verification —
  * Telegram signs nothing — so it is compared in constant time against the token sealed inside this
  * connection's secret (`lib/signatures/telegram.ts`).
+ *
+ * Two kinds of update do something here. A `message` starts every workflow whose `telegram.message`
+ * trigger names this connection; a `callback_query` carrying `approve:<stepId>` / `reject:<stepId>`
+ * is an Approval button being pressed, and resumes the one run waiting on it.
  *
  * Telegram gives a webhook a short deadline and retries anything that is not a 2xx, so the answer
  * is always 200 once the token has proved the caller: an update this build does not act on is not
@@ -21,12 +27,22 @@ export const runtime = "nodejs";
 
 const TRIGGER_TYPE = "telegram.message";
 
+/** Telegram's webhook deadline is short; the two tidy-up calls must not be what blows it. */
+const CALLBACK_TIMEOUT_MS = 5_000;
+
 type RouteContext = { params: Promise<{ connectionId: string }> };
 
 /** The slice of a Bot API update this route reads. Everything else rides along in `update`. */
 type TelegramChat = { id?: unknown; type?: unknown; title?: unknown; first_name?: unknown };
-type TelegramMessage = { chat?: TelegramChat; text?: unknown; from?: unknown };
-type TelegramUpdate = { message?: TelegramMessage; callback_query?: { message?: TelegramMessage } };
+type TelegramMessage = { message_id?: unknown; chat?: TelegramChat; text?: unknown; from?: unknown };
+type TelegramFrom = { username?: unknown; first_name?: unknown; id?: unknown };
+type TelegramCallbackQuery = {
+  id?: unknown;
+  data?: unknown;
+  from?: TelegramFrom;
+  message?: TelegramMessage;
+};
+type TelegramUpdate = { message?: TelegramMessage; callback_query?: TelegramCallbackQuery };
 
 /** A chat as `meta.chat_ids` stores it: what the Send-message picker needs, and nothing more. */
 type KnownChat = { id: string; type?: string; title?: string; first_name?: string };
@@ -41,7 +57,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /**
  * The chat an update happened in. A `callback_query` carries its chat one level deeper, and it is
- * worth learning even though nothing acts on the button press yet (Phase 8).
+ * worth learning from either way — an Approval pressed in a group is how that group becomes
+ * pickable in the Send-message node.
  */
 function chatOf(update: TelegramUpdate): TelegramChat | null {
   const chat = update.message?.chat ?? update.callback_query?.message?.chat;
@@ -100,6 +117,53 @@ async function learnChat(
   }
 }
 
+/** Whoever pressed the button, as Telegram names them. */
+function pressedBy(from: TelegramFrom | undefined): string {
+  for (const value of [from?.username, from?.first_name]) {
+    if (typeof value === "string" && value) return value;
+  }
+  return from?.id === undefined ? "someone" : String(from.id);
+}
+
+/**
+ * Clears the spinner on the pressed button and takes the keyboard away, so the same approval cannot
+ * be pressed twice — Telegram has no "replace the message" response the way Slack and Discord do,
+ * so both are separate Bot API calls made after the run has already been resumed.
+ *
+ * Failures are logged, never surfaced: the run has resumed, and a stuck spinner is not worth
+ * telling Telegram to redeliver the press. The token is in the URL, so no message here echoes it.
+ */
+async function closeButtons(
+  token: string,
+  callback: TelegramCallbackQuery,
+  text: string,
+): Promise<void> {
+  const call = async (method: string, body: unknown): Promise<void> => {
+    const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(CALLBACK_TIMEOUT_MS),
+    });
+    if (!response.ok) console.error(`telegram: ${method} answered ${response.status}`);
+  };
+
+  await call("answerCallbackQuery", { callback_query_id: String(callback.id ?? ""), text }).catch(
+    (cause: unknown) => console.error("telegram: answerCallbackQuery failed", cause),
+  );
+
+  const chatId = callback.message?.chat?.id;
+  const messageId = callback.message?.message_id;
+  if (chatId === undefined || messageId === undefined) return;
+
+  await call("editMessageReplyMarkup", {
+    chat_id: String(chatId),
+    message_id: messageId,
+    // An empty keyboard is how the buttons go away without touching the message text.
+    reply_markup: { inline_keyboard: [] },
+  }).catch((cause: unknown) => console.error("telegram: editMessageReplyMarkup failed", cause));
+}
+
 export async function POST(request: Request, { params }: RouteContext): Promise<Response> {
   const { connectionId } = await params;
 
@@ -125,8 +189,46 @@ export async function POST(request: Request, { params }: RouteContext): Promise<
   const chat = chatOf(update);
   if (chat) await learnChat(connectionId, connection.orgId, connection.meta, chat);
 
-  // Only messages start runs today. A `callback_query` is learned from and acknowledged; acting on
-  // one needs the Approval buttons that arrive in Phase 8.
+  // An Approval button. Resume first (the run is what the presser is waiting on), then tidy the
+  // message up. A `callback_query` this build did not send is acknowledged and ignored.
+  const callbackQuery = update.callback_query;
+  const callback = callbackQuery ? parseApprovalCallback(callbackQuery.data) : null;
+  if (callbackQuery && callback) {
+    const by = pressedBy(callbackQuery.from);
+    const botToken =
+      typeof connection.secret.botToken === "string" ? connection.secret.botToken : "";
+
+    let resumed = false;
+    try {
+      const result = await resumeByStepId(
+        callback.stepId,
+        {
+          approved: callback.approved,
+          by,
+          provider: "telegram",
+          // `runGraph` follows a resumed payload's `handle` over the node's own.
+          handle: callback.approved ? "approved" : "rejected",
+        },
+        connection.orgId,
+      );
+      resumed = result.ok;
+    } catch (cause) {
+      console.error("telegram: could not resume the run", cause);
+    }
+
+    if (botToken) {
+      const answer = resumed
+        ? callback.approved
+          ? `✅ Approved by ${by}`
+          : `❌ Rejected by ${by}`
+        : "This approval is no longer waiting.";
+      await closeButtons(botToken, callbackQuery, answer);
+    }
+
+    return Response.json({ ok: true, resumed });
+  }
+
+  // Only messages start runs.
   const message = update.message;
   if (!message || !chat) return Response.json({ ok: true, started: 0 });
 

@@ -49,6 +49,7 @@ import {
 import { formatAbsoluteTime, formatRelativeTime } from "@/components/workflows/relative-time";
 import { CONNECTORS } from "@/connectors/registry";
 import { api } from "@/convex/_generated/api";
+import { appOrigin } from "@/lib/app-origin";
 import { cn } from "@/lib/utils";
 
 import { AddConnectionDialog } from "./AddConnectionDialog";
@@ -77,34 +78,63 @@ function modelCount(meta: unknown): number | null {
 }
 
 /**
- * Where this connection's provider should send its events. Written by the connector's `afterCreate`
+ * Where this connection's provider should send its events, and what the user has to do about it.
+ *
+ * Two ways a connection gets one. `meta.inboundUrl` is written by the connector's `afterCreate`
  * (`connectors/{telegram,stripe}.ts`), because the URL contains the connection id and so cannot
- * exist before the row does. Absent for every connector that has nothing inbound to offer.
+ * exist before the row does. Slack and Discord have nothing to register at connect time — their
+ * URLs are pasted into an app's settings by hand — so those are derived here from the id the row
+ * already has. Everything else has nothing inbound to offer and gets no row.
  */
-function inboundUrl(meta: unknown): string | null {
-  if (typeof meta !== "object" || meta === null) return null;
-  const url = (meta as { inboundUrl?: unknown }).inboundUrl;
-  return typeof url === "string" && url.length > 0 ? url : null;
-}
+function inboundFor(connection: Connection): { url: string; hint: string } | null {
+  const meta = typeof connection.meta === "object" && connection.meta !== null ? connection.meta : {};
+  const registered = (meta as { inboundUrl?: unknown }).inboundUrl;
 
-/**
- * What the user is supposed to do with that URL, which is the whole difference between the two
- * inbound connectors: Telegram was told about it automatically (`setWebhook`), Stripe cannot be —
- * the user has to paste it into their own dashboard before a single event arrives.
- */
-function inboundHint(provider: string, meta: unknown): string {
-  if (provider === "telegram") {
-    const webhookSet = (meta as { webhookSet?: unknown } | null)?.webhookSet;
-    return webhookSet === false
-      ? "Telegram was not told about this URL — it only accepts https, so reconnect once this app has an https origin"
-      : "Telegram webhook registered";
+  if (typeof registered === "string" && registered.length > 0) {
+    if (connection.provider === "telegram") {
+      const webhookSet = (meta as { webhookSet?: unknown }).webhookSet;
+      return {
+        url: registered,
+        hint:
+          webhookSet === false
+            ? "Telegram was not told about this URL — it only accepts https, so reconnect once this app has an https origin"
+            : "Telegram webhook registered",
+      };
+    }
+    if (connection.provider === "stripe") {
+      return { url: registered, hint: "Paste this URL into Stripe's webhook settings" };
+    }
+    return { url: registered, hint: "Send this provider's events to this URL" };
   }
-  if (provider === "stripe") return "Paste this URL into Stripe's webhook settings";
-  return "Send this provider's events to this URL";
+
+  // Interactivity URLs: where an Approval node's buttons come back to. Nothing registers these, so
+  // the connection is only half-wired until the user pastes the URL where the hint says.
+  if (connection.provider === "slack") {
+    return {
+      url: `${appOrigin()}/api/events/slack/${connection._id}`,
+      hint: "Paste into your Slack app → Interactivity & Shortcuts → Request URL (needs the signing secret on this connection)",
+    };
+  }
+  if (connection.provider === "discord-bot") {
+    return {
+      url: `${appOrigin()}/api/events/discord/${connection._id}`,
+      hint: "Paste into your Discord app → General Information → Interactions Endpoint URL (needs the public key on this connection)",
+    };
+  }
+
+  return null;
 }
 
 /** The inbound URL as its own full-width row: read-only, copyable, and long enough to need one. */
-function InboundUrlRow({ connection, url }: { connection: Connection; url: string }) {
+function InboundUrlRow({
+  connection,
+  url,
+  hint,
+}: {
+  connection: Connection;
+  url: string;
+  hint: string;
+}) {
   return (
     <TableRow className="hover:bg-transparent">
       <TableCell colSpan={7} className="px-4 pt-0">
@@ -126,9 +156,7 @@ function InboundUrlRow({ connection, url }: { connection: Connection; url: strin
           >
             <CopyIcon />
           </Button>
-          <p className="text-xs text-muted-foreground">
-            {inboundHint(connection.provider, connection.meta)}
-          </p>
+          <p className="text-xs text-muted-foreground">{hint}</p>
         </div>
       </TableCell>
     </TableRow>
@@ -259,7 +287,7 @@ export function ConnectionList() {
               // `CONNECTORS` is data here: the name, icon and category behind a stored provider.
               const definition = CONNECTORS[connection.provider];
               const models = modelCount(connection.meta);
-              const inbound = inboundUrl(connection.meta);
+              const inbound = inboundFor(connection);
               const busy = busyId === connection._id;
 
               return (
@@ -328,7 +356,9 @@ export function ConnectionList() {
                     </TableCell>
                   </TableRow>
 
-                  {inbound ? <InboundUrlRow connection={connection} url={inbound} /> : null}
+                  {inbound ? (
+                    <InboundUrlRow connection={connection} url={inbound.url} hint={inbound.hint} />
+                  ) : null}
                 </Fragment>
               );
             })}

@@ -1,8 +1,8 @@
 import { resumeHook } from "workflow/api";
 import { HookNotFoundError } from "workflow/errors";
 
-import { getStepByHookToken } from "@/lib/engine-client";
-import type { HookPayload } from "@/workflows/types";
+import { getStepById, getStepByHookToken } from "@/lib/engine-client";
+import { hookTokenFor, type HookPayload } from "@/workflows/types";
 
 /**
  * The resume half of the hook plumbing: everything that turns a token in a URL back into a running
@@ -41,6 +41,46 @@ export async function resumeByToken(token: string, payload: HookPayload): Promis
   const step = await getStepByHookToken(token);
   if (!step || step.status !== "waiting") return NOT_WAITING;
 
+  return await resume(token, payload, step);
+}
+
+/**
+ * The same resume, addressed by the step row's own Convex id instead of by the token.
+ *
+ * This is what an Approval button carries. A hook token is `${executionId}:${nodeId}[:${iteration}]`
+ * — unbounded, and Telegram caps `callback_data` at 64 bytes — so the button carries `approve:<id>`
+ * and the token is derived here from the ids on the row (or read straight off it: `runNode` stored
+ * the same string when it suspended).
+ *
+ * `orgId` is not optional. A row id is not a secret and the caller has only proved that *some*
+ * Slack workspace, Discord app or Telegram bot signed the delivery — so the run it names must
+ * belong to the same organisation as the connection it arrived on, or it does not exist as far as
+ * this route is concerned.
+ */
+export async function resumeByStepId(
+  stepId: string,
+  payload: HookPayload,
+  orgId: string,
+): Promise<ResumeResult> {
+  const step = await getStepById(stepId).catch((cause: unknown) => {
+    // An id that is not even shaped like one is an argument-validation error from Convex, which is
+    // the same answer as an id nobody issued.
+    console.warn("hooks: unusable step id", cause instanceof Error ? cause.message : cause);
+    return null;
+  });
+
+  if (!step || step.status !== "waiting" || step.orgId !== orgId) return NOT_WAITING;
+
+  const token = step.hookToken ?? hookTokenFor(step.executionId, step.nodeId, step.iteration);
+  return await resume(token, payload, step);
+}
+
+/** The half both entry points share: hand the payload to the SDK, map its refusal onto a 404. */
+async function resume(
+  token: string,
+  payload: HookPayload,
+  step: { executionId: string; nodeId: string; nodeType: string; orgId: string },
+): Promise<ResumeResult> {
   try {
     await resumeHook<HookPayload>(token, payload);
   } catch (error) {

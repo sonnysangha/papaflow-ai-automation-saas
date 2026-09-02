@@ -1,6 +1,12 @@
 import { FatalError } from "workflow";
 
-import { finishExecution, getStep, markStep, markSkipped } from "@/lib/engine-client";
+import {
+  finishExecution,
+  getStep,
+  markStep,
+  markSkipped,
+  setExecutionStatus,
+} from "@/lib/engine-client";
 import type { ExecutionStatus } from "@/convex/lib/validators";
 
 /**
@@ -21,6 +27,57 @@ export async function recordSkipped(
 
   if (nodeIds.length === 0) return;
   await markSkipped(executionId, orgId, nodeIds);
+}
+
+/**
+ * The run is about to stop holding compute — a Wait's `sleep()`, an Approval's hook — so the
+ * execution row says `waiting` until something wakes it.
+ *
+ * Its position matters as much as its effect. `createHook()` does not register its token when it is
+ * called: "registration is only committed when the workflow suspends" (the SDK's own
+ * `createHook` reference). A step call is a suspension, so making this the last thing before
+ * `await hook` is what commits the registration — and narrows the window in which a very fast
+ * approver could press the button after `runNode` wrote the token on the step row but before the
+ * SDK knows about it.
+ */
+export async function recordSuspend(executionId: string): Promise<void> {
+  "use step";
+
+  await setExecutionStatus(executionId, "waiting");
+}
+
+/**
+ * Closes a Wait node once its sleep is over: the step goes `waiting` → `success` with the duration
+ * it actually slept for, and the run goes back to `running`.
+ *
+ * `runNode` cannot write this row itself. It returns `{ kind: "sleep", ms }` and the sleeping
+ * happens in the orchestrator afterwards, so the step it wrote is deliberately left open — which is
+ * exactly what makes the node show "Waiting" on the canvas for the whole 30 seconds (or 30 days)
+ * rather than going green the instant it computed a number.
+ */
+export async function recordSlept(
+  executionId: string,
+  nodeId: string,
+  output: unknown,
+  iteration?: number,
+): Promise<void> {
+  "use step";
+
+  const stored = await getStep(executionId, nodeId, iteration);
+  if (!stored) throw new FatalError(`no step row to close for wait ${nodeId}`);
+
+  await markStep({
+    executionId,
+    orgId: stored.orgId,
+    nodeId,
+    nodeType: stored.nodeType,
+    status: "success",
+    attempt: stored.attempt,
+    output,
+    handle: stored.handle ?? undefined,
+    iteration,
+  });
+  await setExecutionStatus(executionId, "running");
 }
 
 /** Closes the execution row. Called on both paths out of the workflow, including the failure one. */
@@ -67,6 +124,8 @@ export async function recordResume(
     handle: handle ?? stored.handle ?? undefined,
     iteration,
   });
+  // The run is holding compute again, and the runs page should stop saying otherwise.
+  await setExecutionStatus(executionId, "running");
 }
 
 /**

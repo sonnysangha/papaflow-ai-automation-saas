@@ -6,7 +6,7 @@
 // label users recognise. The signing secret is optional and unused here — it only matters once
 // Slack posts *to* us (Approval buttons in Phase 8, the mention trigger in Phase 7), and asking for
 // it now saves a second trip to the app's settings page.
-import { defineConnector } from "./define";
+import { defineConnector, TARGETS_PICKER } from "./define";
 
 const SLACK_API = "https://slack.com/api";
 const TIMEOUT_MS = 15_000;
@@ -146,7 +146,9 @@ export const slackConnector = defineConnector({
    * answer and not a failure.
    */
   async pick(kind, secret) {
-    if (kind !== "channels") return [];
+    // `targets` is the provider-agnostic kind the Approval node asks for; for Slack that is the
+    // same channel list `slack.postMessage` uses.
+    if (kind !== "channels" && kind !== TARGETS_PICKER) return [];
 
     const token = secret.botToken?.trim() ?? "";
     const options: { id: string; label: string }[] = [];

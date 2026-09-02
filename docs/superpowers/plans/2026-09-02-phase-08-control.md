@@ -36,6 +36,30 @@ tests/signatures.test.ts  tests/loop.test.ts  tests/approval.test.ts
 ### Task 2: Approval node (Slack, Discord, Telegram buttons) + interactivity routes (+ signature tests)
 - [ ] `logic.approval` (icon `ShieldCheck`, `credential: "chat"` = slack | discord-bot | telegram connection): `run` posts the message with two buttons whose `value`/`custom_id`/`callback_data` is `approve:<token>` / `reject:<token>` (token = the hook token; keep under Telegram's 64-byte cap by storing a short random `hookId` on the step and mapping `hookId → token` via `getStepByHookToken`), returns `{ posted: true, provider }` and `control: { kind: "hook" }`; handle from the resumed payload `approved ? "approved" : "rejected"` (the workflow derives the handle from the hook payload — extend `runGraph`: if the resumed output has `handle` use it). Routes: Slack (`lib/signatures/slack.ts#verifySlack(rawBody, ts, sig, signingSecret)`; parse `payload=`; `block_actions` → `resumeByToken(token, { approved, by: user.username, provider: "slack" })`; respond 200 with a replacement message text "✅ Approved by …"), Discord (`lib/signatures/discord.ts#verifyDiscord(rawBody, ts, sig, publicKeyHex)`; type 1 → `{ type: 1 }`; type 3 → resume → respond `{ type: 7, data: { content, components: [] } }`), Telegram (`callback_query` → resume → `answerCallbackQuery` + `editMessageReplyMarkup` to remove buttons). Connection secrets: Slack signing secret stored inside the sealed secret of the Slack connection (`fields`: `botToken`, `signingSecret`), Discord public key in `meta.publicKey` (not secret). Tests: known-vector HMAC for Slack, Ed25519 keypair generated in-test for Discord, 3-second-old timestamp ok / 6-minute-old rejected. Commit `feat(control): approval node with slack/discord/telegram buttons and resume routes`.
 
+  **As built (2026-09-02).** Four corrections to the sketch above. (1) The button does not carry the
+  hook token and there is no random `hookId`: it carries `approve:<stepRowId>` / `reject:<stepRowId>`,
+  the Convex `_id` of the `steps` row, which is 32 characters and bounded where a token
+  (`${executionId}:${nodeId}[:${iteration}]`) is neither. `api.engine.markStep` now *returns* that id,
+  `runNode` passes it to `run` as a new `RunContext.stepId`, and the new secret-checked
+  `api.engine.getStepById` projects `_id, executionId, orgId, nodeId, nodeType, status, iteration,
+  hookToken` so `lib/hooks.ts#resumeByStepId` can read the token off the row (falling back to
+  `hookTokenFor(executionId, nodeId, iteration)`). Because a row id is not a secret, `resumeByStepId`
+  also requires the row's `orgId` to match the connection the press arrived on. (2) `credential:
+  "chat"` is a new family in `connectors/define.ts` (`CHAT_CREDENTIAL`, `CHAT_PROVIDERS = slack |
+  discord-bot | telegram`) that `ConnectionPicker.acceptsConnection` answers directly — it is
+  narrower than the `chat` *category*, which also contains a Discord webhook and Teams. The three
+  connectors alias a shared `TARGETS_PICKER` (`"targets"`) onto their existing channels/chats lists,
+  so one `target` field works for all three. (3) The Slack signing secret is optional at connect
+  time, so a delivery to a connection without one is a 400 `no_signing_secret` — not a 401 — and the
+  Discord public key lives in `meta.publicKey`, which `connectors/discord-bot.ts#test` already wrote.
+  (4) Execution-level waiting landed here rather than later: `api.engine.setExecutionStatus`
+  (`running` ↔ `waiting`, terminal rows untouched) plus `recordSuspend` / `recordSlept` in
+  `workflows/steps/record.ts`. `runNode` now leaves a **sleeping** step `waiting` too (not just a
+  hooked one), and `runGraph` closes it with `recordSlept` after `sleep()`, which is what makes a
+  Wait node show "Waiting" on the canvas for its whole duration. `recordSuspend` is deliberately the
+  last call before `await hook`: `createHook()` does not register its token until the workflow
+  suspends, and a step call is a suspension.
+
 ### Task 3: Wait-for-webhook node
 - [ ] `logic.waitForWebhook` (icon `Webhook`): config panel shows `${APP_ORIGIN}/api/wait/<token>` (token = `${executionId}:${nodeId}` is only known at run time, so show the pattern and expose the concrete URL on the step row / runs page); `app/api/wait/[token]/route.ts` POST → `resumeByToken(token, { body, headers })` → 200 `{ resumed: true }` / 404. Outputs `{ body, headers }`. Commit `feat(control): wait-for-webhook node and resume route`.
 

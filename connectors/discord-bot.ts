@@ -6,7 +6,7 @@
 //
 // Bots do not appear in a server until someone invites them, so `meta.inviteUrl` is the single most
 // useful thing this connector produces — `test()` builds it from the application id the user pasted.
-import { defineConnector } from "./define";
+import { defineConnector, TARGETS_PICKER } from "./define";
 
 const DISCORD_API = "https://discord.com/api/v10";
 const TIMEOUT_MS = 15_000;
@@ -155,8 +155,11 @@ export const discordBotConnector = defineConnector({
    * first few guilds and suffixes each channel with its server, because `#general` on its own is
    * ambiguous the moment a bot is in two servers.
    */
-  async pick(kind, secret) {
+  async pick(rawKind, secret) {
     const token = secret.botToken?.trim() ?? "";
+    // The Approval node asks every chat provider for `targets`; here that means "a channel the bot
+    // can post in", which is exactly the un-scoped channel list.
+    const kind = rawKind === TARGETS_PICKER ? "channels" : rawKind;
 
     if (kind === "guilds") {
       const result = await callDiscord(token, "/users/@me/guilds");

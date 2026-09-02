@@ -137,7 +137,8 @@ function storedStep(overrides: Partial<Doc<"steps">>): Doc<"steps"> {
 beforeEach(() => {
   vi.clearAllMocks();
   getStepMock.mockResolvedValue(null);
-  markStepMock.mockResolvedValue(undefined);
+  // `markStep` hands back the row's id, which `runNode` passes to `run` as `stepId`.
+  markStepMock.mockResolvedValue("step_1" as Id<"steps">);
   openFreshMock.mockResolvedValue(opened());
   run.mockImplementation(async (ctx) => ({ ok: ctx.inputs.url.length > 0 }));
   for (const key of Object.keys(nodes)) delete nodes[key];

@@ -105,6 +105,51 @@ export const byHookToken = internalQuery({
 });
 
 /**
+ * The same projection, found by the row's own id.
+ *
+ * Approval buttons carry `approve:<stepRowId>` rather than the hook token: Telegram caps
+ * `callback_data` at 64 bytes and a token is `${executionId}:${nodeId}[:${iteration}]`, which is
+ * neither short nor bounded. A Convex id is 32 characters and always will be, so the button carries
+ * the id and the resume route turns it back into the token here — `hookToken` when the suspending
+ * mark stored one, and `hookTokenFor(executionId, nodeId, iteration)` recomputes the same string
+ * from the three ids beside it either way.
+ *
+ * Ids and status only, exactly like `byHookToken`: the caller has proved a provider signature, not
+ * a right to read this run's data (CLAUDE.md rule 1).
+ */
+export const byId = internalQuery({
+  args: { stepId: v.id("steps") },
+  returns: v.union(
+    v.object({
+      _id: v.id("steps"),
+      executionId: v.id("executions"),
+      orgId: v.string(),
+      nodeId: v.string(),
+      nodeType: v.string(),
+      status: stepStatusValidator,
+      iteration: v.optional(v.number()),
+      hookToken: v.optional(v.string()),
+    }),
+    v.null(),
+  ),
+  handler: async (ctx, { stepId }) => {
+    const step = await ctx.db.get(stepId);
+    if (!step) return null;
+
+    return {
+      _id: step._id,
+      executionId: step.executionId,
+      orgId: step.orgId,
+      nodeId: step.nodeId,
+      nodeType: step.nodeType,
+      status: step.status,
+      iteration: step.iteration,
+      hookToken: step.hookToken,
+    };
+  },
+});
+
+/**
  * Upsert of the one row per execution+node+iteration. A step is written at least twice
  * (running → success) and re-runs on retry, so this patches in place: `startedAt` is kept from the
  * first insert and only the fields the caller actually sent are written (a `running` mark never

@@ -37,6 +37,9 @@ export type StoredStep = FunctionReturnType<typeof api.engine.getStep>;
 /** The projection a resume route gets from a hook token: ids and status, never node data. */
 export type StepByHookToken = FunctionReturnType<typeof api.engine.getStepByHookToken>;
 
+/** The same, found by the row's own id — what an Approval button's `approve:<id>` resolves to. */
+export type StepById = FunctionReturnType<typeof api.engine.getStepById>;
+
 /** One `markStep` call, with `executionId` as the plain string the step boundary carries. */
 export type MarkStepInput = MarkStepArgs & { executionId: string };
 
@@ -107,9 +110,36 @@ export async function getStepByHookToken(hookToken: string): Promise<StepByHookT
   return await client.query(api.engine.getStepByHookToken, { secret, hookToken });
 }
 
-export async function markStep({ executionId, ...args }: MarkStepInput): Promise<void> {
+/**
+ * The step a Convex id names. An Approval button carries `approve:<stepRowId>` rather than the hook
+ * token (Telegram caps `callback_data` at 64 bytes), so this is the first half of turning a button
+ * press back into a suspended run.
+ */
+export async function getStepById(stepId: string): Promise<StepById> {
   const { client, secret } = engineClient();
-  await client.mutation(api.engine.markStep, {
+  return await client.query(api.engine.getStepById, {
+    secret,
+    stepId: stepId as Id<"steps">,
+  });
+}
+
+/** Moves a run between `running` and `waiting`; a finished run is left exactly as it is. */
+export async function setExecutionStatus(
+  executionId: string,
+  status: "running" | "waiting",
+): Promise<void> {
+  const { client, secret } = engineClient();
+  await client.mutation(api.engine.setExecutionStatus, {
+    secret,
+    executionId: executionRef(executionId),
+    status,
+  });
+}
+
+/** Upserts the step row and hands back its id — the short address an Approval puts in its buttons. */
+export async function markStep({ executionId, ...args }: MarkStepInput): Promise<Id<"steps">> {
+  const { client, secret } = engineClient();
+  return await client.mutation(api.engine.markStep, {
     secret,
     executionId: executionRef(executionId),
     ...args,

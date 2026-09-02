@@ -59,6 +59,34 @@ export const setRunId = internalMutation({
   },
 });
 
+/**
+ * `running` ↔ `waiting`, and nothing else.
+ *
+ * A run that is asleep on a `sleep()` or suspended on a hook is holding no compute, which is worth
+ * saying on the row the runs page reads — "running" for three days is indistinguishable from stuck.
+ * `runGraph` sets it from a record step on either side of every suspension.
+ *
+ * A finished run is never reopened: a late record step from a run that has already been cancelled
+ * or failed must not resurrect it, so anything terminal is left exactly as it is. Writing the
+ * status it already has is skipped too, so a Loop body that suspends once per item does not cost
+ * one write per pass.
+ */
+export const setStatus = internalMutation({
+  args: {
+    executionId: v.id("executions"),
+    status: v.union(v.literal("running"), v.literal("waiting")),
+  },
+  returns: v.null(),
+  handler: async (ctx, { executionId, status }) => {
+    const execution = await ctx.db.get(executionId);
+    if (!execution) throw new ConvexError({ code: "not_found" });
+
+    const open = execution.status === "queued" || execution.status === "running" || execution.status === "waiting";
+    if (open && execution.status !== status) await ctx.db.patch(executionId, { status });
+    return null;
+  },
+});
+
 /** Terminal state for a run. `error` is the message `runGraph` caught, absent on success. */
 export const finish = internalMutation({
   args: {

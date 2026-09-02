@@ -60,7 +60,18 @@ export async function runNode(input: NodeInput): Promise<NodeResult> {
       };
     }
 
-    await markStep({ executionId, orgId, nodeId, nodeType, status: "running", attempt, iteration });
+    // The row id comes back from the mark that opens it: an Approval needs a short address for
+    // itself *inside* the message it is about to post, and this is the only one that exists before
+    // `run` has been called.
+    const stepId = await markStep({
+      executionId,
+      orgId,
+      nodeId,
+      nodeType,
+      status: "running",
+      attempt,
+      iteration,
+    });
 
     let inputs: unknown;
     try {
@@ -91,20 +102,24 @@ export async function runNode(input: NodeInput): Promise<NodeResult> {
       const hookToken = hookTokenFor(executionId, nodeId, iteration);
 
       const output: unknown = def.outputs.parse(
-        await def.run({ inputs, credential, orgId, executionId, nodeId, hookToken }),
+        await def.run({ inputs, credential, orgId, executionId, nodeId, hookToken, stepId }),
       );
 
       const handle = def.handle?.(output) ?? null;
       const control = def.control?.(output);
-      const waiting = control?.kind === "hook";
+      // Both kinds of suspension leave the node unfinished: a Wait is asleep and an Approval is
+      // waiting on a hook, and neither has produced its final row yet. `runGraph` closes a sleeping
+      // step (`recordSlept`) and a hooked one (`recordResume`) on the other side of the suspension,
+      // which is what makes the canvas show "Waiting" for as long as the run really is.
+      const waiting = control?.kind === "hook" || control?.kind === "sleep";
 
       await markStep({
         executionId,
         orgId,
         nodeId,
         nodeType,
-        // A node that asked for a hook is not finished: the workflow suspends on it, and
-        // `recordResume` closes the row when the payload arrives.
+        // A node that asked to suspend is not finished: the workflow stops on it, and a record
+        // step closes the row on the far side.
         status: waiting ? "waiting" : "success",
         attempt,
         input: redact(inputs),
@@ -113,7 +128,7 @@ export async function runNode(input: NodeInput): Promise<NodeResult> {
         // `by_hookToken` is how a resume route finds this step from nothing but the token in its
         // URL. Written only on the suspending mark (an `undefined` here leaves whatever the row
         // already had); a resume that has landed is refused by status, not by clearing the token.
-        hookToken: waiting ? hookToken : undefined,
+        hookToken: control?.kind === "hook" ? hookToken : undefined,
         // Unresolved paths are configuration mistakes, not failures: the node ran with `""` where
         // the template was, and the row carries the explanation to the canvas.
         warnings,

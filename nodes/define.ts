@@ -17,6 +17,14 @@ export interface RunContext<I> {
   executionId: string;
   nodeId: string;
   hookToken?: string;
+  /**
+   * The Convex id of this node's `steps` row, for a node that has to hand out a short address for
+   * itself: Approval puts `approve:<stepId>` in its buttons because Telegram caps `callback_data`
+   * at 64 bytes and `hookToken` is not bounded. The resume route reads the row back and derives the
+   * token from it. It is not a secret and it is not an authorization — the route still verifies the
+   * provider's signature and matches the row's org against the connection's.
+   */
+  stepId?: string;
 }
 
 export interface NodeDef<I extends z.ZodType = z.ZodType, O extends z.ZodType = z.ZodType> {

@@ -13,6 +13,7 @@ import { extractNode } from "./ai/extract";
 import { llmNode } from "./ai/llm";
 import { categoryOrder } from "./categories";
 import type { AnyNodeDef, NodeCategory } from "./define";
+import { approvalNode } from "./logic/approval";
 import { conditionNode } from "./logic/condition";
 import { loopNode } from "./logic/loop";
 import { setNode } from "./logic/set";
@@ -38,6 +39,7 @@ const DEFINITIONS: readonly AnyNodeDef[] = [
   setNode,
   waitNode,
   waitForWebhookNode,
+  approvalNode,
   loopNode,
   llmNode,
   extractNode,

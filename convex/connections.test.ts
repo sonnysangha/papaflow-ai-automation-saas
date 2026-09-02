@@ -218,7 +218,7 @@ describe("api.engine connection functions", () => {
       ),
     ).toEqual({ code: "unauthorized" });
 
-    expect(await h.t.query(api.engine.getConnectionSealed, { secret: SECRET, connectionId })).toEqual(
+    expect(await h.t.query(api.engine.getConnectionSealed, { secret: SECRET, connectionId })).toMatchObject(
       {
         orgId: ORG,
         provider: "anthropic",

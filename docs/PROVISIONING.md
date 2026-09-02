@@ -21,3 +21,17 @@
 Clerk is the source of truth for organisations, memberships and billing: no Clerk webhook, no mirror tables.
 
 Everything else (AI keys, Slack/Discord/Telegram/Notion/Airtable/Linear/GitHub/Stripe credentials) is entered by users as **connections** inside the app — no operator setup.
+
+## Verified session-token shape (2026-09-02, QA user in Org A)
+
+Decoded in the app after the Clerk Convex integration was activated and `clerk config patch` added the custom claims:
+
+```json
+{ "aud": "convex", "v": 2, "sts": "active",
+  "o": { "id": "org_…", "rol": "admin", "slg": "org-a-…" },
+  "org_id": "org_…", "org_role": "org:admin" }
+```
+
+- `{{org.id}}` / `{{org.role}}` shortcodes DO resolve (research had marked this unverified). `org_role` is the prefixed form (`org:admin`), `o.rol` the bare form (`admin`).
+- `pla` / `fea` are absent until Clerk Billing is enabled in Phase 11 → `requireOrg()` falls back to `free_org`.
+- QA fixture: user `qa+clerk_test@example.com` (`user_3ImKEBIo4EWm1INJJWXKaL6BhOq`, no password; signed in via `clerk impersonate … --print` tickets on `http://localhost:3000/sign-in?__clerk_ticket=…`). Delete it with `clerk api /users/user_3ImKEBIo4EWm1INJJWXKaL6BhOq -X DELETE --yes` when no longer needed.

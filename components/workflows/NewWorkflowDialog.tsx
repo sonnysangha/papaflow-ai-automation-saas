@@ -1,11 +1,8 @@
 "use client";
 
 import { useId, useState, type ReactElement } from "react";
-import { useRouter } from "next/navigation";
-import { useMutation } from "convex/react";
 import { PlusIcon } from "lucide-react";
 
-import { api } from "@/convex/_generated/api";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -21,10 +18,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { UpgradeCard } from "@/components/billing/UpgradeCard";
-import type { WorkflowTemplate } from "@/lib/templates";
 
-import { reportWorkflowError, workflowLimitFrom } from "./errors";
 import { TemplateGallery } from "./TemplateDialog";
+import { useCreateWorkflow } from "./use-create-workflow";
 
 /** Matches the fallback `convex/workflows.ts` applies to a blank name. */
 const DEFAULT_NAME = "Untitled workflow";
@@ -37,7 +33,7 @@ type Tab = "blank" | "template";
  *
  * Both go through the same `workflows.create` — a template is nothing more than a `graph` argument
  * — so the plan wall, the toast and the redirect to the canvas are shared rather than duplicated.
- * Used from the page header, the empty state and the getting-started checklist, so it owns its own
+ * Used from the toolbar, the empty state and the getting-started checklist, so it owns its own
  * trigger and lets the caller replace it.
  */
 export function NewWorkflowDialog({
@@ -48,49 +44,20 @@ export function NewWorkflowDialog({
   trigger?: ReactElement;
   defaultTab?: Tab;
 }) {
-  const router = useRouter();
-  const create = useMutation(api.workflows.create);
   const nameId = useId();
+  const { submitCreate, createFromTemplate, pending, pendingTemplate, limit, atLimit, clearLimit } =
+    useCreateWorkflow();
 
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<Tab>(defaultTab);
   const [name, setName] = useState("");
-  const [pending, setPending] = useState(false);
-  /** The template being created, so its card can say "Adding…" while the mutation is in flight. */
-  const [pendingTemplate, setPendingTemplate] = useState<string | null>(null);
-  // The plan's workflow cap once `workflows.create` has refused; `undefined` until it does.
-  const [limit, setLimit] = useState<number | null | undefined>(undefined);
 
-  const atLimit = limit !== undefined;
-
-  async function submitCreate(args: { name: string; graph?: WorkflowTemplate["graph"] }) {
-    if (pending) return;
-
-    setPending(true);
-    try {
-      const id = await create(args);
+  async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (await submitCreate({ name: name.trim() || DEFAULT_NAME })) {
       setOpen(false);
       setName("");
-      router.push(`/w/${id}`);
-    } catch (error) {
-      // Most often the free plan's three-workflow wall; the dialog stays open either way, and
-      // swaps the form's footer for an upgrade card rather than only flashing a toast.
-      setLimit(workflowLimitFrom(error));
-      reportWorkflowError(error, "Could not create the workflow");
-    } finally {
-      setPending(false);
-      setPendingTemplate(null);
     }
-  }
-
-  function onSubmit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    void submitCreate({ name: name.trim() || DEFAULT_NAME });
-  }
-
-  function onPickTemplate(template: WorkflowTemplate) {
-    setPendingTemplate(template.id);
-    void submitCreate({ name: template.name, graph: template.graph });
   }
 
   return (
@@ -101,7 +68,7 @@ export function NewWorkflowDialog({
         // A fresh open starts without last time's wall — the org may have upgraded since — and on
         // the tab the caller asked for rather than the one abandoned last time.
         if (!nowOpen) {
-          setLimit(undefined);
+          clearLimit();
           setTab(defaultTab);
         }
       }}
@@ -117,7 +84,7 @@ export function NewWorkflowDialog({
         }
       />
 
-      <DialogContent className="sm:max-w-3xl">
+      <DialogContent className="sm:max-w-4xl">
         <DialogHeader>
           <DialogTitle>New workflow</DialogTitle>
           <DialogDescription>
@@ -164,12 +131,11 @@ export function NewWorkflowDialog({
           <TabsContent value="template" className="pt-2">
             <div className="grid gap-4">
               {atLimit ? <PlanWall limit={limit} /> : null}
-              <div className="max-h-[55vh] overflow-y-auto pr-0.5">
-                <TemplateGallery
-                  onPick={onPickTemplate}
-                  pendingId={atLimit ? undefined : pendingTemplate}
-                />
-              </div>
+              <TemplateGallery
+                className="max-h-[55vh]"
+                onPick={createFromTemplate}
+                pendingId={atLimit ? undefined : pendingTemplate}
+              />
             </div>
           </TabsContent>
         </Tabs>
@@ -178,8 +144,8 @@ export function NewWorkflowDialog({
   );
 }
 
-/** The plan's workflow cap, once `workflows.create` has refused. Shared by both tabs. */
-function PlanWall({ limit }: { limit: number | null | undefined }) {
+/** The plan's workflow cap, once `workflows.create` has refused. Shared by both tabs and the list. */
+export function PlanWall({ limit }: { limit: number | null | undefined }) {
   return (
     <UpgradeCard
       compact

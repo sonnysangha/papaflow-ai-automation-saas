@@ -1,99 +1,67 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { useQuery } from "convex/react";
+import { usePaginatedQuery, useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
-import { ChevronRightIcon, PlayIcon } from "lucide-react";
+import { InboxIcon, ListXIcon, LoaderIcon, type LucideIcon, PlayIcon } from "lucide-react";
 
 import { UpgradeCard } from "@/components/billing/UpgradeCard";
-import { Badge } from "@/components/ui/badge";
+import { RunStatusPill } from "@/components/shared/status";
 import { Button, buttonVariants } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { formatAbsoluteTime, formatRelativeTime } from "@/components/workflows/relative-time";
+import { Table, TableBody, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { RUN_HISTORY_DAYS, RUN_HISTORY_FEATURE } from "@/lib/plans";
 import { cn } from "@/lib/utils";
 
-import { formatDuration, StepsSheet } from "./StepsSheet";
+import { RunFiltersRow } from "./RunFilters";
+import { RunRow } from "./RunRow";
+import { RunStatsSkeleton, RunStatsStrip } from "./RunStats";
+import { StepsSheet } from "./StepsSheet";
+import {
+  filterRuns,
+  isFiltered,
+  NO_FILTERS,
+  statusCounts,
+  triggerOptions,
+  type RunFilters,
+} from "./run-filters";
+import { isOpenRun, runStats } from "./run-stats";
+import { useNow } from "./use-now";
 
-/** One row of `api.executions.listByWorkflow` — the whole `executions` document. */
-type Execution = FunctionReturnType<typeof api.executions.listByWorkflow>["runs"][number];
-export type ExecutionStatus = Execution["status"];
+/** One row of `api.executions.pageByOrg` — the projected execution, without the trigger payload. */
+export type RunListItem = FunctionReturnType<typeof api.executions.pageByOrg>["page"][number];
+export type ExecutionStatus = RunListItem["status"];
+
+/** How many runs arrive per page, first and on every `Load more`. */
+const PAGE_SIZE = 25;
 
 /**
- * The same colour language as the canvas `StatusRing`, extended with the two statuses only a run
- * has: `queued` (created, not yet accepted by the Workflow SDK) and `cancelled`.
+ * Status of one run, as a badge — the shared pill under its old name.
+ *
+ * A compatibility shim for anything still importing the badge from this file. Nothing in the app
+ * does any more (the canvas run bar reads `RunStatusPill` directly), so it can go the next time
+ * this file is touched.
  */
-const RUN_TONE: Record<ExecutionStatus, string> = {
-  queued: "bg-muted-foreground/40",
-  running: "animate-pulse bg-amber-500",
-  waiting: "bg-blue-500",
-  completed: "bg-emerald-500",
-  failed: "bg-destructive",
-  cancelled: "bg-muted-foreground/40",
-};
-
-/** Status of one run, as a badge. Shared shape with the last-run badge in the canvas RunBar. */
 export function RunStatusBadge({
   status,
   className,
 }: {
-  status: ExecutionStatus;
+  status: ExecutionStatus | string;
   className?: string;
 }) {
-  return (
-    <Badge variant="outline" className={cn("gap-1.5 capitalize", className)}>
-      <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", RUN_TONE[status])} />
-      {status}
-    </Badge>
-  );
-}
-
-/** "Manual · 1.2s" — the line under the sheet title, so the drawer says which run it opened. */
-function runSummary(execution: Execution): string {
-  const duration = formatDuration(execution.startedAt, execution.finishedAt);
-  return `${execution.trigger.type} · started ${formatRelativeTime(execution.startedAt)} · ${duration}`;
-}
-
-function LoadingRuns() {
-  return (
-    <div className="flex flex-col gap-3" role="status" aria-label="Loading runs">
-      {[0, 1, 2].map((row) => (
-        <Skeleton key={row} className="h-14 w-full rounded-xl" />
-      ))}
-    </div>
-  );
+  return <RunStatusPill status={status} className={className} />;
 }
 
 /**
  * The note under a clipped list: this organisation has runs older than its plan shows. Nothing was
- * deleted — `executions.listByOrg` simply does not scan past the cutoff — so upgrading brings the
- * history straight back.
+ * deleted — the queries simply do not scan past the cutoff — so upgrading brings the history back.
  */
 function HistoryNote({ windowDays }: { windowDays: number }) {
   if (windowDays >= RUN_HISTORY_DAYS.extended) {
-    return (
-      <p className="text-xs text-muted-foreground">
-        Showing the last {windowDays} days of runs.
-      </p>
-    );
+    return <p className="text-xs text-muted-foreground">Showing the last {windowDays} days of runs.</p>;
   }
 
   return (
@@ -106,110 +74,230 @@ function HistoryNote({ windowDays }: { windowDays: number }) {
   );
 }
 
-/**
- * The table both runs pages render, with the sheet that opens a run's steps.
- *
- * `workflowNames` is only passed by the org-wide page — a workflow's own page already knows which
- * workflow it is looking at, so the column would be the same value on every row.
- */
-function RunRows({
-  runs,
-  workflowNames,
+/** Nothing to show, and what to do about it. */
+function EmptyState({
+  icon: Icon,
+  title,
+  hint,
+  action,
 }: {
-  runs: readonly Execution[];
-  workflowNames?: Record<string, string>;
+  icon: LucideIcon;
+  title: string;
+  hint: string;
+  action: ReactNode;
 }) {
-  // The sheet outlives the click that opened it: `selected` is kept until the sheet has finished
-  // animating closed, so the steps do not vanish mid-transition (the pattern `WorkflowList` uses).
-  const [selected, setSelected] = useState<Execution | null>(null);
+  return (
+    <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border bg-card/40 px-6 py-12 text-center">
+      <Icon className="size-5 text-muted-foreground" aria-hidden />
+      <p className="text-sm font-medium">{title}</p>
+      <p className="max-w-sm text-xs text-muted-foreground">{hint}</p>
+      <div className="mt-2">{action}</div>
+    </div>
+  );
+}
+
+/** The table's own shape while the first page loads: the same columns, greyed. */
+function TableSkeleton({ showWorkflow }: { showWorkflow: boolean }) {
+  return (
+    <div
+      className="overflow-hidden rounded-xl border border-border"
+      role="status"
+      aria-label="Loading runs"
+    >
+      <div className="flex flex-col divide-y divide-border">
+        {[0, 1, 2, 3, 4].map((row) => (
+          <div key={row} className="flex items-center gap-4 px-4 py-3">
+            <Skeleton className="h-6 w-24 rounded-full" />
+            {showWorkflow ? <Skeleton className="h-4 w-32" /> : null}
+            <Skeleton className="hidden h-6 w-20 sm:block" />
+            <Skeleton className="h-4 w-24" />
+            <Skeleton className="ml-auto h-4 w-12" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+type PaginationStatus = "LoadingFirstPage" | "CanLoadMore" | "LoadingMore" | "Exhausted";
+
+/**
+ * Everything both runs pages draw: the strip, the filters, the table, and the drawer a row opens.
+ *
+ * The rows are one live paginated subscription — a run started from the canvas appears at the top
+ * without a reload, and the filters narrow what has been loaded rather than asking the server
+ * again, so a status chip is instant. What "loaded" means is said out loud under the table.
+ */
+function RunsView({
+  runs,
+  status,
+  loadMore,
+  retention,
+  workflowNames,
+  workflowOptions,
+  empty,
+}: {
+  runs: readonly RunListItem[];
+  status: PaginationStatus;
+  loadMore: (numItems: number) => void;
+  /** The plan's retention window, once `executions.windowInfo` has answered. */
+  retention?: { windowDays: number; clipped: boolean };
+  /** Workflow id → name. Present only on the org-wide page, which shows the column. */
+  workflowNames?: Record<string, string>;
+  /** Every workflow in the org, for the filter dropdown. */
+  workflowOptions?: readonly { id: string; name: string }[];
+  /** What to show when the organisation (or workflow) has no runs at all. */
+  empty: ReactNode;
+}) {
+  const [filters, setFilters] = useState<RunFilters>(NO_FILTERS);
+  // The drawer outlives the click that opened it: `selected` is kept until the sheet has finished
+  // animating closed, so the steps do not vanish mid-transition.
+  const [selected, setSelected] = useState<RunListItem | null>(null);
   const [open, setOpen] = useState(false);
 
-  return (
-    <>
-      <div className="overflow-hidden rounded-xl ring-1 ring-foreground/10">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="px-4">Status</TableHead>
-              {workflowNames && <TableHead>Workflow</TableHead>}
-              <TableHead>Trigger</TableHead>
-              <TableHead>Started</TableHead>
-              <TableHead>Duration</TableHead>
-              <TableHead>Error</TableHead>
-              <TableHead className="w-12 px-4">
-                <span className="sr-only">Steps</span>
-              </TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {runs.map((execution) => {
-              const openSteps = () => {
-                setSelected(execution);
-                setOpen(true);
-              };
+  const showWorkflow = workflowNames !== undefined;
+  const live = runs.some((run) => isOpenRun(run.status));
+  const now = useNow(live);
 
-              return (
-                <TableRow key={execution._id} className="cursor-pointer" onClick={openSteps}>
-                  <TableCell className="px-4">
-                    <RunStatusBadge status={execution.status} />
-                  </TableCell>
-                  {workflowNames && (
-                    <TableCell>
-                      <Link
-                        href={`/w/${execution.workflowId}`}
-                        className="underline-offset-4 hover:underline"
-                        // The row opens the steps sheet; the link goes to the canvas instead.
-                        onClick={(event) => event.stopPropagation()}
-                      >
-                        {workflowNames[execution.workflowId] ?? "Deleted workflow"}
-                      </Link>
-                    </TableCell>
-                  )}
-                  <TableCell className="font-mono text-xs text-muted-foreground">
-                    {execution.trigger.type}
-                  </TableCell>
-                  <TableCell
-                    className="text-muted-foreground"
-                    title={formatAbsoluteTime(execution.startedAt)}
-                  >
-                    {formatRelativeTime(execution.startedAt)}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground tabular-nums">
-                    {formatDuration(execution.startedAt, execution.finishedAt)}
-                  </TableCell>
-                  <TableCell className="text-destructive">
-                    <span className="block max-w-64 truncate" title={execution.error}>
-                      {execution.error ?? ""}
-                    </span>
-                  </TableCell>
-                  <TableCell className="px-4 text-right">
-                    <Button variant="ghost" size="icon-sm" onClick={openSteps}>
-                      <ChevronRightIcon />
-                      <span className="sr-only">
-                        View steps for the run started {formatRelativeTime(execution.startedAt)}
-                      </span>
-                    </Button>
-                  </TableCell>
+  const visible = useMemo(
+    () => filterRuns(runs, filters, workflowNames),
+    [runs, filters, workflowNames],
+  );
+  const stats = useMemo(() => runStats(runs, now), [runs, now]);
+  const counts = useMemo(() => statusCounts(runs), [runs]);
+  const triggers = useMemo(() => triggerOptions(runs), [runs]);
+
+  if (status === "LoadingFirstPage") {
+    return (
+      <div className="flex flex-col gap-6">
+        <RunStatsSkeleton />
+        <TableSkeleton showWorkflow={showWorkflow} />
+      </div>
+    );
+  }
+
+  if (runs.length === 0) {
+    return (
+      <div className="flex flex-col gap-4">
+        {empty}
+        {retention?.clipped ? <HistoryNote windowDays={retention.windowDays} /> : null}
+      </div>
+    );
+  }
+
+  const selectedRun = selected ? (runs.find((row) => row._id === selected._id) ?? selected) : null;
+
+  return (
+    <div className="flex flex-col gap-6">
+      <RunStatsStrip stats={stats} windowDays={retention?.windowDays} />
+
+      <div className="flex flex-col gap-4">
+        <RunFiltersRow
+          filters={filters}
+          onChange={setFilters}
+          counts={counts}
+          triggers={triggers}
+          workflows={workflowOptions}
+        />
+
+        <div className="overflow-hidden rounded-xl border border-border">
+          {visible.length === 0 ? (
+            // Inside the box, not instead of it: `Load more` stays reachable, because the run you
+            // are looking for is often just older than the page you have loaded.
+            <div className="flex flex-col items-center gap-2 px-6 py-12 text-center">
+              <ListXIcon className="size-5 text-muted-foreground" aria-hidden />
+              <p className="text-sm font-medium">No runs match</p>
+              <p className="max-w-sm text-xs text-muted-foreground">
+                Nothing loaded fits these filters. Clear them, or load more history.
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                className="mt-2"
+                onClick={() => setFilters(NO_FILTERS)}
+              >
+                Clear filters
+              </Button>
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead className="pl-4">Status</TableHead>
+                  {showWorkflow ? <TableHead>Workflow</TableHead> : null}
+                  <TableHead className="hidden sm:table-cell">Trigger</TableHead>
+                  <TableHead>Started</TableHead>
+                  <TableHead>Duration</TableHead>
+                  <TableHead className="hidden md:table-cell">Error</TableHead>
+                  <TableHead className="w-12 pr-4">
+                    <span className="sr-only">Open</span>
+                  </TableHead>
                 </TableRow>
-              );
-            })}
-          </TableBody>
-        </Table>
+              </TableHeader>
+              <TableBody>
+                {visible.map((run) => (
+                  <RunRow
+                    key={run._id}
+                    run={run}
+                    showWorkflow={showWorkflow}
+                    workflowName={workflowNames?.[run.workflowId]}
+                    now={now}
+                    onOpen={() => {
+                      setSelected(run);
+                      setOpen(true);
+                    }}
+                  />
+                ))}
+              </TableBody>
+            </Table>
+          )}
+
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-3">
+            <p className="text-xs text-muted-foreground">
+              {isFiltered(filters)
+                ? `Showing ${visible.length} of ${runs.length} loaded runs`
+                : status === "Exhausted"
+                  ? `Showing all ${runs.length} runs in this window`
+                  : `Showing ${runs.length} of many`}
+            </p>
+            {status === "Exhausted" ? null : (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={status === "LoadingMore"}
+                onClick={() => loadMore(PAGE_SIZE)}
+              >
+                {status === "LoadingMore" ? (
+                  <>
+                    <LoaderIcon className="animate-spin" />
+                    Loading
+                  </>
+                ) : (
+                  "Load more"
+                )}
+              </Button>
+            )}
+          </div>
+        </div>
+
+        {retention?.clipped ? <HistoryNote windowDays={retention.windowDays} /> : null}
       </div>
 
-      {selected ? (
+      {selected && selectedRun ? (
         <StepsSheet
           executionId={selected._id}
           // Only when the workflow is still there: the org-wide table lists runs of deleted
           // workflows too, and `workflows.get` answers `not_found` for one.
           workflowId={
-            workflowNames && workflowNames[selected.workflowId] === undefined
+            showWorkflow && workflowNames?.[selected.workflowId] === undefined
               ? undefined
               : selected.workflowId
           }
           // `selected` is the row as it was clicked; the subscription keeps going, so the header
-          // reads from the live row when it is still in the list and falls back to the snapshot.
-          summary={runSummary(runs.find((row) => row._id === selected._id) ?? selected)}
+          // reads from the live row while it is still in the list and falls back to the snapshot.
+          run={selectedRun}
+          workflowName={workflowNames?.[selected.workflowId]}
+          crossWorkflow={showWorkflow}
           open={open}
           onOpenChange={setOpen}
           onClosed={() => {
@@ -217,87 +305,92 @@ function RunRows({
           }}
         />
       ) : null}
-    </>
+    </div>
   );
 }
 
 /**
  * Every run of one workflow, newest first and live: a run started from the canvas appears here
- * without a reload. Clicking a row opens its steps in a sheet.
+ * without a reload. Clicking a row opens its steps in a drawer.
  */
 export function RunsTable({ workflowId }: { workflowId: Id<"workflows"> }) {
-  const page = useQuery(api.executions.listByWorkflow, { workflowId });
+  const page = usePaginatedQuery(
+    api.executions.pageByWorkflow,
+    { workflowId },
+    { initialNumItems: PAGE_SIZE },
+  );
+  const retention = useQuery(api.executions.windowInfo, { workflowId });
 
-  if (page === undefined) return <LoadingRuns />;
-
-  if (page.runs.length === 0) {
-    return (
-      <div className="flex flex-col gap-3">
-        <Card>
-          <CardHeader>
-            <CardTitle>{page.clipped ? "No runs in this window" : "No runs yet"}</CardTitle>
-            <CardDescription>
-              {page.clipped
-                ? `This workflow has not run in the last ${page.windowDays} days.`
-                : "Press Run on the canvas and this workflow’s history starts here."}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
+  return (
+    <RunsView
+      runs={page.results}
+      status={page.status}
+      loadMore={page.loadMore}
+      retention={retention}
+      empty={
+        <EmptyState
+          icon={PlayIcon}
+          title={retention?.clipped ? "No runs in this window" : "No runs yet"}
+          hint={
+            retention?.clipped
+              ? `This workflow has not run in the last ${retention.windowDays} days.`
+              : "Press Run on the canvas and this workflow's history starts here."
+          }
+          action={
             <Link
               href={`/w/${workflowId}`}
-              className={buttonVariants({ variant: "outline", size: "sm" })}
+              className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
             >
               <PlayIcon />
               Open the canvas
             </Link>
-          </CardContent>
-        </Card>
-        {page.clipped ? <HistoryNote windowDays={page.windowDays} /> : null}
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex flex-col gap-3">
-      <RunRows runs={page.runs} />
-      {page.clipped ? <HistoryNote windowDays={page.windowDays} /> : null}
-    </div>
+          }
+        />
+      }
+    />
   );
 }
 
 /** The same table for the whole organisation, with a column for which workflow each run belongs to. */
 export function OrgRunsTable() {
-  const page = useQuery(api.executions.listByOrg, {});
+  const page = usePaginatedQuery(api.executions.pageByOrg, {}, { initialNumItems: PAGE_SIZE });
+  const retention = useQuery(api.executions.windowInfo, {});
+  const workflows = useQuery(api.workflows.list, {});
 
-  if (page === undefined) return <LoadingRuns />;
+  const names = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const workflow of workflows ?? []) map[workflow._id] = workflow.name;
+    return map;
+  }, [workflows]);
 
-  if (page.runs.length === 0) {
-    return (
-      <div className="flex flex-col gap-3">
-        <Card>
-          <CardHeader>
-            <CardTitle>No runs yet</CardTitle>
-            <CardDescription>
-              Nothing has run in the last {page.windowDays} days. Open a workflow and press Run —
-              every node lights up as it goes, and lands here when it is done.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Link href="/w" className={buttonVariants({ variant: "outline", size: "sm" })}>
+  const options = useMemo(
+    () => (workflows ?? []).map((workflow) => ({ id: workflow._id as string, name: workflow.name })),
+    [workflows],
+  );
+
+  return (
+    <RunsView
+      // The names arrive on their own subscription: rows would flash "Deleted workflow" if the
+      // table drew before they landed, so the first page waits for both.
+      runs={page.results}
+      status={workflows === undefined ? "LoadingFirstPage" : page.status}
+      loadMore={page.loadMore}
+      retention={retention}
+      workflowNames={names}
+      workflowOptions={options}
+      empty={
+        <EmptyState
+          icon={InboxIcon}
+          title="No runs yet"
+          hint={`Nothing has run in the last ${retention?.windowDays ?? RUN_HISTORY_DAYS.base} days. Open a workflow and press Run — every node lights up as it goes, and lands here when it is done.`}
+          action={
+            <Link href="/w" className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
               <PlayIcon />
               Go to workflows
             </Link>
-          </CardContent>
-        </Card>
-        {page.clipped ? <HistoryNote windowDays={page.windowDays} /> : null}
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex flex-col gap-3">
-      <RunRows runs={page.runs} workflowNames={page.workflowNames} />
-      {page.clipped ? <HistoryNote windowDays={page.windowDays} /> : null}
-    </div>
+          }
+        />
+      }
+    />
   );
 }

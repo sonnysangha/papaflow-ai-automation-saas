@@ -96,12 +96,154 @@ describe("api.workflows", () => {
       updatedAt: expect.any(Number),
       // Phase 9: the list carries the workflow's enabled schedule, so it can badge one.
       schedule: null,
+      // An empty canvas has no trigger to chip, and a workflow nobody has run has no history.
+      triggerNodeType: null,
+      lastRun: null,
+      recentRuns: [],
+      runCount7d: 0,
     });
     // The list projection never leaks the webhook secret or the graph.
     expect(list[0]).not.toHaveProperty("webhookSecret");
     expect(list[0]).not.toHaveProperty("graph");
 
     expect((await orgB.query(api.workflows.list, {})).map((w) => w.name)).toEqual(["Not mine"]);
+  });
+
+  test("list reports the trigger heading each graph", async () => {
+    const { orgA } = setup();
+
+    // `triggerId` wins when it names a node.
+    const named = await orgA.mutation(api.workflows.create, {
+      name: "Named",
+      graph: {
+        nodes: [
+          {
+            id: "start",
+            type: "papaflow",
+            position: { x: 0, y: 0 },
+            data: { nodeType: "form.trigger", key: "start", label: "Form", inputs: {} },
+          },
+        ],
+        edges: [],
+        triggerId: "start",
+      },
+    });
+
+    // Without one, the first trigger-shaped node stands in — including the two inbound event
+    // triggers, which do not say `.trigger` in their name.
+    const inferred = await orgA.mutation(api.workflows.create, {
+      name: "Inferred",
+      graph: {
+        nodes: [
+          {
+            id: "note",
+            type: "papaflow",
+            position: { x: 0, y: 0 },
+            data: { nodeType: "set", key: "note", label: "Set", inputs: {} },
+          },
+          {
+            id: "msg",
+            type: "papaflow",
+            position: { x: 0, y: 0 },
+            data: { nodeType: "telegram.message", key: "msg", label: "Message", inputs: {} },
+          },
+        ],
+        edges: [],
+      },
+    });
+
+    const byId = new Map(
+      (await orgA.query(api.workflows.list, {})).map((w) => [w._id, w.triggerNodeType]),
+    );
+    expect(byId.get(named)).toBe("form.trigger");
+    expect(byId.get(inferred)).toBe("telegram.message");
+  });
+
+  test("list reports the newest run and the recent ones, newest first", async () => {
+    const { orgA } = setup();
+    const workflowId = await orgA.mutation(api.workflows.create, { name: "Busy" });
+    const now = Date.now();
+
+    await orgA.run(async (ctx) => {
+      // Inserted oldest first, so the ordering in the answer is the query's doing and not the
+      // insertion order's.
+      await ctx.db.insert("executions", {
+        orgId: "org_1",
+        workflowId,
+        workflowVersion: 1,
+        planSlug: "free_org",
+        status: "failed",
+        trigger: { type: "manual", payload: {} },
+        startedAt: now - 3 * 60_000,
+        finishedAt: now - 2 * 60_000,
+        error: "Boom",
+      });
+      await ctx.db.insert("executions", {
+        orgId: "org_1",
+        workflowId,
+        workflowVersion: 1,
+        planSlug: "free_org",
+        status: "completed",
+        trigger: { type: "manual", payload: {} },
+        startedAt: now - 60_000,
+        finishedAt: now - 30_000,
+      });
+      // Older than the seven-day window: it still counts as history, never as this week's activity.
+      await ctx.db.insert("executions", {
+        orgId: "org_1",
+        workflowId,
+        workflowVersion: 1,
+        planSlug: "free_org",
+        status: "completed",
+        trigger: { type: "manual", payload: {} },
+        startedAt: now - 30 * 24 * 60 * 60 * 1000,
+        finishedAt: now - 30 * 24 * 60 * 60 * 1000 + 1_000,
+      });
+    });
+
+    const [summary] = await orgA.query(api.workflows.list, {});
+
+    expect(summary.lastRun).toEqual({
+      status: "completed",
+      startedAt: now - 60_000,
+      finishedAt: now - 30_000,
+    });
+    expect(summary.recentRuns.map((run) => run.status)).toEqual([
+      "completed",
+      "failed",
+      "completed",
+    ]);
+    expect(summary.recentRuns[0].startedAt).toBeGreaterThan(summary.recentRuns[1].startedAt);
+    expect(summary.runCount7d).toBe(2);
+  });
+
+  test("list carries the failed run's error and caps the strip at eight", async () => {
+    const { orgA } = setup();
+    const workflowId = await orgA.mutation(api.workflows.create, { name: "Chatty" });
+    const now = Date.now();
+
+    await orgA.run(async (ctx) => {
+      for (let i = 0; i < 12; i++) {
+        await ctx.db.insert("executions", {
+          orgId: "org_1",
+          workflowId,
+          workflowVersion: 1,
+          planSlug: "free_org",
+          status: i === 11 ? "failed" : "completed",
+          trigger: { type: "manual", payload: {} },
+          startedAt: now - (12 - i) * 60_000,
+          finishedAt: now - (12 - i) * 60_000 + 500,
+          ...(i === 11 ? { error: "Slack said no" } : {}),
+        });
+      }
+    });
+
+    const [summary] = await orgA.query(api.workflows.list, {});
+
+    expect(summary.lastRun?.status).toBe("failed");
+    expect(summary.lastRun?.error).toBe("Slack said no");
+    expect(summary.recentRuns).toHaveLength(8);
+    expect(summary.runCount7d).toBe(12);
   });
 
   test("create refuses once the org is at its plan's workflow limit", async () => {

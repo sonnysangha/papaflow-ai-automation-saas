@@ -68,17 +68,17 @@ type Step = {
 
 function StepRow({ index, step }: { index: number; step: Step }) {
   return (
-    <li className="flex min-w-0 flex-1 items-start gap-3">
+    <li className="flex min-w-0 items-start gap-2.5 md:border-l md:border-border md:pl-4 md:first:border-l-0 md:first:pl-0">
       <span
         aria-hidden
         className={cn(
-          "mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full border text-xs font-medium tabular-nums",
+          "mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full border text-xs font-medium tabular-nums",
           step.done
             ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
             : "border-border text-muted-foreground",
         )}
       >
-        {step.done ? <CheckIcon className="size-3.5" /> : index + 1}
+        {step.done ? <CheckIcon className="size-3" /> : index + 1}
       </span>
 
       <div className="min-w-0 flex-1">
@@ -86,7 +86,7 @@ function StepRow({ index, step }: { index: number; step: Step }) {
           {step.title}
           <span className="sr-only">{step.done ? " — done" : " — still to do"}</span>
         </p>
-        <p className="mt-0.5 text-sm text-muted-foreground">{step.hint}</p>
+        <p className="mt-0.5 text-xs text-muted-foreground">{step.hint}</p>
         {step.done ? null : <div className="mt-2">{step.action}</div>}
       </div>
     </li>
@@ -102,7 +102,7 @@ export function GettingStarted() {
 
   const loading = connections === undefined || workflows === undefined || usage === undefined;
   if (loading) {
-    return <Skeleton className="h-32 w-full rounded-xl" aria-label="Loading your first steps" />;
+    return <Skeleton className="h-28 w-full rounded-xl" aria-label="Loading your first steps" />;
   }
 
   const hasConnection = connections.length > 0;
@@ -168,13 +168,13 @@ export function GettingStarted() {
       aria-label="Getting started"
       className="relative rounded-xl border border-border bg-card p-4"
     >
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h2 className="text-sm font-medium">Get your first run finished</h2>
-          <p className="mt-0.5 text-sm text-muted-foreground">
-            Three steps. This panel goes away on its own once they are done.
-          </p>
-        </div>
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-sm font-medium">
+          Get your first run finished
+          <span className="ml-2 hidden font-normal text-muted-foreground sm:inline">
+            Three steps, then this panel goes away on its own.
+          </span>
+        </h2>
         <Button
           variant="ghost"
           size="icon-sm"
@@ -185,7 +185,7 @@ export function GettingStarted() {
         </Button>
       </div>
 
-      <ol className="mt-4 flex flex-col gap-5 sm:flex-row sm:gap-6">
+      <ol className="mt-4 grid gap-5 md:grid-cols-3 md:gap-4">
         {steps.map((step, index) => (
           <StepRow key={step.title} index={index} step={step} />
         ))}

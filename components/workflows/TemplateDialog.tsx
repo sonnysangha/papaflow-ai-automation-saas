@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, type ReactElement } from "react";
-import { ChevronRightIcon, PlugZapIcon } from "lucide-react";
+import { Fragment, useId, useMemo, useState, type ReactElement } from "react";
+import { ChevronRightIcon, LayoutTemplateIcon, PlugZapIcon, SearchIcon } from "lucide-react";
 
 import { NodeIcon } from "@/components/canvas/node-icon";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -13,6 +14,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { featureLabel } from "@/lib/plans";
 import {
   credentialName,
@@ -24,45 +26,60 @@ import {
 import { cn } from "@/lib/utils";
 import { NODES } from "@/nodes/registry";
 
+import {
+  ALL_CATEGORIES,
+  filterTemplates,
+  flowStrip,
+  templateCategories,
+} from "./template-flow";
+
 /**
- * The starter-template picker, used from two places: the "New workflow" dialog, where picking one
- * creates a workflow, and the empty canvas, where it drops the graph onto the workflow you already
- * have. Both are the same list and the same cards — only what happens on the click differs.
+ * The starter-template picker, used from three places: the "New workflow" dialog, where picking one
+ * creates a workflow; the empty canvas, where it drops the graph onto the workflow you already
+ * have; and the empty workflow list, which shows the shelf outright rather than behind a button.
+ * Same list, same cards — only what happens on the click differs.
  */
 
-/** How many nodes a card previews before it stops and counts the rest. */
-const PREVIEW_LIMIT = 4;
+/** How many hops of a template's main path a card draws before it counts the rest. */
+const FLOW_LIMIT = 6;
 
-type PreviewNode = { key: string; label: string; icon?: string };
-
-function previewNodes(graph: TemplateGraph): { shown: PreviewNode[]; more: number } {
-  const shown = graph.nodes.slice(0, PREVIEW_LIMIT).map((entry) => ({
-    key: entry.data.key,
-    label: entry.data.label,
-    icon: NODES[entry.data.nodeType]?.icon,
-  }));
-  return { shown, more: Math.max(0, graph.nodes.length - shown.length) };
-}
-
-/** The nodes of a template, as a row of chips — enough to recognise the shape without opening it. */
-function TemplatePreview({ graph }: { graph: TemplateGraph }) {
-  const { shown, more } = previewNodes(graph);
+/** The nodes of a template as a path: trigger → action → action, in the order they run. */
+function TemplateFlow({ graph }: { graph: TemplateGraph }) {
+  const { steps, more } = flowStrip(graph, FLOW_LIMIT);
+  if (steps.length === 0) return null;
 
   return (
-    <div className="flex flex-wrap items-center gap-1">
-      {shown.map((entry, index) => (
-        <span key={entry.key} className="flex items-center gap-1">
+    // Its own scroller: a long path may not fit a card, and the page must never be the thing that
+    // scrolls sideways.
+    <div className="-mx-0.5 flex items-center gap-1 overflow-x-auto px-0.5 pb-0.5">
+      {steps.map((step, index) => (
+        <Fragment key={`${step.nodeType}-${index}`}>
           {index > 0 ? (
             <ChevronRightIcon aria-hidden className="size-3 shrink-0 text-muted-foreground/60" />
           ) : null}
-          <span className="flex items-center gap-1 rounded-md border border-border bg-muted/50 px-1.5 py-0.5 text-xs">
-            <NodeIcon name={entry.icon} className="size-3 shrink-0 text-muted-foreground" />
-            <span className="max-w-28 truncate">{entry.label}</span>
+          <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-border bg-muted/40 px-1.5 py-0.5 text-xs">
+            <NodeIcon
+              name={NODES[step.nodeType]?.icon}
+              className="size-3.5 shrink-0 text-muted-foreground"
+            />
+            <span className="max-w-28 truncate">{step.label}</span>
           </span>
-        </span>
+        </Fragment>
       ))}
-      {more > 0 ? <span className="text-xs text-muted-foreground">+{more} more</span> : null}
+      {more > 0 ? (
+        <span className="shrink-0 pl-1 text-xs text-muted-foreground">+{more} more</span>
+      ) : null}
     </div>
+  );
+}
+
+/** "Needs Telegram" — one chip per connection this template will ask you for. */
+function SetupChip({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="inline-flex h-6 items-center gap-1 rounded-md border border-border bg-muted/40 px-1.5 text-xs text-muted-foreground">
+      <PlugZapIcon aria-hidden className="size-3.5 shrink-0" />
+      {children}
+    </span>
   );
 }
 
@@ -77,60 +94,64 @@ function TemplateCard({
   disabled: boolean;
   onPick: (template: WorkflowTemplate) => void;
 }) {
-  const setup = templateSetup(template.graph);
   // "an AI provider" and "Telegram" rather than "ai" and "telegram": the card is read before the
   // template is picked, so it has to say what you will be asked for in the words you would use.
-  const needs = [...new Set(setup.map((step) => credentialName(step.credential)))];
+  const needs = [...new Set(templateSetup(template.graph).map((step) => credentialName(step.credential)))];
+
+  function pick() {
+    if (!disabled) onPick(template);
+  }
 
   return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={() => onPick(template)}
+    // The card is clickable as a convenience; the button inside it is the real control, so
+    // keyboard users get one focus stop that does exactly what the whole card does.
+    <div
+      onClick={pick}
       className={cn(
-        "group flex flex-col gap-2.5 rounded-xl border border-border bg-card p-3.5 text-left transition-colors",
-        "hover:border-ring hover:bg-muted/40",
-        "focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
-        "disabled:cursor-not-allowed disabled:opacity-60",
+        "group flex cursor-pointer flex-col gap-3 rounded-xl border border-border bg-card p-4 transition-colors",
+        "hover:border-ring hover:bg-muted/40 has-[button:focus-visible]:border-ring",
+        disabled && "cursor-not-allowed opacity-60",
         pending && "border-ring bg-muted/40",
       )}
     >
-      <div className="flex items-start gap-2">
-        <div className="min-w-0 flex-1">
-          <p className="text-xs tracking-wide text-muted-foreground uppercase">
-            {template.category}
-          </p>
-          <p className="mt-0.5 text-sm font-medium">{template.name}</p>
+      <div className="min-w-0">
+        <p className="text-xs tracking-wide text-muted-foreground uppercase">{template.category}</p>
+        <div className="mt-1 flex items-start justify-between gap-2">
+          <p className="text-sm font-medium">{template.name}</p>
+          {template.requiresFeature ? (
+            <Badge variant="secondary" className="shrink-0">
+              {featureLabel(template.requiresFeature)}
+            </Badge>
+          ) : null}
         </div>
-        {template.requiresFeature ? (
-          <Badge variant="secondary" className="shrink-0">
-            {featureLabel(template.requiresFeature)}
-          </Badge>
-        ) : null}
       </div>
 
       <p className="text-sm text-muted-foreground">{template.description}</p>
 
-      <TemplatePreview graph={template.graph} />
+      <TemplateFlow graph={template.graph} />
 
-      {needs.length > 0 ? (
-        <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <PlugZapIcon aria-hidden className="size-3.5 shrink-0" />
-          Needs {needs.join(" and ")}
-        </p>
-      ) : (
-        <p className="text-xs text-muted-foreground">Runs as soon as you add it.</p>
-      )}
-
-      <span
-        aria-hidden
-        className={cn(
-          "text-xs font-medium text-muted-foreground transition-colors group-hover:text-foreground",
-        )}
-      >
-        {pending ? "Adding…" : "Use this template →"}
-      </span>
-    </button>
+      <div className="mt-auto flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-1">
+          {needs.length > 0 ? (
+            needs.map((need) => <SetupChip key={need}>Needs {need}</SetupChip>)
+          ) : (
+            <span className="text-xs text-muted-foreground">Runs as soon as you add it</span>
+          )}
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={disabled}
+          onClick={(event) => {
+            // The card behind it would otherwise pick the same template twice.
+            event.stopPropagation();
+            pick();
+          }}
+        >
+          {pending ? "Adding…" : "Use template"}
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -138,21 +159,94 @@ export type TemplateGalleryProps = {
   onPick: (template: WorkflowTemplate) => void;
   /** The template currently being created, so its card can say so and the rest can wait. */
   pendingId?: string | null;
+  /** Sizes the gallery's own scroll area — a dialog caps it, the empty state lets it run. */
+  className?: string;
 };
 
-/** The five starter workflows as cards. Clicking one is the whole interaction. */
-export function TemplateGallery({ onPick, pendingId }: TemplateGalleryProps) {
+/** The starter workflows as cards, with a search box and the categories above them. */
+export function TemplateGallery({ onPick, pendingId, className }: TemplateGalleryProps) {
+  const searchId = useId();
+  const [query, setQuery] = useState("");
+  const [category, setCategory] = useState<string>(ALL_CATEGORIES);
+
+  const categories = useMemo(() => templateCategories(WORKFLOW_TEMPLATES), []);
+  const shown = useMemo(
+    () => filterTemplates(WORKFLOW_TEMPLATES, { query, category }),
+    [query, category],
+  );
+
+  const busy = pendingId !== null && pendingId !== undefined;
+
   return (
-    <div className="grid gap-3 sm:grid-cols-2">
-      {WORKFLOW_TEMPLATES.map((template) => (
-        <TemplateCard
-          key={template.id}
-          template={template}
-          pending={pendingId === template.id}
-          disabled={pendingId !== null && pendingId !== undefined}
-          onPick={onPick}
-        />
-      ))}
+    <div className={cn("flex min-h-0 flex-col gap-3", className)}>
+      <div className="flex flex-col gap-2">
+        <div className="relative">
+          <SearchIcon
+            aria-hidden
+            className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
+          />
+          <Input
+            id={searchId}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search templates"
+            aria-label="Search templates"
+            className="pl-8"
+          />
+        </div>
+
+        <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Template categories">
+          {categories.map((entry) => {
+            const active = entry.value === category;
+            return (
+              <Button
+                key={entry.value}
+                type="button"
+                size="xs"
+                variant={active ? "secondary" : "ghost"}
+                aria-pressed={active}
+                onClick={() => setCategory(entry.value)}
+              >
+                {entry.label}
+                <span className="text-muted-foreground tabular-nums">{entry.count}</span>
+              </Button>
+            );
+          })}
+        </div>
+      </div>
+
+      {shown.length === 0 ? (
+        <div className="flex flex-col items-start gap-2 rounded-xl border border-dashed border-border p-6">
+          <p className="text-sm font-medium">No templates match</p>
+          <p className="text-sm text-muted-foreground">
+            Try a shorter search, or start from a blank canvas and draw it yourself.
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setQuery("");
+              setCategory(ALL_CATEGORIES);
+            }}
+          >
+            Clear filters
+          </Button>
+        </div>
+      ) : (
+        <div className="min-h-0 flex-1 overflow-y-auto pr-0.5">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {shown.map((template) => (
+              <TemplateCard
+                key={template.id}
+                template={template}
+                pending={pendingId === template.id}
+                disabled={busy}
+                onPick={onPick}
+              />
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -174,23 +268,24 @@ export function TemplateDialog({ trigger, title, description, onPick }: Template
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger render={trigger} />
-      <DialogContent className="sm:max-w-3xl">
+      <DialogContent className="sm:max-w-4xl">
         <DialogHeader>
-          <DialogTitle>{title ?? "Start from a template"}</DialogTitle>
+          <DialogTitle className="flex items-center gap-2">
+            <LayoutTemplateIcon aria-hidden className="size-4 text-muted-foreground" />
+            {title ?? "Start from a template"}
+          </DialogTitle>
           <DialogDescription>
-            {description ??
-              "Each one is a working graph you can edit. Nothing is locked in."}
+            {description ?? "Each one is a working graph you can edit. Nothing is locked in."}
           </DialogDescription>
         </DialogHeader>
 
-        <div className="max-h-[60vh] overflow-y-auto">
-          <TemplateGallery
-            onPick={(template) => {
-              onPick(template);
-              setOpen(false);
-            }}
-          />
-        </div>
+        <TemplateGallery
+          className="max-h-[60vh]"
+          onPick={(template) => {
+            onPick(template);
+            setOpen(false);
+          }}
+        />
       </DialogContent>
     </Dialog>
   );

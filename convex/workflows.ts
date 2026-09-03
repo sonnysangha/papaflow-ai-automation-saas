@@ -19,6 +19,16 @@ export const graphValidator = v.object({
   triggerId: v.optional(v.string()),
 });
 
+/** `executions.status`, restated so the summary's runs arrive on the client as a narrow union. */
+const runStatus = v.union(
+  v.literal("queued"),
+  v.literal("running"),
+  v.literal("waiting"),
+  v.literal("completed"),
+  v.literal("failed"),
+  v.literal("cancelled"),
+);
+
 /** What the list page needs — deliberately not the whole document (no graph, no webhook secret). */
 const workflowSummary = v.object({
   _id: v.id("workflows"),
@@ -33,7 +43,87 @@ const workflowSummary = v.object({
    * where you go to see it.
    */
   schedule: v.union(v.object({ cron: v.string(), nextAt: v.optional(v.number()) }), v.null()),
+  /**
+   * The node type of the trigger heading this graph (`"form.trigger"`, `"telegram.message"`, …),
+   * or null while the canvas is still empty. The list turns it into a chip; the *type* travels
+   * rather than a label so the client owns the wording.
+   */
+  triggerNodeType: v.union(v.string(), v.null()),
+  /** The newest run, or null when this workflow has never run. */
+  lastRun: v.union(
+    v.object({
+      status: runStatus,
+      startedAt: v.number(),
+      finishedAt: v.optional(v.number()),
+      error: v.optional(v.string()),
+    }),
+    v.null(),
+  ),
+  /** The newest runs first, at most eight — the row's activity strip. */
+  recentRuns: v.array(
+    v.object({
+      status: runStatus,
+      startedAt: v.number(),
+      finishedAt: v.optional(v.number()),
+    }),
+  ),
+  /** How many runs started in the last seven days. See `RUN_SCAN` for the cap. */
+  runCount7d: v.number(),
 });
+
+/** How many runs a row's activity strip shows. */
+const RECENT_RUNS = 8;
+/**
+ * How far back into a workflow's history one list row reads. Both the strip and the seven-day
+ * count come out of this single scan, which is what caps the count: a workflow busier than fifty
+ * runs a week reports fifty. The list is a glance, and `/w/:id/runs` is where the real number is.
+ */
+const RUN_SCAN = 50;
+const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Node types that head a graph without saying `.trigger` — the two inbound event triggers. */
+const EVENT_TRIGGER_TYPES = new Set(["telegram.message", "stripe.event"]);
+
+/** `data.nodeType` off a stored React Flow node, which the schema keeps as `v.any()`. */
+function nodeTypeOf(node: unknown): string | null {
+  if (typeof node !== "object" || node === null) return null;
+  const data: unknown = (node as { data?: unknown }).data;
+  if (typeof data !== "object" || data === null) return null;
+  const nodeType: unknown = (data as { nodeType?: unknown }).nodeType;
+  return typeof nodeType === "string" ? nodeType : null;
+}
+
+function nodeIdOf(node: unknown): string | null {
+  if (typeof node !== "object" || node === null) return null;
+  const id: unknown = (node as { id?: unknown }).id;
+  return typeof id === "string" ? id : null;
+}
+
+/**
+ * The trigger this graph is headed by, as a node type: whatever `graph.triggerId` points at, and
+ * failing that the first node that looks like a trigger.
+ *
+ * Spelled out here rather than asked of `nodes/registry`, deliberately: importing the registry into
+ * Convex would drag the Workflow SDK in with it. Two node types head a graph without saying so in
+ * their name, so they are named above; anything else ending `.trigger` is one by construction.
+ */
+function triggerNodeTypeOf(graph: Doc<"workflows">["graph"]): string | null {
+  const nodes: unknown[] = graph.nodes;
+
+  if (typeof graph.triggerId === "string") {
+    const named = nodes.find((node) => nodeIdOf(node) === graph.triggerId);
+    const nodeType = named === undefined ? null : nodeTypeOf(named);
+    if (nodeType) return nodeType;
+  }
+
+  for (const node of nodes) {
+    const nodeType = nodeTypeOf(node);
+    if (nodeType && (nodeType.endsWith(".trigger") || EVENT_TRIGGER_TYPES.has(nodeType))) {
+      return nodeType;
+    }
+  }
+  return null;
+}
 
 const WEBHOOK_SECRET_LENGTH = 32;
 const BASE64URL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
@@ -102,15 +192,46 @@ export const list = query({
         ]),
     );
 
-    return workflows.map((workflow) => ({
-      _id: workflow._id,
-      _creationTime: workflow._creationTime,
-      name: workflow.name,
-      status: workflow.status,
-      version: workflow.version,
-      updatedAt: workflow.updatedAt,
-      schedule: byWorkflow.get(workflow._id) ?? null,
-    }));
+    // Runs are per workflow — the index is keyed on one — so this is the one fan-out the list does,
+    // bounded by `RUN_SCAN` rows each and issued in parallel rather than one row at a time.
+    const since = Date.now() - SEVEN_DAYS_MS;
+
+    return await Promise.all(
+      workflows.map(async (workflow) => {
+        const runs = await ctx.db
+          .query("executions")
+          .withIndex("by_workflow_started", (q) => q.eq("workflowId", workflow._id))
+          .order("desc")
+          .take(RUN_SCAN);
+
+        const [newest] = runs;
+
+        return {
+          _id: workflow._id,
+          _creationTime: workflow._creationTime,
+          name: workflow.name,
+          status: workflow.status,
+          version: workflow.version,
+          updatedAt: workflow.updatedAt,
+          schedule: byWorkflow.get(workflow._id) ?? null,
+          triggerNodeType: triggerNodeTypeOf(workflow.graph),
+          lastRun: newest
+            ? {
+                status: newest.status,
+                startedAt: newest.startedAt,
+                finishedAt: newest.finishedAt,
+                error: newest.error,
+              }
+            : null,
+          recentRuns: runs.slice(0, RECENT_RUNS).map((run) => ({
+            status: run.status,
+            startedAt: run.startedAt,
+            finishedAt: run.finishedAt,
+          })),
+          runCount7d: runs.filter((run) => run.startedAt >= since).length,
+        };
+      }),
+    );
   },
 });
 

@@ -1,3 +1,4 @@
+import { paginationOptsValidator, paginationResultValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
 
 import { runHistoryDays } from "../lib/plans";
@@ -201,6 +202,126 @@ export const listByOrg = query({
     }
 
     return { runs, workflowNames, windowDays: days, clipped: older !== null };
+  },
+});
+
+/**
+ * One row of the paginated runs lists: every column the runs pages draw, and nothing else.
+ *
+ * `trigger.payload` is deliberately dropped. It is whatever the webhook, form or Stripe event
+ * arrived with — potentially large, and of no use to a table that only shows *how* a run started —
+ * so a page of 25 rows stays a page of 25 small rows. The drawer reads the run's steps for detail.
+ */
+const runRow = v.object({
+  _id: v.id("executions"),
+  _creationTime: v.number(),
+  workflowId: v.id("workflows"),
+  workflowVersion: v.number(),
+  planSlug: v.string(),
+  status: executionStatusValidator,
+  trigger: v.object({ type: v.string() }),
+  runId: v.optional(v.string()),
+  startedBy: v.optional(v.string()),
+  startedAt: v.number(),
+  finishedAt: v.optional(v.number()),
+  error: v.optional(v.string()),
+});
+
+/** The projection above, applied to a stored row. */
+function toRunRow(execution: Doc<"executions">) {
+  return {
+    _id: execution._id,
+    _creationTime: execution._creationTime,
+    workflowId: execution.workflowId,
+    workflowVersion: execution.workflowVersion,
+    planSlug: execution.planSlug,
+    status: execution.status,
+    trigger: { type: execution.trigger.type },
+    runId: execution.runId,
+    startedBy: execution.startedBy,
+    startedAt: execution.startedAt,
+    finishedAt: execution.finishedAt,
+    error: execution.error,
+  };
+}
+
+/**
+ * Every run in the organisation, newest first, a page at a time.
+ *
+ * The same window as `listByOrg` — `by_org_started` is ordered on `startedAt`, so the plan's
+ * retention cutoff is the lower bound of the index range and a run outside it is never read — but
+ * cursored instead of capped at 50, so `Load more` walks back through the whole window rather than
+ * stopping at an arbitrary number. Each page is a live subscription like any other query, so a run
+ * that starts while you are reading appears at the top of the first page.
+ */
+export const pageByOrg = query({
+  args: { paginationOpts: paginationOptsValidator },
+  returns: paginationResultValidator(runRow),
+  handler: async (ctx, { paginationOpts }) => {
+    const { orgId, features } = await requireOrg(ctx);
+    const { since } = historyWindow(features);
+
+    const page = await ctx.db
+      .query("executions")
+      .withIndex("by_org_started", (q) => q.eq("orgId", orgId).gte("startedAt", since))
+      .order("desc")
+      .paginate(paginationOpts);
+
+    return { ...page, page: page.page.map(toRunRow) };
+  },
+});
+
+/** The same page, for one workflow, on `by_workflow_started`. Ownership is proved first. */
+export const pageByWorkflow = query({
+  args: { workflowId: v.id("workflows"), paginationOpts: paginationOptsValidator },
+  returns: paginationResultValidator(runRow),
+  handler: async (ctx, { workflowId, paginationOpts }) => {
+    const { orgId, features } = await requireOrg(ctx);
+    await workflowInOrg(ctx, workflowId, orgId);
+
+    const { since } = historyWindow(features);
+
+    const page = await ctx.db
+      .query("executions")
+      .withIndex("by_workflow_started", (q) =>
+        q.eq("workflowId", workflowId).gte("startedAt", since),
+      )
+      .order("desc")
+      .paginate(paginationOpts);
+
+    return { ...page, page: page.page.map(toRunRow) };
+  },
+});
+
+/**
+ * How far back this plan lets the pages look, and whether anything older exists.
+ *
+ * A paginated list cannot answer either question — it only knows about the rows it has fetched —
+ * so the window note is its own subscription: one indexed read for the newest run *before* the
+ * cutoff, which is what turns the upgrade prompt on. Pass `workflowId` for one workflow's page.
+ */
+export const windowInfo = query({
+  args: { workflowId: v.optional(v.id("workflows")) },
+  returns: v.object({ windowDays: v.number(), clipped: v.boolean() }),
+  handler: async (ctx, { workflowId }) => {
+    const { orgId, features } = await requireOrg(ctx);
+    const { days, since } = historyWindow(features);
+
+    if (workflowId) await workflowInOrg(ctx, workflowId, orgId);
+
+    const older = workflowId
+      ? await ctx.db
+          .query("executions")
+          .withIndex("by_workflow_started", (q) =>
+            q.eq("workflowId", workflowId).lt("startedAt", since),
+          )
+          .first()
+      : await ctx.db
+          .query("executions")
+          .withIndex("by_org_started", (q) => q.eq("orgId", orgId).lt("startedAt", since))
+          .first();
+
+    return { windowDays: days, clipped: older !== null };
   },
 });
 

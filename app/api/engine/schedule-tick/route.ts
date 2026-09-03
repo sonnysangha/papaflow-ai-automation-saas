@@ -155,7 +155,22 @@ export async function POST(request: Request): Promise<Response> {
       throw cause;
     }
   } catch (cause) {
+    // An id Convex rejects before any handler runs (`v.id("schedules")` on a string that is not
+    // one) names a row that cannot exist. That is a 404 — which `fire` treats like a 409 and
+    // disarms — not a fault worth three retries and a fallback alarm. Convex itself never sends
+    // one; only a hand-written probe does.
+    if (isArgumentValidationError(cause)) {
+      return Response.json(
+        { code: "not_found", error: "No such schedule or workflow." },
+        { status: 404 },
+      );
+    }
     console.error("engine/schedule-tick: could not run the tick", cause);
     return Response.json({ code: "tick_failed", error: safeErrorMessage(cause) }, { status: 500 });
   }
+}
+
+/** Convex refused an argument before running anything — the row the id names cannot exist. */
+function isArgumentValidationError(cause: unknown): boolean {
+  return cause instanceof Error && /ArgumentValidationError/.test(cause.message);
 }

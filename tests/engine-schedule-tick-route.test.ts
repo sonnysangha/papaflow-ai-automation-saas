@@ -119,6 +119,23 @@ describe("POST /api/engine/schedule-tick — not_published", () => {
     expect(startRun).not.toHaveBeenCalled();
   });
 
+  it("answers 404, not 500, for an id Convex rejects before any handler runs", async () => {
+    // What `ConvexHttpClient` surfaces when `v.id("schedules")` refuses the string — a probe with a
+    // made-up id, never a tick Convex itself sent. A 500 here would have Convex retry three times
+    // and arm a fallback for a row that cannot exist.
+    getSchedule.mockRejectedValue(
+      new Error(
+        '[Request ID: abc] Server Error\nArgumentValidationError: Value does not match validator.\nPath: .scheduleId\nValue: "bogus"\nValidator: v.id("schedules")',
+      ),
+    );
+
+    const response = await POST(post({ ...BODY, scheduleId: "bogus" }));
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toMatchObject({ code: "not_found" });
+    expect(startRun).not.toHaveBeenCalled();
+  });
+
   it("refuses a schedule that has been disarmed since Convex's own check", async () => {
     getSchedule.mockResolvedValue(scheduleRow({ enabled: false }));
 

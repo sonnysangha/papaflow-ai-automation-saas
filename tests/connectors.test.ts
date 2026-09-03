@@ -74,7 +74,7 @@ describe("connector registry", () => {
     expect(() => buildConnectorRegistry([twin, twin])).toThrow(/openai/);
   });
 
-  it("describes every AI connector as a single free-to-add api key", () => {
+  it("describes every AI connector as a free-to-add api key, and asks for nothing else it can avoid", () => {
     for (const def of Object.values(CONNECTORS).filter((d) => d.category === "ai")) {
       expect(def.category).toBe("ai");
       expect(def.kind).toBe("apiKey");
@@ -82,10 +82,19 @@ describe("connector registry", () => {
       expect(def.name).toBeTruthy();
       expect(def.icon).toBeTruthy();
       expect(def.docsUrl).toMatch(/^https:\/\//);
-      expect(def.fields).toHaveLength(1);
+      expect(typeof def.test).toBe("function");
+
+      // One secret, always first, always the key itself.
       expect(def.fields[0]).toMatchObject({ name: "apiKey", label: "API key", kind: "secret" });
       expect(def.fields[0].placeholder).toBeTruthy();
-      expect(typeof def.test).toBe("function");
+      expect(def.fields.filter((field) => field.kind === "secret")).toHaveLength(1);
+
+      // Anything past it is a provider's own requirement (Anthropic's workspace id for a key that
+      // is not tied to one workspace) and must be optional, or pasting a key stops being one step.
+      for (const field of def.fields.slice(1)) {
+        expect(field.required).toBe(false);
+        expect(field.help).toBeTruthy();
+      }
     }
   });
 

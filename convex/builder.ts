@@ -750,7 +750,15 @@ export const activateInternal = internalMutation({
   },
 });
 
-/** Marks the workflow active — what `finish` does once `validate_workflow` came back clean. */
+/**
+ * Marks the workflow active, and nothing else.
+ *
+ * No app caller today, on purpose: the Builder's `finish` used to publish through here, and a
+ * schedule-triggered workflow it finished was live in the canvas and never fired, because a
+ * Schedule trigger's "on" is also a durable scheduler run that Convex cannot start. Publishing goes
+ * through `POST /api/engine/publish` → `lib/publish-server.ts` now, for the Builder and the Publish
+ * button alike. Anything that publishes must go the same way.
+ */
 export const activate = mutation({
   args: { secret: v.string(), ...editArgs },
   returns: activateResult,

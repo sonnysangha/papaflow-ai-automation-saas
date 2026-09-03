@@ -25,7 +25,6 @@ const engine = vi.hoisted(() => ({
   addBuilderNode: vi.fn(),
   connectBuilderNodes: vi.fn(),
   removeBuilderNode: vi.fn(),
-  activateBuilderWorkflow: vi.fn(),
 }));
 vi.mock("@/lib/builder-engine", () => ({
   ...engine,
@@ -38,7 +37,7 @@ const connections = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/connections-engine", () => connections);
 
-const { describeWorkflow, setTriggerSample, updateNode } = await import(
+const { describeWorkflow, finish, setTriggerSample, updateNode } = await import(
   "@/agents/builder/lib/edits"
 );
 const { listRuns, runReport, startManualRun, summariseRun, summariseSteps, trimValue, waitForRun } =
@@ -52,6 +51,7 @@ const getRunTool = (await import("@/agents/builder/tools/get_run")).default;
 const listRunsTool = (await import("@/agents/builder/tools/list_runs")).default;
 const listPickerOptions = (await import("@/agents/builder/tools/list_picker_options")).default;
 const runWorkflow = (await import("@/agents/builder/tools/run_workflow")).default;
+const finishTool = (await import("@/agents/builder/tools/finish")).default;
 
 const SESSION = {
   orgId: "org_1",
@@ -388,10 +388,14 @@ describe("the run tools", () => {
 });
 
 /* -------------------------------------------------------------------------------------------------
- * Starting a run.
+ * Knocking on the Next app: starting a run, and publishing.
+ *
+ * Both go through `agents/builder/lib/engine-route.ts`, because both need something that only
+ * exists inside the Next build — `start(runGraph, …)` for a run, and the durable scheduler run that
+ * publishing a Schedule trigger starts.
  * ---------------------------------------------------------------------------------------------- */
 
-function stubRunRoute(response: { status: number; body: unknown }) {
+function stubAppRoute(response: { status: number; body: unknown }) {
   const calls: { url: string; init: RequestInit }[] = [];
   vi.stubGlobal(
     "fetch",
@@ -408,7 +412,7 @@ function stubRunRoute(response: { status: number; body: unknown }) {
 
 describe("startManualRun", () => {
   it("asks the Next app to press Run, with the shared secret as a bearer token", async () => {
-    const calls = stubRunRoute({ status: 200, body: { executionId: "exec_9", runId: "run_9" } });
+    const calls = stubAppRoute({ status: 200, body: { executionId: "exec_9", runId: "run_9" } });
 
     expect(await startManualRun(SESSION, { name: "Sam" })).toEqual({ runId: "exec_9" });
     expect(calls[0].url).toBe("https://app.test/api/engine/run");
@@ -424,12 +428,12 @@ describe("startManualRun", () => {
   });
 
   it("passes a 4xx back as a sentence the model can act on", async () => {
-    stubRunRoute({ status: 400, body: { code: "run_failed", error: "run_limit" } });
+    stubAppRoute({ status: 400, body: { code: "run_failed", error: "run_limit" } });
     await expect(startManualRun(SESSION, undefined)).rejects.toThrow(/run_limit/);
   });
 
   it("treats a 401 or a 5xx as the deployment's problem, not the model's", async () => {
-    stubRunRoute({ status: 401, body: { error: "Bad engine secret." } });
+    stubAppRoute({ status: 401, body: { error: "Bad engine secret." } });
     await expect(startManualRun(SESSION, undefined)).rejects.toMatchObject({
       name: "EngineUnavailableError",
     });
@@ -439,6 +443,80 @@ describe("startManualRun", () => {
     delete process.env.APP_ORIGIN;
     await expect(startManualRun(SESSION, undefined)).rejects.toMatchObject({
       name: "EngineUnavailableError",
+    });
+  });
+});
+
+/* -------------------------------------------------------------------------------------------------
+ * Finishing, which is publishing.
+ *
+ * `finish` used to write the status through a Convex mutation, and a schedule-triggered workflow
+ * the Builder built was live in the canvas and never fired, because nothing had started the
+ * scheduler run. It now presses the same Publish the user presses, through
+ * `POST /api/engine/publish` — so what is pinned here is the request it makes and what it does with
+ * each kind of answer.
+ * ---------------------------------------------------------------------------------------------- */
+
+describe("finish", () => {
+  const SUMMARY = "Checks the endpoint every hour and posts failures to Slack.";
+
+  it("publishes through the app's own Publish, with the shared secret as a bearer token", async () => {
+    const calls = stubAppRoute({
+      status: 200,
+      body: { status: "active", scheduled: true, nextAt: 1_700_000_000_000 },
+    });
+
+    const result = await finish(SESSION, SUMMARY);
+
+    expect(calls[0].url).toBe("https://app.test/api/engine/publish");
+    expect((calls[0].init.headers as Record<string, string>).authorization).toBe(
+      "Bearer engine-secret",
+    );
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({
+      workflowId: "wf_1",
+      orgId: "org_1",
+      userId: "user_1",
+      publish: true,
+    });
+    expect(result).toMatchObject({
+      workflow: "Flow",
+      status: "active",
+      scheduled: true,
+      summary: SUMMARY,
+      trigger: "Manual trigger",
+    });
+  });
+
+  it("reports a plan that refuses the interval as something the model can fix", async () => {
+    stubAppRoute({
+      status: 400,
+      body: {
+        code: "too_frequent",
+        error:
+          "Your plan runs a schedule at most once every 1 hour; this one would run every 2 min. " +
+          "Upgrade, or slow the schedule down.",
+      },
+    });
+
+    // The route's own sentence, plus the two ways out — the workflow is still unpublished, so
+    // slowing the schedule down and calling finish again actually works.
+    await expect(finish(SESSION, SUMMARY)).rejects.toThrow(/at most once every 1 hour/);
+    await expect(finish(SESSION, SUMMARY)).rejects.toThrow(/configure_node/);
+    await expect(finish(SESSION, SUMMARY)).rejects.toThrow(/still unpublished/);
+  });
+
+  it("passes on a refusal that is not the Schedule trigger's, as it came", async () => {
+    stubAppRoute({ status: 404, body: { code: "not_found", error: "No such workflow." } });
+    await expect(finish(SESSION, SUMMARY)).rejects.toThrow(/^No such workflow\.$/);
+  });
+
+  it("ends the turn on a 5xx instead of letting the model publish again", async () => {
+    stubAppRoute({ status: 500, body: { code: "publish_failed", error: "Convex is down" } });
+
+    expect(await call(finishTool, { summary: SUMMARY })).toMatchObject({
+      ok: false,
+      error: "service_unavailable",
+      retryable: false,
     });
   });
 });

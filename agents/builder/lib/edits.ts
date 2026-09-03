@@ -1,5 +1,4 @@
 import {
-  activateBuilderWorkflow,
   addBuilderNode,
   builderErrorMessage,
   configureBuilderNode,
@@ -15,6 +14,7 @@ import { isEngineUnavailable } from "../../../lib/engine-env";
 import { inputIssues, sourceHandlesFor, validateWorkflow } from "../../../lib/validate-workflow";
 import { NODES, nodeCatalogue } from "../../../nodes/registry";
 
+import { callEngineRoute, routeCodeOf } from "./engine-route";
 import type { BuilderSession } from "./session";
 import { viaEngine } from "./tool-result";
 
@@ -447,7 +447,63 @@ export async function validate(session: BuilderSession) {
 }
 
 /**
- * Marks the workflow active and describes how it starts.
+ * Publish refusals that are the Schedule trigger's own, and therefore fixable from here: the model
+ * edits the trigger with `configure_node` and calls `finish` again. Everything else the route
+ * refuses (a workflow that is not this org's) is passed on as it came.
+ */
+const SCHEDULE_REFUSALS: ReadonlySet<string> = new Set([
+  "too_frequent",
+  "no_schedule_trigger",
+  "invalid_schedule",
+  "invalid_cron",
+  "invalid_timezone",
+]);
+
+/**
+ * Publishes the workflow the way the user's own Publish button does.
+ *
+ * Not a Convex mutation, and that is the whole point. Publishing a Schedule trigger is a status
+ * write *and* a durable scheduler run sleeping until the next occurrence, and only the Next app can
+ * `start()` one — while `finish` published through `api.builder.activate`, a schedule-triggered
+ * workflow the Builder built was live in the canvas and never fired, because nothing was sleeping
+ * on it until a human pressed Publish. `POST /api/engine/publish` runs the same `applyPublish()`
+ * the button runs, with the plan read from Clerk (`lib/publish-server.ts`).
+ *
+ * A plan that refuses the interval comes back as a sentence the model can act on: the workflow is
+ * left unpublished, so slowing the schedule down and calling `finish` again actually works.
+ */
+async function publishThroughApp(
+  session: BuilderSession,
+): Promise<{ status: string; scheduled: boolean }> {
+  let body: Record<string, unknown>;
+  try {
+    body = await callEngineRoute(
+      "/api/engine/publish",
+      {
+        workflowId: session.workflowId,
+        orgId: session.orgId,
+        userId: session.userId,
+        publish: true,
+      },
+      "The workflow could not be published",
+    );
+  } catch (error) {
+    if (isEngineUnavailable(error) || !SCHEDULE_REFUSALS.has(routeCodeOf(error))) throw error;
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)} The workflow is still unpublished. ` +
+        "Change the Schedule trigger with configure_node — a longer interval, or a valid cron — " +
+        "and call finish again, or tell the user to upgrade their plan.",
+    );
+  }
+
+  return {
+    status: typeof body.status === "string" ? body.status : "active",
+    scheduled: body.scheduled === true,
+  };
+}
+
+/**
+ * Publishes the workflow and describes how it starts.
  *
  * A webhook trigger's URL is deliberately *not* returned: it carries `workflows.webhookSecret`, and
  * a secret must never reach the model (CLAUDE.md rule 1). The user reads it off the node's panel,
@@ -456,14 +512,16 @@ export async function validate(session: BuilderSession) {
 export async function finish(session: BuilderSession, summary: string) {
   const before = await readWorkflow(session);
   const validation = validateWorkflow(before.graph, { features: session.features });
-  const activated = await convex(() => activateBuilderWorkflow(identityOf(session)));
+  const published = await publishThroughApp(session);
 
   const triggerType = triggerTypeOf(before);
   const origin = (process.env.APP_ORIGIN ?? "").replace(/\/+$/, "");
 
   return {
-    workflow: activated.name,
-    status: activated.status,
+    workflow: before.name,
+    status: published.status,
+    /** True when a durable scheduler run is now sleeping on this workflow's Schedule trigger. */
+    scheduled: published.scheduled,
     summary,
     trigger: triggerType ? (NODES[triggerType]?.name ?? triggerType) : "none",
     startsWith: startsWith(triggerType, origin, session.workflowId),
@@ -567,7 +625,7 @@ function startsWith(triggerType: string | undefined, origin: string, workflowId:
     case "webhook.trigger":
       return "POST to the workflow's webhook URL — open the Webhook node on the canvas to copy it.";
     case "schedule.trigger":
-      return "It runs on its schedule; enable it from the canvas.";
+      return "Nothing — publishing started its schedule, and it runs on its own from now on.";
     default:
       return "It runs when its trigger fires.";
   }

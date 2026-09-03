@@ -19,16 +19,19 @@ import { toolResult } from "../lib/tool-result";
  * agent's `limits.sessionTimeoutMs`. `FINISH_TOOL` in `lib/builder-protocol.ts` is the name the
  * panel matches on, so renaming this file's tool means renaming that too.
  *
- * One thing this deliberately does *not* do: start a Schedule trigger. Activating the workflow is a
- * status write, and a schedule also needs a sleeping scheduler run that only the Next app can
- * `start()` (`lib/schedules-server.ts`). A schedule-triggered workflow the Builder finished is
- * published but unscheduled until someone presses Publish; nothing fires meanwhile, because there
- * is no scheduler run to fire it, and the trigger's panel says exactly that.
+ * **Publishing goes through the app, not through Convex.** A Schedule trigger's "on" is a status
+ * write *and* a durable scheduler run sleeping until the next occurrence, and only the Next app can
+ * `start()` one (`lib/schedules-server.ts`). While this tool wrote the status itself, a
+ * schedule-triggered workflow it finished was live in the canvas and never fired. It now calls
+ * `POST /api/engine/publish`, which runs the same `applyPublish()` the Publish button runs — so a
+ * plan that refuses the interval leaves the workflow *unpublished* and says so, and the model can
+ * slow the schedule down with `configure_node` and call this again.
  */
 export default defineTool({
   description:
-    "Mark the workflow active and summarise it for the user. Call validate_workflow first and fix " +
-    "every problem it reports; this is the last thing you do.",
+    "Publish the workflow — mark it active, start its schedule if it has one — and summarise it " +
+    "for the user. Call validate_workflow first and fix every problem it reports; this is the " +
+    "last thing you do.",
   inputSchema: z.object({
     summary: z.string().describe("Two or three sentences: what the workflow does, in plain words."),
   }),

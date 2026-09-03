@@ -9,6 +9,7 @@ import { EngineUnavailableError } from "../../../lib/engine-env";
 import { redact } from "../../../lib/redact";
 
 import { readWorkflow, storedNodesOf } from "./edits";
+import { callEngineRoute } from "./engine-route";
 import type { BuilderSession } from "./session";
 import { viaEngine } from "./tool-result";
 
@@ -205,40 +206,15 @@ export async function listRuns(session: BuilderSession, limit?: number): Promise
 /* -------------------------------------------------------------------------------------------------
  * Starting a run.
  *
- * The Builder cannot call start() from workflow/api itself, and this is not a style choice.
+ * The Builder cannot call start() from workflow/api itself, and this is not a style choice: a
+ * workflow function only exists as one once the Workflow SDK's compiler has transformed it, and
+ * that transform belongs to the Next build rather than to this agent's own Vercel service. The
+ * reasoning, and the transport, are in ./engine-route.ts.
  *
- * A workflow function only exists as one once the Workflow SDK's compiler has transformed it, and
- * that transform runs in the *Next* build: withWorkflow() wires the loaders and generates the
- * .well-known/workflow routes, while withEve() writes each agent as a separate Vercel Build Output
- * service (docs/research/eve-spike.md, Phase 12 addendum item 5 — the SDK still reports two
- * workflows, run-graph and scheduler, and a workflow-tool inside an agent belongs to that agent's
- * service). Importing lib/engine-client.ts here would also drag runGraph, every step file and the
- * whole node registry's I/O into the Builder's bundle, which is the exact thing lib/builder-engine.ts
- * exists to avoid.
- *
- * So the tool asks the Next app to press Run for it, over the same shared secret every other
- * session-less caller uses (CLAUDE.md rule 5). The route is app/api/engine/run/route.ts, and it
- * calls the same startRun() the Run button's server action calls, with the same Clerk plan
+ * So the tool asks the Next app to press Run for it. The route is app/api/engine/run/route.ts, and
+ * it calls the same startRun() the Run button's server action calls, with the same Clerk plan
  * snapshot — one code path, one set of quota checks, one trigger sample fallback.
  * ---------------------------------------------------------------------------------------------- */
-
-/** Where the Next app answers. The eve service carries it as APP_ORIGIN, like every other service. */
-function appOrigin(): string {
-  const origin = (process.env.APP_ORIGIN ?? "").trim().replace(/\/+$/, "");
-  if (!origin) {
-    throw new EngineUnavailableError("builder/runs: APP_ORIGIN is not set on this service");
-  }
-  return origin;
-}
-
-/** The shared secret the run route compares. Missing it is a deployment problem, not a model one. */
-function engineSecret(): string {
-  const secret = (process.env.ENGINE_SECRET ?? "").trim();
-  if (!secret) {
-    throw new EngineUnavailableError("builder/runs: ENGINE_SECRET is not set on this service");
-  }
-  return secret;
-}
 
 /**
  * Starts a manual run of this workflow and returns its execution id.
@@ -251,48 +227,22 @@ export async function startManualRun(
   session: BuilderSession,
   payload: Record<string, unknown> | undefined,
 ): Promise<{ runId: string }> {
-  let response: Response;
-  try {
-    response = await fetch(`${appOrigin()}/api/engine/run`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${engineSecret()}`,
-      },
-      body: JSON.stringify({
-        workflowId: session.workflowId,
-        orgId: session.orgId,
-        userId: session.userId,
-        ...(payload ? { payload } : {}),
-      }),
-    });
-  } catch (cause) {
-    throw new EngineUnavailableError("builder/runs: the app did not answer /api/engine/run", {
-      cause,
-    });
-  }
+  const body = await callEngineRoute(
+    "/api/engine/run",
+    {
+      workflowId: session.workflowId,
+      orgId: session.orgId,
+      userId: session.userId,
+      ...(payload ? { payload } : {}),
+    },
+    "The run could not be started",
+  );
 
-  const body: unknown = await response.json().catch(() => null);
-  const read = (name: string): string => {
-    const value = (body as Record<string, unknown> | null)?.[name];
-    return typeof value === "string" ? value : "";
-  };
-
-  if (response.ok) {
-    const runId = read("executionId");
-    if (!runId) {
-      throw new EngineUnavailableError("builder/runs: /api/engine/run answered without a run id");
-    }
-    return { runId };
+  const runId = typeof body.executionId === "string" ? body.executionId : "";
+  if (!runId) {
+    throw new EngineUnavailableError("builder/runs: /api/engine/run answered without a run id");
   }
-
-  // 401 and 5xx are ours to fix; 4xx is the workflow's or the plan's, and the model can act on it.
-  if (response.status === 401 || response.status >= 500) {
-    throw new EngineUnavailableError(
-      `builder/runs: /api/engine/run answered ${response.status} — ${read("error") || "no detail"}`,
-    );
-  }
-  throw new Error(read("error") || `The run could not be started (${response.status}).`);
+  return { runId };
 }
 
 /** How often the wait asks Convex whether the run has moved on. */

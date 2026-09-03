@@ -118,7 +118,8 @@ export function ScheduleConfig({ workflowId, inputs }: ScheduleConfigProps) {
    *
    * - running, with the instant the sleeping run will next wake;
    * - published but with no schedule row — the workflow was activated by something that only moves
-   *   the status (the Builder's `finish`, an older client), so nothing is sleeping on it yet;
+   *   the status (an older client; the Builder's `finish` now publishes the same way this button
+   *   does), so nothing is sleeping on it yet;
    * - not published, which is the ordinary "off";
    * - not configured yet, which the trigger's own fields above are where you fix.
    */

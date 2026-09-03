@@ -218,17 +218,15 @@ export async function getBuilderRun(args: {
   });
 }
 
-export async function activateBuilderWorkflow(
-  identity: EditIdentity,
-): Promise<{ name: string; status: string; version: number }> {
-  const { client, secret } = engineConvex();
-  return await client.mutation(api.builder.activate, {
-    secret,
-    workflowId: identity.workflowId as Id<"workflows">,
-    orgId: identity.orgId,
-    userId: identity.userId,
-  });
-}
+/*
+ * There is deliberately no `activateBuilderWorkflow` here any more.
+ *
+ * Publishing is not a status write: a Schedule trigger's "on" is the workflow's `status` *and* a
+ * durable scheduler run sleeping until the next occurrence, and Convex cannot start one. While
+ * `finish` published through `api.builder.activate`, a schedule-triggered workflow the Builder
+ * built was live in the canvas and never fired. It now calls `POST /api/engine/publish`, which runs
+ * the same `applyPublish()` the Publish button runs (`agents/builder/lib/engine-route.ts`).
+ */
 
 /** Opens (or reuses) this user's Builder chat for one workflow. */
 export async function startBuilderSession(args: {

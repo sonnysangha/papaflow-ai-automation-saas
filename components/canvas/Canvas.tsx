@@ -767,6 +767,7 @@ export function Canvas({
             // Read straight off the live document, not the seeded snapshot: rotating the secret in
             // another tab has to change the URL this panel shows.
             webhookSecret={workflow.webhookSecret}
+            workflowStatus={workflow.status}
             steps={steps}
             setNodes={setNodes}
             onClose={deselect}

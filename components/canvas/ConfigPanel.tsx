@@ -29,6 +29,7 @@ import { PickerField } from "./fields/PickerField";
 import { ResumeUrlPattern } from "./fields/ResumeUrl";
 import { TagList } from "./fields/TagList";
 import { TemplateInput } from "./fields/TemplateInput";
+import { FormUrl } from "./fields/FormUrl";
 import { TriggerUrl } from "./fields/TriggerUrl";
 import {
   handleDisplays,
@@ -63,6 +64,7 @@ const ACCOUNT_INPUTS = new Set([CONNECTION_INPUT, "model"]);
 
 /** The trigger whose configuration is not inputs at all, but the URL the workflow listens on. */
 const WEBHOOK_TRIGGER = "webhook.trigger";
+const FORM_TRIGGER = "form.trigger";
 
 /** …and the node whose configuration is the URL that resumes one paused run of this workflow. */
 const WAIT_FOR_WEBHOOK = "logic.waitForWebhook";
@@ -443,6 +445,8 @@ export type ConfigPanelProps = {
   /** The workflow being edited: the Webhook trigger's URL is built from these two. */
   workflowId: Id<"workflows">;
   webhookSecret: string;
+  /** The workflow's publish state — a draft form renders but its submissions start nothing. */
+  workflowStatus: "draft" | "active" | "paused";
   /** The latest run's step rows: the Last run section, and the observed half of the picker. */
   steps: readonly RunStepRow[];
   setNodes: (updater: (nodes: WorkflowNodeType[]) => WorkflowNodeType[]) => void;
@@ -461,6 +465,7 @@ export function ConfigPanel({
   edges,
   workflowId,
   webhookSecret,
+  workflowStatus,
   steps,
   setNodes,
   onClose,
@@ -564,6 +569,7 @@ export function ConfigPanel({
   // The Webhook trigger has no inputs — its URL is the configuration — so the panel must not
   // follow it with "This node has no settings."
   const showsUrl = node.data.nodeType === WEBHOOK_TRIGGER;
+  const showsFormUrl = node.data.nodeType === FORM_TRIGGER;
   const showsResumeUrl = node.data.nodeType === WAIT_FOR_WEBHOOK;
   // The Schedule trigger's fields describe the repeat; whether it is *running* is a separate piece
   // of state (a `schedules` row plus a durable run), so it gets a panel of its own below them.
@@ -668,6 +674,17 @@ export function ConfigPanel({
                 id={`${node.id}-webhook-url`}
                 workflowId={workflowId}
                 webhookSecret={webhookSecret}
+              />
+            </div>
+          )}
+
+          {showsFormUrl && (
+            <div className="space-y-1.5">
+              <Label htmlFor={`${node.id}-form-url`}>Form link</Label>
+              <FormUrl
+                id={`${node.id}-form-url`}
+                workflowId={workflowId}
+                published={workflowStatus === "active"}
               />
             </div>
           )}

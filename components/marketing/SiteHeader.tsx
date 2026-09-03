@@ -1,5 +1,7 @@
 import Link from "next/link";
 
+import { ThemeToggle } from "@/components/theme-toggle";
+
 import { AuthNav } from "./AuthNav";
 import { MobileNav } from "./MobileNav";
 import { MARKETING_NAV } from "./nav";
@@ -25,6 +27,7 @@ export function SiteHeader() {
         </nav>
 
         <div className="ml-auto flex items-center gap-1">
+          <ThemeToggle />
           <AuthNav />
           <MobileNav />
         </div>

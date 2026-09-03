@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { OrganizationSwitcher, UserButton } from "@clerk/nextjs";
 import { MenuIcon } from "lucide-react";
 
+import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -130,6 +131,7 @@ export function Header() {
         <NavLinks pathname={pathname} className="hidden items-center gap-1 text-sm sm:flex" />
 
         <div className="ml-auto flex items-center gap-3">
+          <ThemeToggle />
           <OrganizationSwitcher
             hidePersonal
             afterSelectOrganizationUrl="/w"

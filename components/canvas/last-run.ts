@@ -160,6 +160,33 @@ export function latestStepByNode(steps: readonly RunStepRow[]): Record<string, R
   return byNode;
 }
 
+/**
+ * The rows a panel should read while a new run is starting: the current run's, backed by the
+ * previous run's for every node the current one has not reached yet.
+ *
+ * Two things go empty the moment you press Run — a Convex subscription whose args just changed
+ * answers `undefined`, and a fresh execution has no rows at all for the nodes further down the
+ * graph — so without this the data you are reading disappears and comes back node by node, seconds
+ * later. Carrying the previous rows over keeps the last thing each node produced in front of you
+ * until the new run replaces it. The canvas is deliberately not fed this: its rings are about the
+ * run in progress and reset to idle for it.
+ *
+ * Rows are carried per node rather than merged inside one, so `latestStepByNode` is never asked to
+ * choose between two runs' passes of the same node: a node the current run has touched at all is
+ * represented only by the current run's rows.
+ */
+export function carryOverSteps(
+  previous: readonly RunStepRow[],
+  current: readonly RunStepRow[],
+): readonly RunStepRow[] {
+  if (previous.length === 0) return current;
+
+  const reached = new Set(current.map((step) => step.nodeId));
+  const carried = previous.filter((step) => !reached.has(step.nodeId));
+  // Identity is the caller's memo key, so an untouched answer has to stay the same array.
+  return carried.length === 0 ? current : [...carried, ...current];
+}
+
 function sourceFor(
   node: WorkflowNodeType,
   key: string,

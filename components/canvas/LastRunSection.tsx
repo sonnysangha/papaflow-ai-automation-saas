@@ -102,7 +102,13 @@ export function LastRunSection({ nodeId, run, hasSources }: LastRunSectionProps)
   // rather than as the state itself, so a run finishing while you are configuring the node opens
   // the section under you — and closing it yourself still sticks.
   const [override, setOverride] = useState<boolean | null>(null);
-  const open = override ?? run !== null;
+  // One-way, so the section never folds away under the cursor of someone typing in the form below
+  // it: a node's row can go missing for a moment (a new run started and has not reached this node),
+  // and a collapse followed by a re-expand is a layout jump in the middle of an edit. The panel is
+  // keyed by node id, so selecting another node still starts from that node's own answer.
+  const [everRan, setEverRan] = useState(run !== null);
+  if (!everRan && run !== null) setEverRan(true);
+  const open = override ?? everRan;
   const bodyId = `${nodeId}-last-run`;
   const now = useNow();
 

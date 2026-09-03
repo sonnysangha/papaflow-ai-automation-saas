@@ -15,7 +15,7 @@ import { NODES } from "@/nodes/registry";
 import { BuilderPanel } from "./BuilderPanel";
 import { Canvas } from "./Canvas";
 import { fromStoredGraph, type RunNodeState, type SaveState } from "./graph-io";
-import { latestStepByNode, type RunStepRow } from "./last-run";
+import { carryOverSteps, latestStepByNode, type RunStepRow } from "./last-run";
 import { NodeSidebar } from "./NodeSidebar";
 import { RunBar, type RunWorkflowAction } from "./RunBar";
 
@@ -116,6 +116,37 @@ function EditorSkeleton() {
 }
 
 /**
+ * The step rows the config panel reads: the live subscription, never emptier than the last thing
+ * each node produced.
+ *
+ * `useQuery` answers `undefined` for a subscription whose args have just changed, and pressing Run
+ * changes them — so between the click and the new run reaching a node, the query says nothing about
+ * a node that has data, and the panel someone is typing in loses its Last run section and its
+ * previews for several seconds. Carrying the previous rows over per node keeps them steady while
+ * the run walks down the graph. The canvas is fed the raw `steps` instead: its rings are about the
+ * run in progress and are meant to reset to idle for it.
+ */
+function useCarriedSteps(steps: readonly RunStepRow[] | undefined): readonly RunStepRow[] {
+  // Kept together with the query result it was derived from, so a render that changed neither hands
+  // back the same array identity and the config panel's memos hold.
+  const [carried, setCarried] = useState<{
+    from: readonly RunStepRow[] | undefined;
+    rows: readonly RunStepRow[];
+  }>(() => ({ from: steps, rows: steps ?? EMPTY_STEPS }));
+
+  if (carried.from !== steps) {
+    // State derived from a changing input: computed during the render that saw the change and
+    // returned straight away, so this pass already reads the new rows. React re-runs the component
+    // with the update before it commits anything.
+    const rows = steps === undefined ? carried.rows : carryOverSteps(carried.rows, steps);
+    setCarried({ from: steps, rows });
+    return rows;
+  }
+
+  return carried.rows;
+}
+
+/**
  * The workflow editor: a live `workflows.get` subscription, the node palette and the canvas.
  * Save state is owned here so the header strip can report it while `Canvas` does the work, and so
  * are the two run subscriptions — the latest execution and its steps — which the RunBar reports
@@ -131,8 +162,11 @@ export function Editor({
   const workflow = useQuery(api.workflows.get, { id: workflowId });
   const latest = useQuery(api.executions.latestByWorkflow, { workflowId });
   // `latest` is undefined while it loads and null before the first run; neither has steps to ask
-  // for. When a new run starts, this resubscribes and the canvas resets to idle for that run.
+  // for. When a new run starts, this resubscribes and the canvas resets to idle for that run —
+  // while `panelSteps` keeps the previous run's data in the config panel until the new one gets to
+  // that node.
   const steps = useQuery(api.steps.byExecution, latest ? { executionId: latest._id } : "skip");
+  const panelSteps = useCarriedSteps(steps);
   const [saveState, setSaveState] = useState<SaveState>("saved");
   // The Builder chat sits beside the canvas rather than over it: the point of the panel is watching
   // the graph grow while the agent talks, which a dialog would cover up.
@@ -208,7 +242,7 @@ export function Editor({
                 key={workflow._id}
                 workflow={workflow}
                 runByNode={runByNode}
-                steps={steps ?? EMPTY_STEPS}
+                steps={panelSteps}
                 onSaveStateChange={setSaveState}
               />
             </div>

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { PAPAFLOW_NODE_TYPE, type WorkflowNodeType } from "@/components/canvas/graph-io";
 import {
+  carryOverSteps,
   lastRunFor,
   latestStepByNode,
   pathPreviews,
@@ -135,6 +136,59 @@ describe("latestStepByNode", () => {
       step("agent_1#0", { parentStepId: "s1", output: { tool: "search" } }),
     ]);
     expect(Object.keys(byNode)).toEqual(["agent_1"]);
+  });
+});
+
+describe("carryOverSteps", () => {
+  it("hands back the current rows untouched when there is nothing to carry", () => {
+    const current = [step("a"), step("b")];
+    // Same array, not a copy: the config panel memoises on this identity.
+    expect(carryOverSteps([], current)).toBe(current);
+  });
+
+  it("keeps a node's last row until the new run reaches that node", () => {
+    const previous = [step("a", { output: { n: 1 } }), step("b", { output: { n: 2 } })];
+    const current = [step("a", { status: "running", finishedAt: undefined })];
+
+    const byNode = latestStepByNode(carryOverSteps(previous, current));
+    // `a` has been reached, so it speaks for itself; `b` still shows what it last produced.
+    expect(byNode.a.status).toBe("running");
+    expect(byNode.b.output).toEqual({ n: 2 });
+  });
+
+  it("drops a carried row the moment the same node runs again", () => {
+    const previous = [step("a", { output: { n: 1 } })];
+    const current = [step("a", { status: "failed", error: "boom", output: undefined })];
+
+    const byNode = latestStepByNode(carryOverSteps(previous, current));
+    expect(byNode.a.status).toBe("failed");
+    expect(byNode.a.output).toBeUndefined();
+  });
+
+  it("never lets a previous run's loop pass outrank the new run's first one", () => {
+    const previous = [
+      step("a", { iteration: 0, output: { i: 0 } }),
+      step("a", { iteration: 5, output: { i: 5 } }),
+    ];
+    const current = [step("a", { iteration: 0, output: { i: "new" } })];
+
+    const byNode = latestStepByNode(carryOverSteps(previous, current));
+    expect(byNode.a.output).toEqual({ i: "new" });
+  });
+
+  it("keeps carrying while the subscription has nothing at all to say", () => {
+    const previous = [step("a", { output: { n: 1 } })];
+    expect(carryOverSteps(previous, [])).toEqual(previous);
+  });
+
+  it("still speaks for a node the current run reached only in a spawned row", () => {
+    // Rows a node spawned share its id with a `#index` suffix, so they are different node ids and
+    // cannot hide the carried row of the node that spawned them.
+    const previous = [step("agent_1", { output: { text: "old" } })];
+    const current = [step("agent_1#0", { parentStepId: "s1", output: { tool: "search" } })];
+
+    const byNode = latestStepByNode(carryOverSteps(previous, current));
+    expect(byNode.agent_1.output).toEqual({ text: "old" });
   });
 });
 

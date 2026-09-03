@@ -144,14 +144,16 @@ export function PickerField({
 
   // The connection the value in hand was chosen against. Choosing a different one drops a value the
   // new account does not offer — under an Anthropic key, `gpt-5` is the old account's answer rather
-  // than a custom id somebody meant, and the run would fail on it. The ref only moves once a list
-  // has arrived, so the first load of an existing node never clears anything.
+  // than a custom id somebody meant, and the run would fail on it. Only the model list is complete
+  // enough to argue that (see `clearsOnConnectionChange`), so every other kind keeps its value. The
+  // ref only moves once a list has arrived, so the first load of an existing node never clears
+  // anything.
   const listedFor = useRef(connectionId);
   useEffect(() => {
     if (loaded === null || listedFor.current === connectionId) return;
     listedFor.current = connectionId;
-    if (clearsOnConnectionChange(loaded, value)) onChange("");
-  }, [connectionId, loaded, onChange, value]);
+    if (clearsOnConnectionChange(kind, loaded, value)) onChange("");
+  }, [connectionId, kind, loaded, onChange, value]);
 
   // Waiting on another field. Shown as the dropdown it is about to become, rather than as a text
   // box, so the panel does not reflow the moment the sibling is filled in — and carrying the
@@ -212,8 +214,10 @@ export function PickerField({
 
   // A value the list does not contain (a channel that was renamed, a model id typed before this
   // field was a dropdown) is kept as its own `Custom: …` option, so choosing something else stays
-  // a deliberate act rather than something the panel does behind the user's back.
-  const options = pickerOptions(loaded ?? [], value);
+  // a deliberate act rather than something the panel does behind the user's back. `loaded` stays
+  // `null` while the list is in flight, which is what keeps the trigger from calling a saved value
+  // custom before there is anything to have compared it against.
+  const options = pickerOptions(loaded, value);
 
   return (
     <div className="space-y-1">

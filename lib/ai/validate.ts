@@ -5,6 +5,7 @@
 // The key is only ever sent to the provider it belongs to, and only the last four characters
 // of it ever come back out (`hint`).
 import type { ConnectorTestResult } from "@/connectors/define";
+import { textGenerationModels } from "./model-list";
 
 const USER_AGENT = "papaflow/0.1";
 const TIMEOUT_MS = 15_000;
@@ -70,8 +71,10 @@ type Discovery = { models: string[]; meta?: Json };
 
 const DISCOVERERS: Record<string, (apiKey: string) => Promise<Discovery>> = {
   async openai(apiKey) {
+    // `/v1/models` is everything this key may reach — embeddings, TTS, image, transcription and
+    // moderation models included — and every one of them 400s on `generateText`.
     const body = (await request("https://api.openai.com/v1/models", { headers: bearer(apiKey) })) as Json;
-    return { models: ids(rows(body.data)) };
+    return { models: textGenerationModels(ids(rows(body.data))) };
   },
 
   async anthropic(apiKey) {
@@ -108,8 +111,10 @@ const DISCOVERERS: Record<string, (apiKey: string) => Promise<Discovery>> = {
   },
 
   async groq(apiKey) {
+    // Groq's list carries Whisper and PlayAI TTS beside the chat models, with no capability flag
+    // to tell them apart.
     const body = (await request("https://api.groq.com/openai/v1/models", { headers: bearer(apiKey) })) as Json;
-    return { models: ids(rows(body.data)) };
+    return { models: textGenerationModels(ids(rows(body.data))) };
   },
 
   async deepseek(apiKey) {
@@ -122,7 +127,7 @@ const DISCOVERERS: Record<string, (apiKey: string) => Promise<Discovery>> = {
     const list = (await request("https://openrouter.ai/api/v1/models", { headers: bearer(apiKey) })) as Json;
     const limitRemaining = (key.data as Json | undefined)?.limit_remaining;
     return {
-      models: ids(rows(list.data)),
+      models: textGenerationModels(ids(rows(list.data))),
       ...(typeof limitRemaining === "number" ? { meta: { limitRemaining } } : {}),
     };
   },

@@ -12,7 +12,8 @@ import {
  *
  * They exist because of the model dropdown: `model` was a text box until now, so every AI node in
  * every saved workflow holds a hand-typed id the new list may or may not contain, and every one of
- * those workflows has to keep running.
+ * those workflows has to keep running. The other pickers (Slack channels, Telegram chats) share the
+ * field, so most of what follows is about *not* applying the model rules to them.
  */
 
 const MODELS = [
@@ -37,11 +38,17 @@ describe("pickerOptions", () => {
     ]);
   });
 
-  it("keeps a template, and a value whose list never loaded", () => {
+  it("keeps a template the list does not contain", () => {
     expect(pickerOptions([], "{{ trigger.model }}")).toEqual([
       { id: "{{ trigger.model }}", label: "Custom: {{ trigger.model }}" },
     ]);
-    expect(pickerOptions([], "o4-mini")).toEqual([{ id: "o4-mini", label: "Custom: o4-mini" }]);
+  });
+
+  it("shows a value as itself while the list is still loading", () => {
+    // `null` is "no list yet", which is not evidence of anything: labelling a saved `gpt-5`
+    // `Custom: gpt-5` for the length of a round-trip says exactly the wrong thing about it.
+    expect(pickerOptions(null, "gpt-5")).toEqual([{ id: "gpt-5", label: "gpt-5" }]);
+    expect(pickerOptions(null, "")).toEqual([]);
   });
 
   it("does not mutate the list it was given", () => {
@@ -67,21 +74,31 @@ describe("emptyListHint", () => {
 });
 
 describe("clearsOnConnectionChange", () => {
-  it("drops a value the newly chosen account does not offer", () => {
-    expect(clearsOnConnectionChange(MODELS, "claude-fable-5-1")).toBe(true);
+  it("drops a model the newly chosen account does not offer", () => {
+    expect(clearsOnConnectionChange("models", MODELS, "claude-fable-5-1")).toBe(true);
   });
 
-  it("keeps a value the new account does offer", () => {
-    expect(clearsOnConnectionChange(MODELS, "gpt-5-mini")).toBe(false);
+  it("keeps a model the new account does offer", () => {
+    expect(clearsOnConnectionChange("models", MODELS, "gpt-5-mini")).toBe(false);
   });
 
   it("keeps everything when the new account listed nothing", () => {
     // An empty list is not evidence: the connection may simply have no captured model list.
-    expect(clearsOnConnectionChange([], "gpt-5")).toBe(false);
+    expect(clearsOnConnectionChange("models", [], "gpt-5")).toBe(false);
   });
 
   it("never touches a template or an empty field", () => {
-    expect(clearsOnConnectionChange(MODELS, "{{ trigger.model }}")).toBe(false);
-    expect(clearsOnConnectionChange(MODELS, "")).toBe(false);
+    expect(clearsOnConnectionChange("models", MODELS, "{{ trigger.model }}")).toBe(false);
+    expect(clearsOnConnectionChange("models", MODELS, "")).toBe(false);
+  });
+
+  it("never clears any other kind, because no other list is complete", () => {
+    // A Telegram bot only knows the chats that have written to it and Slack's channel listing stops
+    // after ten pages, so "absent" does not mean "the account does not have it" — and the value is
+    // autosaved, so clearing one would be silent data loss on a workflow that ran fine yesterday.
+    const chats = [{ id: "-100123", label: "ops" }];
+    for (const kind of ["chats", "channels", "targets", "bases", "tables:appABC"]) {
+      expect(clearsOnConnectionChange(kind, chats, "-100999")).toBe(false);
+    }
   });
 });

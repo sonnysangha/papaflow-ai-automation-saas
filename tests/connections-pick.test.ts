@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  * No AI connector implements `pick`: each one's `test()` already stored the provider's list on the
  * row (`meta.models`, CLAUDE.md rule 11), so this kind is answered from Convex without a provider
  * call. What the tests hold it to is that shape — ids and labels out of `meta`, the stored
- * credential never anywhere near the answer (rule 1), and no network at all.
+ * credential never anywhere near the answer (rule 1), no network at all, and no decryption either:
+ * a dropdown the browser opens on every panel is no reason to put key material in this process.
  */
 
 const { getConnectionSealed } = vi.hoisted(() => ({ getConnectionSealed: vi.fn() }));
@@ -87,6 +88,60 @@ describe("modelOptions", () => {
     ]);
   });
 
+  it("drops models a text-generation node cannot call", () => {
+    // OpenAI's `/v1/models` is everything the key may reach, and Groq's carries Whisper and TTS.
+    // Offering one of those in the Model field is a run-time 400 the user could not have typed
+    // themselves before this field became a dropdown.
+    expect(
+      modelOptions({
+        models: [
+          "gpt-5",
+          "text-embedding-3-small",
+          "tts-1",
+          "gpt-4o-mini-tts",
+          "dall-e-3",
+          "gpt-image-1",
+          "whisper-1",
+          "distil-whisper-large-v3-en",
+          "omni-moderation-latest",
+          "sora-2",
+          "babbage-002",
+          "davinci-002",
+          "playai-tts",
+        ],
+      }),
+    ).toEqual([{ id: "gpt-5", label: "gpt-5" }]);
+  });
+
+  it("keeps chat models whose names only look like another family", () => {
+    // The filter is by family, not by substring-anywhere: hiding a model the user needs is worse
+    // than offering one the provider refuses.
+    expect(
+      modelOptions({
+        models: [
+          "chatgpt-4o-latest",
+          "mistralai/mistral-7b-instruct",
+          "eleven_multilingual_v2",
+          "grok-4-fast-non-reasoning",
+        ],
+      }).map((option) => option.id),
+    ).toEqual([
+      "chatgpt-4o-latest",
+      "eleven_multilingual_v2",
+      "grok-4-fast-non-reasoning",
+      "mistralai/mistral-7b-instruct",
+    ]);
+  });
+
+  it("sorts, because a provider's own order is arbitrary", () => {
+    // OpenRouter alone answers with several hundred entries into a `Select` with no search box.
+    expect(
+      modelOptions({ models: ["z-ai/glm-4.6", "anthropic/claude-fable-5.1", "openai/gpt-5"] }).map(
+        (option) => option.id,
+      ),
+    ).toEqual(["anthropic/claude-fable-5.1", "openai/gpt-5", "z-ai/glm-4.6"]);
+  });
+
   it("reads `models` and nothing else off meta", () => {
     // `meta` is a connector's scratch pad — none of the rest of it belongs in a model dropdown.
     const options = modelOptions({
@@ -110,6 +165,37 @@ describe("pickConnectionOptions({ kind: 'models' })", () => {
       { id: "o4-mini", label: "o4-mini" },
     ]);
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("never opens the sealed credential to fill the dropdown", async () => {
+    // The browser asks for this list every time a config panel opens. Nothing about a dropdown
+    // justifies decrypting a key into this process (CLAUDE.md rule 1).
+    getConnectionSealed.mockResolvedValue(row("openai", { models: ["gpt-5"], fetchedAt: 1 }));
+
+    await pick();
+
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("still serves the list when the stored envelope will not open", async () => {
+    // A rotated `CREDENTIALS_KEK` breaks running the node, not reading the list that is sitting
+    // right there on the row — so the dropdown fills and the failure surfaces where it belongs.
+    getConnectionSealed.mockResolvedValue(row("openai", { models: ["gpt-5"], fetchedAt: 1 }));
+    open.mockImplementation(() => {
+      throw new Error("unsupported state or unable to authenticate data");
+    });
+
+    expect(await pick()).toEqual([{ id: "gpt-5", label: "gpt-5" }]);
+  });
+
+  it("does open the credential for a kind only the provider can answer", async () => {
+    // The other half of the rule: a real picker still gets its secret, exactly as before.
+    getConnectionSealed.mockResolvedValue(
+      row("telegram", { chat_ids: [{ id: -100123, title: "ops" }] }),
+    );
+
+    expect(await pick("chats")).toEqual([{ id: "-100123", label: "ops" }]);
+    expect(open).toHaveBeenCalledTimes(1);
   });
 
   it("answers an empty list for a connection stored before its models were captured", async () => {
@@ -138,12 +224,14 @@ describe("pickConnectionOptions({ kind: 'models' })", () => {
     expect(answer).not.toContain("limitRemaining");
   });
 
-  it("falls back to the stored list for a connector that does not know the kind", async () => {
-    // Telegram has a picker (chats), and answers `[]` for every other kind. An AI connector that
-    // grows a list of its own must not lose its model dropdown to that.
+  it("answers from the row even when the connector has a picker of its own", async () => {
+    // Telegram has a picker (chats) and answers `[]` for every other kind. An AI connector that
+    // grows a list of its own must not lose its model dropdown to that — and the row answering
+    // first is what keeps the credential shut.
     getConnectionSealed.mockResolvedValue(row("telegram", { models: ["some-model"] }));
 
     expect(await pick()).toEqual([{ id: "some-model", label: "some-model" }]);
+    expect(open).not.toHaveBeenCalled();
   });
 
   it("still refuses a kind nothing can answer", async () => {

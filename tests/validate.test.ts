@@ -67,6 +67,50 @@ describe("validateAndDiscover", () => {
     expect(typeof result.meta.fetchedAt).toBe("number");
   });
 
+  it("keeps only models a text-generation node can call", async () => {
+    // OpenAI's list is everything the key may reach and Groq's carries Whisper and PlayAI TTS, with
+    // no capability flag on either. What is captured here is what the Model dropdown offers and
+    // what the Builder picks its own planning model out of — where `prefer: ["large"]` would
+    // otherwise happily match `whisper-large-v3`.
+    stubFetch({
+      "https://api.openai.com/v1/models": {
+        body: {
+          data: [
+            { id: "gpt-5.4" },
+            { id: "text-embedding-3-small" },
+            { id: "tts-1" },
+            { id: "dall-e-3" },
+            { id: "whisper-1" },
+            { id: "omni-moderation-latest" },
+            { id: "chatgpt-4o-latest" },
+          ],
+        },
+      },
+    });
+
+    expect(expectOk(await validateAndDiscover("openai", "sk-live-abcd")).meta.models).toEqual([
+      "gpt-5.4",
+      "chatgpt-4o-latest",
+    ]);
+
+    vi.unstubAllGlobals();
+    stubFetch({
+      "https://api.groq.com/openai/v1/models": {
+        body: {
+          data: [
+            { id: "llama-3.3-70b-versatile" },
+            { id: "whisper-large-v3" },
+            { id: "playai-tts" },
+          ],
+        },
+      },
+    });
+
+    expect(expectOk(await validateAndDiscover("groq", "gsk-key-2222")).meta.models).toEqual([
+      "llama-3.3-70b-versatile",
+    ]);
+  });
+
   it("validates Anthropic with x-api-key + anthropic-version and reads data[].id", async () => {
     const calls = stubFetch({
       "https://api.anthropic.com/v1/models?limit=1000": {

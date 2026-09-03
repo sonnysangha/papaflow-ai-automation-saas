@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  choicesForKey,
   clearsOnConnectionChange,
   emptyListHint,
+  firstUnusedKey,
+  keyOptions,
+  parsePickerOptions,
   pickerOptions,
+  type PickerOption,
 } from "@/components/canvas/picker-options";
 
 /**
@@ -100,5 +105,132 @@ describe("clearsOnConnectionChange", () => {
     for (const kind of ["chats", "channels", "targets", "bases", "tables:appABC"]) {
       expect(clearsOnConnectionChange(kind, chats, "-100999")).toBe(false);
     }
+  });
+});
+
+/**
+ * The key half of a `{ key, value }` row — an Airtable column, a Notion property — is the same
+ * dropdown with two extra rules: a key is a *slot*, so one another row already writes is not on
+ * offer, and the list now describes what it lists (`type`, `choices`), which is what turns the
+ * value half into a dropdown of its own.
+ */
+const COLUMNS: PickerOption[] = [
+  { id: "Name", label: "Name", type: "singleLineText" },
+  { id: "Status", label: "Status", type: "singleSelect", choices: ["Todo", "Done"] },
+  { id: "Notes", label: "Notes", type: "multilineText" },
+];
+
+describe("parsePickerOptions", () => {
+  it("carries a column's type and its choices through untouched", () => {
+    expect(parsePickerOptions({ options: COLUMNS })).toEqual(COLUMNS);
+  });
+
+  it("leaves both off a list that describes nothing", () => {
+    // Channels and chats are just names; the value field must not become a dropdown of nothing.
+    expect(parsePickerOptions({ options: [{ id: "C123", label: "general" }] })).toEqual([
+      { id: "C123", label: "general" },
+    ]);
+  });
+
+  it("drops an entry with no usable id, and names one with no label after its id", () => {
+    expect(
+      parsePickerOptions({
+        options: [{ id: "", label: "nameless" }, { label: "no id at all" }, null, "a string", { id: "C1" }],
+      }),
+    ).toEqual([{ id: "C1", label: "C1" }]);
+  });
+
+  it("ignores choices that are not a list of names", () => {
+    expect(
+      parsePickerOptions({
+        options: [
+          { id: "a", label: "a", choices: "Todo" },
+          { id: "b", label: "b", choices: [] },
+          { id: "c", label: "c", choices: ["Todo", 7, null, "Done"] },
+          { id: "d", label: "d", type: 12 },
+        ],
+      }),
+    ).toEqual([
+      { id: "a", label: "a" },
+      { id: "b", label: "b" },
+      { id: "c", label: "c", choices: ["Todo", "Done"] },
+      { id: "d", label: "d" },
+    ]);
+  });
+
+  it("answers a body that is not a list with nothing", () => {
+    expect(parsePickerOptions({})).toEqual([]);
+    expect(parsePickerOptions({ options: "nope" })).toEqual([]);
+    expect(parsePickerOptions(null)).toEqual([]);
+  });
+});
+
+describe("keyOptions", () => {
+  it("offers every column while nothing is written yet", () => {
+    expect(keyOptions(COLUMNS, [], "")).toEqual(COLUMNS);
+  });
+
+  it("does not offer a column another row already writes", () => {
+    // Two rows for the same column is never the intent, and the second would silently win.
+    expect(keyOptions(COLUMNS, ["Name", "Notes"], "Notes").map((option) => option.id)).toEqual([
+      "Status",
+      "Notes",
+    ]);
+  });
+
+  it("keeps this row's own key, which is of course in use", () => {
+    expect(keyOptions(COLUMNS, ["Status"], "Status")).toEqual(COLUMNS);
+  });
+
+  it("keeps a key the table no longer has, marked as custom", () => {
+    // A column renamed in Airtable since this workflow was saved: what it writes still shows.
+    expect(keyOptions(COLUMNS, ["Owner"], "Owner")).toEqual([
+      ...COLUMNS,
+      { id: "Owner", label: "Custom: Owner" },
+    ]);
+  });
+
+  it("shows a key as itself while the list is still loading", () => {
+    expect(keyOptions(null, ["Owner"], "Owner")).toEqual([{ id: "Owner", label: "Owner" }]);
+    expect(keyOptions(null, [], "")).toEqual([]);
+  });
+
+  it("does not mutate the list it was given", () => {
+    const loaded = [...COLUMNS];
+    keyOptions(loaded, ["Name"], "Owner");
+    expect(loaded).toEqual(COLUMNS);
+  });
+});
+
+describe("firstUnusedKey", () => {
+  it("opens a new row on the first column nothing writes yet", () => {
+    expect(firstUnusedKey(COLUMNS, ["Name"])).toBe("Status");
+    expect(firstUnusedKey(COLUMNS, [])).toBe("Name");
+  });
+
+  it("leaves the row empty when every column is spoken for", () => {
+    expect(firstUnusedKey(COLUMNS, ["Name", "Status", "Notes"])).toBe("");
+  });
+
+  it("leaves the row empty while there is no list to spend", () => {
+    expect(firstUnusedKey(null, [])).toBe("");
+  });
+});
+
+describe("choicesForKey", () => {
+  it("gives an enum-like column its options", () => {
+    expect(choicesForKey(COLUMNS, "Status")).toEqual(["Todo", "Done"]);
+  });
+
+  it("gives every other case nothing, so the value stays a template field", () => {
+    expect(choicesForKey(COLUMNS, "Notes")).toBeNull();
+    expect(choicesForKey(COLUMNS, "Owner")).toBeNull();
+    expect(choicesForKey(COLUMNS, "")).toBeNull();
+    expect(choicesForKey(null, "Status")).toBeNull();
+  });
+
+  it("hands back a copy, not the list's own array", () => {
+    choicesForKey(COLUMNS, "Status")?.push("Blocked");
+    expect(COLUMNS[1].choices).toEqual(["Todo", "Done"]);
   });
 });

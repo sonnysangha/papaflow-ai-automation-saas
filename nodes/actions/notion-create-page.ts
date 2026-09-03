@@ -12,12 +12,22 @@ import { ConnectorError, defineNode } from "../define";
  * title property is discovered per data source rather than guessed
  * (docs/research/connectors-data.md).
  *
- * Extra properties are written as `rich_text`, which is the type that accepts a plain string for
- * the widest set of columns. A property named the same as the title column is dropped rather than
- * allowed to overwrite the title.
+ * Extra properties are shaped by the type the schema declares for that column, because Notion's
+ * page property values are not interchangeable: a select wants `{ select: { name } }` and rejects
+ * the `rich_text` array with "Select is expected to be select"
+ * (https://developers.notion.com/reference/page-property-values). Everything the node has not been
+ * taught — `rich_text` itself, and any type added after this was written — still goes as rich text,
+ * the type that accepts a plain string for the widest set of columns. A property named the same as
+ * the title column is dropped rather than allowed to overwrite the title.
  */
 
-const PROPERTY_ROW = z.object({ key: z.string().min(1), value: z.string() });
+const PROPERTY_ROW = z.object({
+  key: z.string().min(1),
+  // One string per column, whatever the column's type — the config panel offers a data source's
+  // own select/status options as values. A multi-select is the exception that needs more than one,
+  // so a list is accepted there too; a comma-separated string means the same thing.
+  value: z.union([z.string(), z.array(z.string())]),
+});
 
 /** The credential `runNode` opened, reduced to the one field this node uses. */
 function tokenFrom(credential: Record<string, unknown> | undefined): string {
@@ -56,18 +66,151 @@ async function notionCall(
   }
 }
 
-/** The name of the one property whose `type` is `"title"` — every data source has exactly one. */
-function titlePropertyName(schema: Record<string, unknown>): string {
+/** A data source's `properties` map, keyed the way `POST /v1/pages` keys its own: by column name. */
+function propertiesOf(schema: Record<string, unknown>): Record<string, Record<string, unknown>> {
   const properties = schema.properties;
   if (typeof properties !== "object" || properties === null) {
     throw new ConnectorError("That Notion data source returned no properties", 502);
   }
 
+  const columns: Record<string, Record<string, unknown>> = {};
   for (const [name, property] of Object.entries(properties as Record<string, unknown>)) {
-    if ((property as { type?: unknown })?.type === "title") return name;
+    if (typeof property === "object" && property !== null) {
+      columns[name] = property as Record<string, unknown>;
+    }
+  }
+  return columns;
+}
+
+/** The name of the one property whose `type` is `"title"` — every data source has exactly one. */
+function titlePropertyName(columns: Record<string, Record<string, unknown>>): string {
+  for (const [name, property] of Object.entries(columns)) {
+    if (property.type === "title") return name;
   }
 
   throw new ConnectorError("That Notion data source has no title property", 400);
+}
+
+/**
+ * Column name → declared type, under both the map key and the property's own `name`, mirroring
+ * `writableProperties` in `connectors/notion.ts`: the picker hands back `property.name`, and the
+ * two agree, so indexing both means a schema keyed by id would still resolve.
+ */
+function typesByName(columns: Record<string, Record<string, unknown>>): Map<string, string> {
+  const types = new Map<string, string>();
+  for (const [key, property] of Object.entries(columns)) {
+    if (typeof property.type !== "string" || !property.type) continue;
+    types.set(key, property.type);
+    if (typeof property.name === "string" && property.name) types.set(property.name, property.type);
+  }
+  return types;
+}
+
+/** Types whose value is the bare scalar: `{ url: "https://…" }`, and the same for email and phone. */
+const SCALAR_TYPES: ReadonlySet<string> = new Set(["url", "email", "phone_number"]);
+
+/**
+ * The types that address a person, page or file by id. A text box cannot supply one, so they fail
+ * here with a sentence naming the column, rather than as Notion's own "body failed validation".
+ */
+const UNSUPPORTED_TYPES: Readonly<Record<string, string>> = {
+  relation: "a relation",
+  people: "a people property",
+  files: "a files property",
+};
+
+const SUPPORTED_TYPES =
+  "text-like, select, status, checkbox, number, date, url, email and phone properties";
+
+const TRUE_WORDS: ReadonlySet<string> = new Set(["true", "yes", "y", "1", "on"]);
+const FALSE_WORDS: ReadonlySet<string> = new Set(["false", "no", "n", "0", "off"]);
+
+type PropertyValue = string | string[];
+
+/** A row's value as one trimmed string — a list is joined, which only the text types ever see. */
+function asText(value: PropertyValue): string {
+  return (Array.isArray(value) ? value.join(", ") : value).trim();
+}
+
+/** A row's value as a list: an array as it stands, or one comma-separated string split up. */
+function asList(value: PropertyValue): string[] {
+  const parts = Array.isArray(value) ? value : value.split(",");
+  return parts.map((part) => part.trim()).filter((part) => part.length > 0);
+}
+
+/**
+ * One property row in the shape its column's type accepts
+ * (https://developers.notion.com/reference/page-property-values).
+ *
+ * `undefined` means "send nothing": an empty value for a typed column, which on a create is
+ * exactly what leaving the property out does, and is safer than posting `{ select: { name: "" } }`
+ * for Notion to reject.
+ */
+function propertyValue(name: string, type: string, value: PropertyValue): unknown {
+  const unsupported = UNSUPPORTED_TYPES[type];
+  if (unsupported) {
+    throw new ConnectorError(
+      `${name} is ${unsupported}; PapaFlow can only write ${SUPPORTED_TYPES}`,
+      400,
+    );
+  }
+
+  const text = asText(value);
+
+  switch (type) {
+    case "select":
+      return text ? { select: { name: text } } : undefined;
+
+    case "status":
+      return text ? { status: { name: text } } : undefined;
+
+    case "multi_select": {
+      const names = asList(value);
+      if (names.length === 0) return undefined;
+      return { multi_select: names.map((option) => ({ name: option })) };
+    }
+
+    case "checkbox": {
+      if (!text) return undefined;
+      const word = text.toLowerCase();
+      if (TRUE_WORDS.has(word)) return { checkbox: true };
+      if (FALSE_WORDS.has(word)) return { checkbox: false };
+      throw new ConnectorError(
+        `${name} is a checkbox, so its value has to be true or false — "${text}" is neither`,
+        400,
+      );
+    }
+
+    case "number": {
+      if (!text) return undefined;
+      const parsed = Number(text);
+      if (!Number.isFinite(parsed)) {
+        throw new ConnectorError(`${name} is a number property, but "${text}" is not a number`, 400);
+      }
+      return { number: parsed };
+    }
+
+    case "date": {
+      if (!text) return undefined;
+      // Passed through rather than reformatted: Notion tells a date from a moment by whether the
+      // string carries a time, and that is the user's choice to make.
+      if (Number.isNaN(Date.parse(text))) {
+        throw new ConnectorError(
+          `${name} is a date property, but "${text}" is not a date — use 2026-03-11 or a full ISO timestamp`,
+          400,
+        );
+      }
+      return { date: { start: text } };
+    }
+
+    default:
+      if (SCALAR_TYPES.has(type)) return text ? { [type]: text } : undefined;
+      // rich_text, and every type this node has not been taught: the widest one that takes a
+      // string, written verbatim rather than trimmed.
+      return {
+        rich_text: [{ text: { content: Array.isArray(value) ? value.join(", ") : value } }],
+      };
+  }
 }
 
 export const notionCreatePageNode = defineNode({
@@ -93,7 +236,7 @@ export const notionCreatePageNode = defineNode({
     properties: z
       .array(PROPERTY_ROW)
       .default([])
-      .describe("Extra columns, written as text")
+      .describe("Extra columns, each written in the shape its own type takes")
       .meta({ keyPicker: "properties:{dataSourceId}" }),
   }),
   outputs: z.object({ id: z.string(), url: z.string() }),
@@ -101,11 +244,14 @@ export const notionCreatePageNode = defineNode({
     const token = tokenFrom(credential);
 
     const schema = await notionCall(token, `/data_sources/${encodeURIComponent(inputs.dataSourceId)}`);
-    const titleProperty = titlePropertyName(schema);
+    const columns = propertiesOf(schema);
+    const titleProperty = titlePropertyName(columns);
+    const types = typesByName(columns);
 
     const properties: Record<string, unknown> = {};
     for (const row of inputs.properties) {
-      properties[row.key] = { rich_text: [{ text: { content: row.value } }] };
+      const shaped = propertyValue(row.key, types.get(row.key) ?? "", row.value);
+      if (shaped !== undefined) properties[row.key] = shaped;
     }
     // Last, so a row that names the title column cannot displace the title itself.
     properties[titleProperty] = { title: [{ text: { content: inputs.title } }] };

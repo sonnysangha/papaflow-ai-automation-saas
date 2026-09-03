@@ -2,8 +2,9 @@
  * The editor's keyboard shortcuts, in one place so the popover that lists them and the handlers
  * that implement them cannot drift apart.
  *
- * They are deliberately few. A canvas that needs a cheat sheet has failed; these are the four
- * things you do often enough that reaching for the mouse becomes the slow part.
+ * They are deliberately few. A canvas that needs a cheat sheet has failed; these are the handful of
+ * things you do often enough that reaching for the mouse becomes the slow part. Save, Undo and Redo
+ * are answered in `Canvas.tsx`; the rest belong to the run bar and the canvas itself.
  */
 
 /** The node search box. `/` focuses it from anywhere on the canvas. */
@@ -16,6 +17,9 @@ export type Shortcut = {
 };
 
 export const CANVAS_SHORTCUTS: readonly Shortcut[] = [
+  { keys: ["Mod", "S"], description: "Save the canvas" },
+  { keys: ["Mod", "Z"], description: "Undo" },
+  { keys: ["Mod", "Shift", "Z"], description: "Redo" },
   { keys: ["Mod", "Enter"], description: "Run the workflow" },
   { keys: ["/"], description: "Search nodes" },
   { keys: ["Esc"], description: "Close the settings panel" },

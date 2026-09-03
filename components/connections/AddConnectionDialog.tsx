@@ -27,6 +27,7 @@ import { connectorCatalogue, type ConnectorCatalogueEntry } from "@/connectors/r
 import { api } from "@/convex/_generated/api";
 import { featureLabel } from "@/lib/plans";
 
+import { ConnectorSetupSection } from "./ConnectorSetup";
 import { ProviderPicker } from "./ProviderPicker";
 
 /**
@@ -229,6 +230,11 @@ function ConnectionForm({
     (field) => field.required !== false && (values[field.name] ?? "").trim().length === 0,
   );
 
+  // The field the setup steps exist to produce — Slack's bot token. While it is empty, whoever is
+  // here has no app yet and the instructions are the point of the dialog; once something is pasted
+  // they are in the way, so the section starts collapsed.
+  const credentialField = entry.fields.find((field) => field.kind === "secret") ?? entry.fields[0];
+
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (pending || missing || !entry.allowed) return;
@@ -281,6 +287,16 @@ function ConnectionForm({
           </a>
         </DialogDescription>
       </DialogHeader>
+
+      {/* Before the fields, because for Slack there is nothing to type into them yet: the token
+          only exists once the app does, and the manifest is how the app gets made. */}
+      {entry.setup ? (
+        <ConnectorSetupSection
+          name={entry.name}
+          setup={entry.setup}
+          defaultOpen={(values[credentialField?.name ?? ""] ?? "").trim().length === 0}
+        />
+      ) : null}
 
       <div className="grid gap-3">
         {entry.fields.map((field, index) => {

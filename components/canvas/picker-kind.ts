@@ -44,3 +44,14 @@ export function resolvePickerKind(
 
   return { kind: resolved, missing };
 }
+
+/**
+ * What a control waiting on a sibling says instead of a list: "Choose baseId and tableId first".
+ *
+ * The property name rather than the field's label, because that is what the panel puts on the
+ * field it is pointing at (labels are derived from it, and a node may override one). Shared by the
+ * single picker field and the key column of a key/value list so both name the wait the same way.
+ */
+export function missingHint(missing: readonly string[]): string | undefined {
+  return missing.length === 0 ? undefined : `Choose ${missing.join(" and ")} first`;
+}

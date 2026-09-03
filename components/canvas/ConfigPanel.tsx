@@ -23,7 +23,7 @@ import { BooleanSwitch } from "./fields/BooleanSwitch";
 import { ConnectionField } from "./fields/ConnectionField";
 import { EnumSelect } from "./fields/EnumSelect";
 import { JsonField } from "./fields/JsonField";
-import { KeyValueList, type KeyValuePair } from "./fields/KeyValueList";
+import { KeyValueList, type KeyPicker, type KeyValuePair } from "./fields/KeyValueList";
 import { NumberInput } from "./fields/NumberInput";
 import { PickerField } from "./fields/PickerField";
 import { ResumeUrlPattern } from "./fields/ResumeUrl";
@@ -40,7 +40,7 @@ import { lastRunFor, type LastRunStep, type RunStepRow } from "./last-run";
 import { LastRunSection } from "./LastRunSection";
 import { NodeGuide } from "./NodeGuide";
 import { NodeIcon } from "./node-icon";
-import { resolvePickerKind } from "./picker-kind";
+import { missingHint, resolvePickerKind } from "./picker-kind";
 import { ScheduleConfig } from "./ScheduleConfig";
 import { buildVariableGroups, type VariableGroup } from "./variables";
 
@@ -138,6 +138,28 @@ function fieldKind(name: string, schema: JsonSchema): FieldKind {
 function pickerKind(schema: JsonSchema): string | null {
   const picker = (schema as { picker?: unknown }).picker;
   return typeof picker === "string" && picker.length > 0 ? picker : null;
+}
+
+/**
+ * The same thing one level down: `.meta({ keyPicker: "fields:{baseId}:{tableId}" })` on an array of
+ * `{ key, value }` rows says the *key* half of every row is a column of a remote table, not free
+ * text. It rides on the array's own schema, so the rows themselves stay `{ key, value }` strings.
+ */
+function keyPickerKind(schema: JsonSchema): string | null {
+  const picker = (schema as { keyPicker?: unknown }).keyPicker;
+  return typeof picker === "string" && picker.length > 0 ? picker : null;
+}
+
+/** `keyPicker`, resolved against the node's other inputs — or nothing to ask with, or nothing to ask. */
+function pairsKeyPicker(
+  schema: JsonSchema,
+  inputs: Record<string, unknown>,
+  connectionId: string | undefined,
+): KeyPicker | undefined {
+  const declared = keyPickerKind(schema);
+  if (!declared || !connectionId) return undefined;
+  const { kind, missing } = resolvePickerKind(declared, inputs);
+  return { kind, connectionId, missing };
 }
 
 /** A template may stand where the schema wants a number or a boolean — show it, don't eat it. */
@@ -262,7 +284,7 @@ function NodeField({
         value={asText(value)}
         groups={groups}
         disabled={missing.length > 0}
-        hint={missing.length > 0 ? `Choose ${missing.join(" and ")} first` : undefined}
+        hint={missingHint(missing)}
         onChange={(next) => onChange(next.length === 0 ? undefined : next)}
       />
     );
@@ -331,8 +353,21 @@ function NodeField({
           onChange={onChange}
         />
       );
-    case "pairs":
-      return <KeyValueList id={id} value={asPairs(value)} groups={groups} onChange={onChange} />;
+    case "pairs": {
+      // The key half may be a remote list too (`keyPicker`), and like `picker` its kind can name a
+      // sibling — an Airtable column list only exists inside one base and one table. Without a
+      // connection there is nothing to ask, so the rows stay the pair of text boxes they were.
+      const keyPicker = pairsKeyPicker(schema, inputs, connectionId);
+      return (
+        <KeyValueList
+          id={id}
+          value={asPairs(value)}
+          groups={groups}
+          keyPicker={keyPicker}
+          onChange={onChange}
+        />
+      );
+    }
     default:
       return <JsonField id={id} value={value} groups={groups} onChange={onChange} />;
   }
@@ -418,7 +453,7 @@ export type ConfigPanelProps = {
  * The selected node's settings, as a column beside the canvas rather than a modal sheet — you
  * keep dragging edges and watching statuses while you configure. The form is generated from the
  * node's zod `inputs`, so a new connector gets a config UI the moment it is registered, and every
- * edit goes through `setNodes`, which the canvas' debounced save already watches.
+ * edit goes through `setNodes`, which the canvas, which marks the workflow unsaved until you press Save already watches.
  */
 export function ConfigPanel({
   node,

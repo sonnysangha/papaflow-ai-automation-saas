@@ -111,6 +111,52 @@ const NOTION_DATA_SOURCE: Route = {
   },
 };
 
+/** One column of every type the node shapes, plus a relation it refuses. */
+const NOTION_TYPED_SOURCE: Route = {
+  body: {
+    id: "ds_1",
+    properties: {
+      Headline: { type: "title" },
+      Notes: { type: "rich_text" },
+      Stage: { type: "select" },
+      Tags: { type: "multi_select" },
+      Status: { type: "status" },
+      Done: { type: "checkbox" },
+      Score: { type: "number" },
+      "Due date": { type: "date" },
+      Website: { type: "url" },
+      Owner: { type: "relation" },
+    },
+  },
+};
+
+type PropertyRow = { key: string; value: string | string[] };
+
+/**
+ * The node run against `NOTION_TYPED_SOURCE`. The calls come back alongside the pending run so the
+ * same helper serves both halves: `await done` then read `calls[1]`, or hand `done` to `caught`.
+ */
+function typedRun(properties: PropertyRow[]): { calls: Call[]; done: Promise<unknown> } {
+  const calls = stubFetch({
+    [NOTION_SCHEMA]: NOTION_TYPED_SOURCE,
+    [NOTION_PAGES]: { body: { id: "page_1", url: "https://notion.so/page_1" } },
+  });
+
+  const done = notionCreatePageNode.run(
+    ctx(
+      notionCreatePageNode.inputs.parse({
+        connectionId: "conn_1",
+        dataSourceId: "ds_1",
+        title: "New lead",
+        properties,
+      }),
+      NOTION_CREDENTIAL,
+    ),
+  );
+
+  return { calls, done };
+}
+
 describe("notion.createPage", () => {
   it("is an action needing a Notion connection and offers a data-source picker", () => {
     expect(notionCreatePageNode).toMatchObject({
@@ -182,6 +228,84 @@ describe("notion.createPage", () => {
 
     const properties = bodyOf(calls[1]).properties as Record<string, unknown>;
     expect(properties.Headline).toEqual({ title: [{ text: { content: "Wins" } }] });
+  });
+
+  /**
+   * The point of the schema fetch beyond the title: a select posted as `rich_text` is a 400
+   * ("Select is expected to be select"), so each row is shaped by the type its column declares
+   * (https://developers.notion.com/reference/page-property-values).
+   */
+  it("shapes each property by the type its column declares", async () => {
+    const { calls, done } = typedRun([
+      { key: "Stage", value: "Qualified" },
+      { key: "Tags", value: "urgent, inbound ,, " },
+      { key: "Status", value: "In progress" },
+      { key: "Done", value: "yes" },
+      { key: "Score", value: "42" },
+      { key: "Due date", value: "2026-03-11" },
+      { key: "Website", value: "https://papaflow.dev" },
+      { key: "Notes", value: "from the form" },
+    ]);
+    await done;
+
+    expect(bodyOf(calls[1])).toEqual({
+      parent: { data_source_id: "ds_1" },
+      properties: {
+        Stage: { select: { name: "Qualified" } },
+        Tags: { multi_select: [{ name: "urgent" }, { name: "inbound" }] },
+        Status: { status: { name: "In progress" } },
+        Done: { checkbox: true },
+        Score: { number: 42 },
+        "Due date": { date: { start: "2026-03-11" } },
+        Website: { url: "https://papaflow.dev" },
+        Notes: { rich_text: [{ text: { content: "from the form" } }] },
+        Headline: { title: [{ text: { content: "New lead" } }] },
+      },
+    });
+  });
+
+  it("takes a multi-select as a list, and leaves an empty typed column out entirely", async () => {
+    const { calls, done } = typedRun([
+      { key: "Tags", value: ["urgent", "inbound"] },
+      { key: "Done", value: "no" },
+      // Empty on a create means "leave it blank", which is what sending nothing does — and unlike
+      // `{ select: { name: "" } }`, Notion accepts it.
+      { key: "Stage", value: "" },
+      { key: "Score", value: "" },
+    ]);
+    await done;
+
+    expect(bodyOf(calls[1]).properties).toEqual({
+      Tags: { multi_select: [{ name: "urgent" }, { name: "inbound" }] },
+      Done: { checkbox: false },
+      Headline: { title: [{ text: { content: "New lead" } }] },
+    });
+  });
+
+  it("refuses a value its column cannot take, naming the property", async () => {
+    const notANumber = await caught(typedRun([{ key: "Score", value: "quite a lot" }]).done);
+    expect(notANumber.status).toBe(400);
+    expect(notANumber.message).toMatch(/Score is a number property/);
+
+    const notADate = await caught(typedRun([{ key: "Due date", value: "soon" }]).done);
+    expect(notADate.status).toBe(400);
+    expect(notADate.message).toMatch(/Due date is a date property/);
+
+    const notABoolean = await caught(typedRun([{ key: "Done", value: "maybe" }]).done);
+    expect(notABoolean.status).toBe(400);
+    expect(notABoolean.message).toMatch(/Done is a checkbox/);
+  });
+
+  it("refuses a relation, which needs page ids rather than the text a row carries", async () => {
+    const { calls, done } = typedRun([{ key: "Owner", value: "Ada" }]);
+    const error = await caught(done);
+
+    expect(error.status).toBe(400);
+    expect(error.message).toBe(
+      "Owner is a relation; PapaFlow can only write text-like, select, status, checkbox, number, date, url, email and phone properties",
+    );
+    // Refused before the page is posted: only the schema read went out.
+    expect(calls.map((call) => call.url)).toEqual([NOTION_SCHEMA]);
   });
 
   it("maps a 429 onto a retryable ConnectorError carrying Notion's Retry-After", async () => {

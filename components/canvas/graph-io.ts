@@ -92,8 +92,11 @@ export type LoadedGraph = {
   viewport?: Viewport;
 };
 
-/** What the editor shows while a debounced save is in flight. */
-export type SaveState = "saved" | "saving" | "conflict" | "error";
+/**
+ * What the editor header reports about the graph. `dirty` is the one the Save button and the
+ * leave guard care about: edits stay local until somebody presses Save.
+ */
+export type SaveState = "saved" | "dirty" | "saving" | "conflict" | "error";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -381,4 +384,17 @@ export function toStoredGraph(
  */
 export function serializeGraph(graph: StoredGraph): string {
   return JSON.stringify(graph);
+}
+
+/**
+ * The identity of a graph as far as "has this changed?" is concerned — what the dirty flag and the
+ * undo stack compare by.
+ *
+ * The viewport is deliberately left out. Panning and zooming are not edits: they must not light up
+ * the Save button, they must not become an undo step, and they must not make a workflow look
+ * changed to someone reading the version number. The viewport still rides along inside the next
+ * real save (`toStoredGraph(nodes, edges, viewport)`), which is where it has always been written.
+ */
+export function graphKey(nodes: WorkflowNodeType[], edges: Edge[]): string {
+  return serializeGraph(toStoredGraph(nodes, edges));
 }

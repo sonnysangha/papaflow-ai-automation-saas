@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { resolvePickerKind } from "@/components/canvas/picker-kind";
+import { missingHint, resolvePickerKind } from "@/components/canvas/picker-kind";
 
 /**
  * `picker: "tables:{baseId}"` — a remote list that only exists relative to a sibling input. The
@@ -65,5 +65,23 @@ describe("resolvePickerKind", () => {
       kind: "rows:false",
       missing: [],
     });
+  });
+});
+
+/**
+ * The words a control waiting on a sibling shows instead of a list. Shared so the single picker
+ * field and the key column of a key/value list describe the same wait the same way.
+ */
+describe("missingHint", () => {
+  it("says nothing when the kind is answerable", () => {
+    expect(missingHint([])).toBeUndefined();
+  });
+
+  it("names the one input that is still empty", () => {
+    expect(missingHint(["baseId"])).toBe("Choose baseId first");
+  });
+
+  it("names both, in the order the kind mentions them", () => {
+    expect(missingHint(["baseId", "tableId"])).toBe("Choose baseId and tableId first");
   });
 });

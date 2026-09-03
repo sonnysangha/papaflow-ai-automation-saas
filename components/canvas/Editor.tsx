@@ -3,8 +3,20 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { ReactFlowProvider } from "@xyflow/react";
 import { useMutation, useQuery } from "convex/react";
+import { Redo2Icon, SaveIcon, Undo2Icon } from "lucide-react";
 import { toast } from "sonner";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/convex/_generated/api";
@@ -13,12 +25,13 @@ import { cn } from "@/lib/utils";
 import { NODES } from "@/nodes/registry";
 
 import { BuilderPanel } from "./BuilderPanel";
-import { Canvas } from "./Canvas";
+import { Canvas, type EditorControls } from "./Canvas";
 import { fromStoredGraph, type RunNodeState, type SaveState } from "./graph-io";
 import { carryOverSteps, latestStepByNode, type RunStepRow } from "./last-run";
 import { NodeSidebar } from "./NodeSidebar";
 import { RunBar, type RunWorkflowAction } from "./RunBar";
 import { RunTimeline } from "./RunTimeline";
+import { useLeaveGuard } from "./use-leave-guard";
 
 /** Stable identity for "no run yet", so the config panel does not re-memo on every render. */
 const EMPTY_STEPS: RunStepRow[] = [];
@@ -28,6 +41,7 @@ const SHELL = "flex h-[calc(100vh-3.5rem)] flex-col";
 
 const SAVE_LABEL: Record<SaveState, string> = {
   saved: "Saved",
+  dirty: "Unsaved changes",
   saving: "Saving…",
   conflict: "Conflict",
   error: "Not saved",
@@ -35,6 +49,7 @@ const SAVE_LABEL: Record<SaveState, string> = {
 
 const SAVE_TONE: Record<SaveState, string> = {
   saved: "bg-muted-foreground/40",
+  dirty: "bg-amber-500",
   saving: "animate-pulse bg-amber-500",
   conflict: "bg-blue-500",
   error: "bg-destructive",
@@ -88,6 +103,59 @@ function WorkflowName({ workflowId, name }: { workflowId: Id<"workflows">; name:
         }
       }}
     />
+  );
+}
+
+/**
+ * Undo, Redo, Save, and where the graph stands.
+ *
+ * All three act on state the canvas owns, reached through the controls it reports up; until it has
+ * mounted and sent them, the buttons are there but disabled rather than absent, so the header does
+ * not change shape a frame after it appears. Titles carry the shortcuts, and are the tooltip a
+ * disabled button can still show.
+ */
+function SaveControls({ controls }: { controls: EditorControls | null }) {
+  const saveState = controls?.saveState ?? "saved";
+  const dirty = controls?.dirty ?? false;
+  const saving = saveState === "saving";
+
+  return (
+    <div className="ml-auto flex items-center gap-1.5">
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        aria-label="Undo"
+        title="Undo (⌘/Ctrl + Z)"
+        disabled={!controls?.canUndo}
+        onClick={() => controls?.undo()}
+      >
+        <Undo2Icon />
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        aria-label="Redo"
+        title="Redo (⌘/Ctrl + Shift + Z)"
+        disabled={!controls?.canRedo}
+        onClick={() => controls?.redo()}
+      >
+        <Redo2Icon />
+      </Button>
+      <Button
+        size="sm"
+        variant={dirty ? "default" : "outline"}
+        disabled={!dirty || saving}
+        title="Save the canvas (⌘/Ctrl + S)"
+        onClick={() => void controls?.save()}
+      >
+        <SaveIcon />
+        Save
+      </Button>
+      <span className="ml-1 flex items-center gap-2 text-xs text-muted-foreground">
+        <span aria-hidden className={cn("size-2 rounded-full", SAVE_TONE[saveState])} />
+        <span role="status">{SAVE_LABEL[saveState]}</span>
+      </span>
+    </div>
   );
 }
 
@@ -168,7 +236,33 @@ export function Editor({
   // that node.
   const steps = useQuery(api.steps.byExecution, latest ? { executionId: latest._id } : "skip");
   const panelSteps = useCarriedSteps(steps);
-  const [saveState, setSaveState] = useState<SaveState>("saved");
+  // Save, Undo and Redo live on the graph the canvas owns; it reports them up here so the header
+  // strip can draw them. Null until the canvas has mounted and sent its first set.
+  const [controls, setControls] = useState<EditorControls | null>(null);
+  const dirty = controls?.dirty ?? false;
+
+  // The navigation the leave dialog is holding up, and the callback that lets it continue.
+  const [leaving, setLeaving] = useState<{ proceed: () => void } | null>(null);
+  const onGuard = useCallback((proceed: () => void) => setLeaving({ proceed }), []);
+  useLeaveGuard({ enabled: dirty, onGuard });
+
+  const discardAndLeave = useCallback(() => {
+    const proceed = leaving?.proceed;
+    setLeaving(null);
+    proceed?.();
+  }, [leaving]);
+
+  const saveAndLeave = useCallback(() => {
+    const proceed = leaving?.proceed;
+    const save = controls?.save;
+    setLeaving(null);
+    if (!proceed || !save) return;
+    void save().then((saved) => {
+      // A refused save has already put its own dialog or toast up — the conflict is the user's to
+      // settle, and leaving in the middle of it would be the wrong half of the choice they made.
+      if (saved) proceed();
+    });
+  }, [controls, leaving]);
   // The Builder chat sits beside the canvas rather than over it: the point of the panel is watching
   // the graph grow while the agent talks, which a dialog would cover up.
   const [builderOpen, setBuilderOpen] = useState(false);
@@ -205,8 +299,8 @@ export function Editor({
     return byNode;
   }, [steps]);
 
-  // The trigger of the *saved* graph, which is the graph a run interprets — an unsaved trigger the
-  // user just dropped is 600ms away from being the real one, and `startRun` would not see it yet.
+  // The trigger of the *saved* graph, which is the graph a run interprets — a trigger the user has
+  // dropped but not saved is not the real one yet, and `startRun` would not see it.
   const triggerType = useMemo(() => {
     if (!workflow) return undefined;
     const { nodes } = fromStoredGraph(workflow.graph);
@@ -230,10 +324,7 @@ export function Editor({
         <div className="flex h-12 shrink-0 items-center gap-3 border-b border-border px-4">
           <WorkflowName workflowId={workflow._id} name={workflow.name} />
           <span className="text-xs text-muted-foreground">v{workflow.version}</span>
-          <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
-            <span aria-hidden className={cn("size-2 rounded-full", SAVE_TONE[saveState])} />
-            <span role="status">{SAVE_LABEL[saveState]}</span>
-          </div>
+          <SaveControls controls={controls} />
         </div>
 
         <div className="flex min-h-0 flex-1">
@@ -256,7 +347,7 @@ export function Editor({
                 runByNode={runByNode}
                 steps={panelSteps}
                 focusNode={focusNode}
-                onSaveStateChange={setSaveState}
+                onControlsChange={setControls}
                 onSelectedNodeChange={setSelectedNodeId}
               />
             </div>
@@ -275,6 +366,35 @@ export function Editor({
           ) : null}
         </div>
       </div>
+
+      {/*
+        An in-app navigation, held. Three ways out and no default: the dialog cannot guess whether
+        the half-drawn branch on the canvas is worth keeping. Cancel is the safe one and is what
+        Escape and a click outside do.
+      */}
+      <AlertDialog
+        open={leaving !== null}
+        onOpenChange={(open) => {
+          if (!open) setLeaving(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>You have unsaved changes</AlertDialogTitle>
+            <AlertDialogDescription>
+              Your changes to {workflow.name} are still only on this canvas. Leaving without saving
+              throws them away.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={discardAndLeave}>
+              Discard and leave
+            </AlertDialogAction>
+            <AlertDialogAction onClick={saveAndLeave}>Save and leave</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </ReactFlowProvider>
   );
 }

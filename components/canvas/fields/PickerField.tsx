@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { PencilIcon, RefreshCwIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,7 @@ import {
 } from "../picker-options";
 import type { VariableGroup } from "../variables";
 import { TemplateInput } from "./TemplateInput";
+import { useConnectionPick } from "./use-connection-pick";
 
 /**
  * A dropdown over a list only the provider knows: Slack channels, Discord guilds and channels,
@@ -53,41 +54,8 @@ export type PickerFieldProps = {
   onChange: (value: string) => void;
 };
 
-type Listing =
-  | { state: "loading" }
-  | { state: "ready"; options: PickerOption[] }
-  | { state: "failed"; error: string };
-
 function isTemplate(value: string): boolean {
   return value.includes("{{");
-}
-
-async function fetchOptions(
-  connectionId: string,
-  kind: string,
-  signal: AbortSignal,
-): Promise<PickerOption[]> {
-  const response = await fetch(`/api/connections/${connectionId}/pick`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ kind }),
-    signal,
-  });
-
-  const body: unknown = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const error = (body as { error?: unknown }).error;
-    throw new Error(typeof error === "string" ? error : "Could not load the list.");
-  }
-
-  const options = (body as { options?: unknown }).options;
-  if (!Array.isArray(options)) return [];
-  return options.flatMap((entry) => {
-    if (typeof entry !== "object" || entry === null) return [];
-    const { id, label } = entry as { id?: unknown; label?: unknown };
-    if (typeof id !== "string" || id.length === 0) return [];
-    return [{ id, label: typeof label === "string" && label ? label : id }];
-  });
 }
 
 export function PickerField({
@@ -100,47 +68,12 @@ export function PickerField({
   hint,
   onChange,
 }: PickerFieldProps) {
-  // What is being listed right now. Held alongside the answer rather than reset in the effect: a
-  // changed key *is* the loading state, so switching connections never renders a stale list and
-  // the effect never has to call setState synchronously.
-  const [reloads, setReloads] = useState(0);
-  const listingKey = `${connectionId}\u0000${kind}\u0000${reloads}`;
-  const [answer, setAnswer] = useState<{ key: string; listing: Listing } | null>(null);
   // `null` means "follow the value": a template is typed, anything else is chosen from the list.
   const [typing, setTyping] = useState<boolean | null>(null);
-
-  useEffect(() => {
-    // Nothing to ask for while a sibling input is still empty: the kind would name half a list.
-    if (disabled) return;
-
-    const controller = new AbortController();
-
-    fetchOptions(connectionId, kind, controller.signal).then(
-      (options) => {
-        if (!controller.signal.aborted) {
-          setAnswer({ key: listingKey, listing: { state: "ready", options } });
-        }
-      },
-      (error: unknown) => {
-        if (controller.signal.aborted) return;
-        setAnswer({
-          key: listingKey,
-          listing: {
-            state: "failed",
-            error: error instanceof Error ? error.message : "Could not load the list.",
-          },
-        });
-      },
-    );
-
-    return () => controller.abort();
-  }, [connectionId, disabled, kind, listingKey]);
-
-  const listing: Listing = answer?.key === listingKey ? answer.listing : { state: "loading" };
-  const reload = useCallback(() => setReloads((count) => count + 1), []);
-
-  // What this connection actually offers, or `null` while that is still unknown (loading, failed).
-  const loaded = listing.state === "ready" ? listing.options : null;
+  // The list, its three states and its reload, shared with `KeyValueList` — which reads the same
+  // route for its key column. Nothing is asked for while a sibling input is still empty: the kind
+  // would name half a list, so `loaded` stays `null` and the waiting control below is what renders.
+  const { listing, loaded, reload } = useConnectionPick(connectionId, kind, disabled);
 
   // The connection the value in hand was chosen against. Choosing a different one drops a value the
   // new account does not offer — under an Anthropic key, `gpt-5` is the old account's answer rather

@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { MODELS_PICKER } from "@/connectors/define";
 import { ConnectorError, defineNode, type ChildStep } from "../define";
 
 /**
@@ -129,7 +130,7 @@ export const agentNode = defineNode({
   version: "v1",
   inputs: z.object({
     connectionId: z.string(),
-    model: z.string().min(1),
+    model: z.string().min(1).meta({ picker: MODELS_PICKER, label: "Model" }),
     goal: z.string().min(1).describe("What the agent should achieve. Templates are resolved first"),
     maxSteps: z
       .number()

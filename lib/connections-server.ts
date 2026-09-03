@@ -4,8 +4,9 @@
 // Client Component or any browser bundle.
 import { FatalError } from "workflow";
 
-import type { ConnectorDef } from "@/connectors/define";
+import { MODELS_PICKER, type ConnectorDef } from "@/connectors/define";
 import { CONNECTORS } from "@/connectors/registry";
+import { isTextGenerationModel } from "@/lib/ai/model-list";
 import * as engine from "@/lib/engine-client";
 import { featureLabel } from "@/lib/plans";
 import { aadFor, open, seal } from "@/lib/vault";
@@ -132,24 +133,29 @@ const SECRET_UNREADABLE =
  * Runs one server-side call with a connection's plaintext credential in hand.
  *
  * The secret exists only for the duration of `call`, and `call` is expected to return something
- * derived from the *provider's* answer — never the credential itself (CLAUDE.md rule 1). The org
- * check is the same one every other route does: a connection this org may not read is a connection
- * that does not exist.
+ * derived from the *provider's* answer — never the credential itself (CLAUDE.md rule 1).
+ *
+ * It takes the row rather than an id on purpose: opening the envelope is the one step that
+ * materialises key material in this process, and a caller that can answer from the row it already
+ * loaded (the model picker) must be able to decide *not* to. The org check therefore belongs to
+ * `connectionInOrg`, which every caller does first — a connection this org may not read is a
+ * connection that does not exist.
  */
-export async function withConnectionSecret<T>(
-  args: { connectionId: string; orgId: string },
+async function withConnectionSecret<T>(
+  row: engine.ConnectionSealed,
+  orgId: string,
+  connectionId: string,
   call: (context: {
     def: ConnectorDef;
     secret: Record<string, string>;
     meta: Record<string, unknown>;
   }) => Promise<T>,
 ): Promise<T> {
-  const row = await connectionInOrg(args.connectionId, args.orgId);
   const def = connectorFor(row.provider);
 
   let secret: Record<string, string>;
   try {
-    secret = openStoredSecret(row, args.orgId, args.connectionId);
+    secret = openStoredSecret(row, orgId, connectionId);
   } catch {
     throw new ConnectionRequestError(400, "secret_unreadable", SECRET_UNREADABLE);
   }
@@ -159,27 +165,83 @@ export async function withConnectionSecret<T>(
 }
 
 /**
+ * The models a connection captured at connect time, as picker options.
+ *
+ * Only the strings in `meta.models` are read. A connection's `meta` is written by its connector's
+ * `test()` and holds other bookkeeping beside the list (`fetchedAt`, OpenRouter's `limitRemaining`,
+ * Telegram's known chats), none of which belongs in a dropdown — and no part of `meta` is ever the
+ * credential, which lives sealed in a column of its own (CLAUDE.md rule 1).
+ *
+ * The id *is* the label: a provider's list endpoint has no display name worth preferring, and what
+ * the user picks has to be exactly what the node sends back to the provider. They come back sorted
+ * because a provider's own order is arbitrary and OpenRouter alone answers with several hundred
+ * entries into a `Select` that has no search box, and filtered because several providers list
+ * everything the key can reach — offering `text-embedding-3-small` in the Model field is a run-time
+ * 400 nobody could have typed themselves back when it was a text box (`lib/ai/model-list.ts`).
+ */
+export function modelOptions(meta: Record<string, unknown>): { id: string; label: string }[] {
+  if (!Array.isArray(meta.models)) return [];
+
+  const seen = new Set<string>();
+  const options: { id: string; label: string }[] = [];
+  for (const entry of meta.models) {
+    if (typeof entry !== "string") continue;
+    const id = entry.trim();
+    if (id.length === 0 || seen.has(id) || !isTextGenerationModel(id)) continue;
+    seen.add(id);
+    options.push({ id, label: id });
+  }
+  // Code-unit order rather than `localeCompare`: model ids are ASCII, and the dropdown should not
+  // depend on which ICU the server happens to have.
+  return options.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
+/**
  * What `POST /api/connections/:id/pick` answers with: the remote objects a config field can offer
  * (Slack channels, Discord guilds, Telegram chats). The credential does the call; only ids and
  * labels come back, which is the whole reason the picker is a server round-trip rather than a
  * client fetch with a token.
+ *
+ * `models` is the exception that needs no call at all: every AI connector's `test()` already wrote
+ * the provider's list into `meta.models` (CLAUDE.md rule 11), so the AI nodes' model dropdown is
+ * answered from the stored row. That is why an AI connector implements no `pick` — and why one
+ * that grows a list of its own (voices, say) still gets a model dropdown for free.
+ *
+ * That path also never opens the sealed credential. The browser triggers this route every time a
+ * config panel opens, and a dropdown is no reason to materialise key material in this process —
+ * so the envelope is opened only once a connector's `pick` is actually about to be called. The
+ * side effect is worth having on its own: a connection whose envelope will not open (a rotated
+ * `CREDENTIALS_KEK`, a create that never got as far as sealing) still renders its model list
+ * instead of answering `secret_unreadable`.
  */
 export async function pickConnectionOptions(args: {
   connectionId: string;
   orgId: string;
   kind: string;
 }): Promise<{ id: string; label: string }[]> {
-  return await withConnectionSecret(args, async ({ def, secret, meta }) => {
-    if (!def.pick) {
-      throw new ConnectionRequestError(
-        400,
-        "no_picker",
-        `${def.name} connections have nothing to list.`,
-      );
-    }
+  const row = await connectionInOrg(args.connectionId, args.orgId);
+  const def = connectorFor(row.provider);
+  const meta = (row.meta ?? {}) as Record<string, unknown>;
+  const pick = def.pick;
 
+  if (args.kind === MODELS_PICKER) {
+    const stored = modelOptions(meta);
+    // The row answers unless it has nothing to say, in which case a connector that grew a list of
+    // its own is worth asking — and a connector without one has simply never captured any models.
+    if (stored.length > 0 || !pick) return stored;
+  }
+
+  if (!pick) {
+    throw new ConnectionRequestError(
+      400,
+      "no_picker",
+      `${def.name} connections have nothing to list.`,
+    );
+  }
+
+  return await withConnectionSecret(row, args.orgId, args.connectionId, async ({ secret }) => {
     try {
-      return await def.pick(args.kind, secret, meta);
+      return await pick(args.kind, secret, meta);
     } catch (cause) {
       // A connector's picker throws with the provider's own words; they are safe (`invalid_auth`,
       // `missing_scope`) but they are not the user's language, so only the log gets them.

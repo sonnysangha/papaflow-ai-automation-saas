@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { MODELS_PICKER } from "@/connectors/define";
 import { aiCredential, modelFor } from "@/lib/ai/providers";
 import { defineNode } from "../define";
 
@@ -21,7 +22,7 @@ export const classifyNode = defineNode({
   version: "v1",
   inputs: z.object({
     connectionId: z.string(),
-    model: z.string(),
+    model: z.string().meta({ picker: MODELS_PICKER, label: "Model" }),
     text: z.string(),
     labels: z.array(z.string().min(1)).min(2),
     instructions: z.string().optional(),

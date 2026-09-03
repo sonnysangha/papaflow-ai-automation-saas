@@ -1,11 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
+import { MODELS_PICKER } from "@/connectors/define";
 import { modelFor, providerFor } from "@/lib/ai/providers";
+import { agentNode } from "@/nodes/ai/agent";
 import { classifyNode } from "@/nodes/ai/classify";
 import { extractNode } from "@/nodes/ai/extract";
 import { llmNode } from "@/nodes/ai/llm";
-import { ConnectorError, type RunContext } from "@/nodes/define";
+import { ConnectorError, type AnyNodeDef, type RunContext } from "@/nodes/define";
+import { toJsonSchema } from "@/nodes/schema";
 
 /**
  * The AI nodes are `generateText` plus a provider factory and nothing else, so both are mocked:
@@ -63,6 +66,60 @@ const ANTHROPIC = { provider: "anthropic", kind: "apiKey", apiKey: "sk-ant-5678"
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+/** One input's schema, as the config panel reads it back off the generated JSON Schema. */
+function property(definition: AnyNodeDef, name: string): { picker?: unknown; label?: unknown } {
+  const schema = toJsonSchema(definition.inputs) as {
+    properties?: Record<string, { picker?: unknown; label?: unknown }>;
+  };
+  return schema.properties?.[name] ?? {};
+}
+
+/**
+ * Every AI node's `model` is a dropdown, not a text box.
+ *
+ * The dropdown is entirely a consequence of this metadata: `picker` survives `z.toJSONSchema()` as
+ * an extra key, and the config panel turns any field carrying one into a `PickerField` pointed at
+ * `/api/connections/:id/pick`. A node that loses the meta silently goes back to asking the user to
+ * remember model ids, which is the bug this pins.
+ */
+describe("the AI nodes' model field", () => {
+  const nodes: [string, AnyNodeDef][] = [
+    ["ai.llm", llmNode],
+    ["ai.extract", extractNode],
+    ["ai.classify", classifyNode],
+    ["ai.agent", agentNode],
+  ];
+
+  for (const [type, definition] of nodes) {
+    it(`${type} asks for the models picker`, () => {
+      expect(property(definition, "model")).toMatchObject({
+        picker: MODELS_PICKER,
+        label: "Model",
+      });
+    });
+
+    it(`${type} still takes any model id the picker offers`, () => {
+      // The meta must not have narrowed the field: a custom id typed into the panel, and every id
+      // a provider's list can hold, still has to parse.
+      expect(
+        definition.inputs.safeParse({
+          connectionId: "conn_1",
+          model: "vendor/some-model:v2",
+          prompt: "hi",
+          text: "hi",
+          goal: "hi",
+          labels: ["a", "b"],
+          fields: [{ name: "total", type: "number" }],
+        }).success,
+      ).toBe(true);
+    });
+  }
+
+  it("names one kind, so one route answers all four", () => {
+    expect(MODELS_PICKER).toBe("models");
+  });
 });
 
 describe("providerFor", () => {

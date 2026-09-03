@@ -3,20 +3,31 @@
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import type { FunctionReturnType } from "convex/server";
-import { HistoryIcon, KeyboardIcon, PlayIcon, SparklesIcon } from "lucide-react";
+import {
+  ChevronDownIcon,
+  HistoryIcon,
+  KeyboardIcon,
+  PlayIcon,
+  PowerIcon,
+  PowerOffIcon,
+  SparklesIcon,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { UpgradeCard } from "@/components/billing/UpgradeCard";
-import { RunStatusBadge } from "@/components/runs/RunsTable";
+import { RunStatusPill } from "@/components/shared/status";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
 import {
   Popover,
   PopoverContent,
   PopoverTitle,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatAbsoluteTime, formatRelativeTime } from "@/components/workflows/relative-time";
 import { api } from "@/convex/_generated/api";
 import type { Doc, Id } from "@/convex/_generated/dataModel";
@@ -25,7 +36,6 @@ import type { FormSpec } from "@/nodes/triggers/form";
 import { NODES } from "@/nodes/registry";
 
 import { FormRunDialog } from "./FormRunDialog";
-import { NodeIcon } from "./node-icon";
 import {
   CANVAS_SHORTCUTS,
   hasModifier,
@@ -59,6 +69,12 @@ export type PublishWorkflowAction = (
   | { ok: false; code: string; error: string }
 >;
 
+/**
+ * Below `lg` a labelled toolbar button drops its label and becomes a square icon button — the row
+ * must never wrap, and an icon with a tooltip is a smaller lie than a truncated word.
+ */
+export const COMPACT_BUTTON = "max-lg:size-7 max-lg:justify-center max-lg:px-0";
+
 const MANUAL_TRIGGER = "manual.trigger";
 /** Exported so `Editor` can find the Form trigger's node the same way this file gates on it. */
 export const FORM_TRIGGER = "form.trigger";
@@ -90,7 +106,7 @@ function LastRun({ latest }: { latest: LatestExecution | undefined }) {
     <span
       aria-live="polite"
       aria-atomic
-      className="flex items-center gap-1.5 text-xs text-muted-foreground"
+      className="hidden items-center gap-1.5 text-xs whitespace-nowrap text-muted-foreground xl:flex"
       title={latest ? formatAbsoluteTime(latest.startedAt) : undefined}
     >
       {latest === undefined ? (
@@ -99,7 +115,7 @@ function LastRun({ latest }: { latest: LatestExecution | undefined }) {
         <span>No runs yet</span>
       ) : (
         <>
-          <RunStatusBadge status={latest.status} />
+          <RunStatusPill status={latest.status} />
           <span>{formatRelativeTime(latest.startedAt)}</span>
         </>
       )}
@@ -109,25 +125,13 @@ function LastRun({ latest }: { latest: LatestExecution | undefined }) {
 
 type WorkflowStatus = Doc<"workflows">["status"];
 
-/** Plain words, not the stored enum: nobody outside this codebase knows what "active" means. */
-const STATUS_LABEL: Record<WorkflowStatus, string> = {
-  draft: "Draft",
-  active: "Published",
-  paused: "Paused",
-};
-
-const STATUS_TONE: Record<WorkflowStatus, string> = {
-  draft: "bg-muted-foreground",
-  active: "bg-emerald-500",
-  paused: "bg-amber-500",
-};
-
 /** The one sentence that answers "how do I trigger this?" — the question this control exists for. */
 const PUBLISH_EXPLANATION =
   "Published workflows respond to their triggers — webhooks, forms, schedules and chat messages. Drafts only run when you press Run.";
 
 /**
- * The publish switch: a pill saying where this workflow stands and the button that moves it.
+ * The publish switch. Where the workflow stands is said by the `<WorkflowStatusPill>` beside its
+ * name in the toolbar; this is the button that moves it.
  *
  * It is what every trigger checks — the webhook route, the form submit route, the inbound event
  * routes and the scheduler all refuse a workflow that is not `active`. Run is deliberately exempt,
@@ -186,31 +190,33 @@ function PublishControl({
 
   return (
     <>
-      <Popover>
-        <PopoverTrigger render={<Button variant="ghost" size="sm" />}>
-          <span aria-hidden className={cn("size-2 shrink-0 rounded-full", STATUS_TONE[status])} />
-          {STATUS_LABEL[status]}
-        </PopoverTrigger>
-        <PopoverContent align="start" className="w-72">
-          <PopoverTitle className="text-sm font-medium">
-            {published ? "Its triggers are live" : "Its triggers are off"}
-          </PopoverTitle>
-          <p className="mt-1.5 text-sm text-muted-foreground">{PUBLISH_EXPLANATION}</p>
-        </PopoverContent>
-      </Popover>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              size="sm"
+              variant={published ? "outline" : "secondary"}
+              disabled={pending}
+              onClick={toggle}
+              className={COMPACT_BUTTON}
+            />
+          }
+        >
+          {published ? <PowerOffIcon /> : <PowerIcon />}
+          <span className="max-lg:hidden">
+            {pending ? "Working…" : published ? "Unpublish" : "Publish"}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>{PUBLISH_EXPLANATION}</TooltipContent>
+      </Tooltip>
 
-      <Button
-        size="sm"
-        variant={published ? "outline" : "secondary"}
-        disabled={pending}
-        onClick={toggle}
-        title={PUBLISH_EXPLANATION}
-      >
-        {pending ? "Working…" : published ? "Unpublish" : "Publish"}
-      </Button>
-
+      {/* Kept on screen rather than only toasted, and out of the toolbar's one row: it hangs
+          under the bar so a refused publish is still readable while you fix the schedule. */}
       {error ? (
-        <p role="alert" className="text-xs text-destructive">
+        <p
+          role="alert"
+          className="absolute inset-x-0 top-full z-30 border-b border-border bg-background px-4 py-2 text-xs text-destructive"
+        >
           {error}
         </p>
       ) : null}
@@ -226,7 +232,14 @@ function ShortcutsPopover() {
   return (
     <Popover>
       <PopoverTrigger
-        render={<Button variant="ghost" size="icon-sm" aria-label="Keyboard shortcuts" />}
+        render={
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Keyboard shortcuts"
+            title="Keyboard shortcuts"
+          />
+        }
       >
         <KeyboardIcon />
       </PopoverTrigger>
@@ -274,9 +287,16 @@ type RunBarProps = {
 };
 
 /**
- * The strip above the canvas: which trigger starts this workflow, the sample payload the Manual
- * trigger sends, the Run button, and how the last run ended. Everything it shows about a run comes
- * from the live `executions` subscription the editor owns, so the badge updates while the run goes.
+ * The run half of the editor toolbar: Run (with the Manual trigger's sample payload folded into a
+ * popover beside it), publish, the Builder, the last run and the way to the run history.
+ *
+ * It renders a fragment rather than a bar of its own — `Editor` lays the single toolbar row out and
+ * drops these controls into it, so there is one row rather than two and nothing wraps. The two
+ * notices that must be read rather than glanced at (a refused publish, the monthly run wall) are
+ * absolutely positioned under that row, which is why the toolbar is `relative`.
+ *
+ * Everything it shows about a run comes from the live `executions` subscription the editor owns, so
+ * the pill updates while the run goes.
  */
 export function RunBar({
   workflowId,
@@ -351,6 +371,11 @@ export function RunBar({
   }, [isForm, onRun]);
 
   const canRun = !pending && Boolean(triggerType);
+  const runHint = !triggerType
+    ? "Drag a trigger onto the canvas first"
+    : isForm
+      ? "Fill in a test submission (⌘/Ctrl + Enter)"
+      : "Run the workflow (⌘/Ctrl + Enter)";
 
   /**
    * The two shortcuts that belong to the run bar rather than to the graph.
@@ -385,88 +410,131 @@ export function RunBar({
 
   return (
     <>
-      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2">
-        <span className="flex items-center gap-1.5 text-sm">
-          <NodeIcon name={definition?.icon} className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span className={triggerType ? "font-medium" : "text-muted-foreground"}>
-            {definition?.name ?? triggerType ?? "No trigger yet"}
-          </span>
-        </span>
-
-        {isManual ? (
-          <Textarea
-            rows={1}
-            value={sample}
-            spellCheck={false}
-            aria-invalid={!sampleValid}
-            aria-label="Sample JSON payload"
-            title={
-              sampleValid
-                ? "Sample JSON sent to the trigger"
-                : "Invalid JSON — the run starts with an empty payload"
-            }
-            onChange={(event) => setSample(event.target.value)}
-            className="max-h-24 min-h-8 w-64 resize-none px-2 py-1.5 font-mono text-xs"
-          />
-        ) : null}
-
-        <Button
-          size="sm"
-          onClick={onRunClick}
-          disabled={!canRun}
-          title={
-            !triggerType
-              ? "Drag a trigger onto the canvas first"
-              : isForm
-                ? "Fill in a test submission (⌘/Ctrl + Enter)"
-                : "Run the workflow (⌘/Ctrl + Enter)"
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              size="sm"
+              onClick={onRunClick}
+              disabled={!canRun}
+              // A disabled button gets no pointer events, so the one state whose explanation
+              // matters most — "there is no trigger yet" — falls back to a native title.
+              title={canRun ? undefined : runHint}
+              className={COMPACT_BUTTON}
+            />
           }
         >
           <PlayIcon />
-          {pending ? "Starting…" : "Run"}
-        </Button>
+          <span className="max-lg:hidden">{pending ? "Starting…" : "Run"}</span>
+        </TooltipTrigger>
+        <TooltipContent>{runHint}</TooltipContent>
+      </Tooltip>
 
-        <PublishControl
-          workflowId={workflowId}
-          status={status}
-          publishWorkflow={publishWorkflow}
-        />
+      {/*
+        The Manual trigger's sample payload, folded into a popover beside Run rather than sitting in
+        the toolbar as a text box. It is a per-run choice most people never change, and the row it
+        used to live in is one line high now.
+      */}
+      {isManual ? (
+        <Popover>
+          <PopoverTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Sample payload"
+                title="The JSON this run starts with"
+              />
+            }
+          >
+            <ChevronDownIcon />
+          </PopoverTrigger>
+          <PopoverContent align="start" className="w-80">
+            <PopoverTitle className="text-sm font-medium">
+              {definition?.name ?? "Manual trigger"}
+            </PopoverTitle>
+            <Label htmlFor="papaflow-run-sample" className="mt-3 text-xs text-muted-foreground">
+              Sample JSON sent to the trigger
+            </Label>
+            <Textarea
+              id="papaflow-run-sample"
+              rows={5}
+              value={sample}
+              spellCheck={false}
+              aria-invalid={!sampleValid}
+              onChange={(event) => setSample(event.target.value)}
+              className="mt-1.5 max-h-56 w-full resize-none font-mono text-xs"
+            />
+            <p
+              className={cn(
+                "mt-1.5 text-xs",
+                sampleValid ? "text-muted-foreground" : "text-destructive",
+              )}
+            >
+              {sampleValid
+                ? "Reaches the graph as {{ trigger.… }}."
+                : "Invalid JSON — the run starts with an empty payload."}
+            </p>
+          </PopoverContent>
+        </Popover>
+      ) : null}
 
-        <div className="ml-auto flex items-center gap-2">
-          {/*
-            Shown to everyone, on purpose: the panel itself is what puts up the plan wall
-            (`<Show>` → `<UpgradeCard>`), so a free organisation discovers the feature by pressing
-            the button rather than by never seeing it. The refusals that matter are `has()` in
-            `POST /api/builder/session` and the plan check inside every Builder tool.
-          */}
-          <Button
-            size="sm"
-            variant={builderOpen ? "secondary" : "outline"}
-            onClick={onOpenBuilder}
-            aria-pressed={builderOpen}
-          >
-            <SparklesIcon />
-            Build with AI
-          </Button>
-          <LastRun latest={latest} />
-          <Link
-            href={`/w/${workflowId}/runs`}
-            className={buttonVariants({ variant: "ghost", size: "sm" })}
-          >
-            <HistoryIcon />
-            Runs
-          </Link>
-          <ShortcutsPopover />
-        </div>
-      </div>
+      <PublishControl workflowId={workflowId} status={status} publishWorkflow={publishWorkflow} />
+
+      {/*
+        Shown to everyone, on purpose: the panel itself is what puts up the plan wall
+        (`<Show>` → `<UpgradeCard>`), so a free organisation discovers the feature by pressing
+        the button rather than by never seeing it. The refusals that matter are `has()` in
+        `POST /api/builder/session` and the plan check inside every Builder tool.
+      */}
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              size="sm"
+              variant={builderOpen ? "secondary" : "ghost"}
+              onClick={onOpenBuilder}
+              aria-pressed={builderOpen}
+              className={COMPACT_BUTTON}
+            />
+          }
+        >
+          <SparklesIcon />
+          <span className="max-lg:hidden">Build with AI</span>
+        </TooltipTrigger>
+        <TooltipContent>Describe the workflow and let the Builder draw it</TooltipContent>
+      </Tooltip>
+
+      <Separator orientation="vertical" className="mx-0.5 h-5" />
+
+      <LastRun latest={latest} />
+
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Link
+              href={`/w/${workflowId}/runs`}
+              aria-label="Run history"
+              className={buttonVariants({ variant: "ghost", size: "icon-sm" })}
+            />
+          }
+        >
+          <HistoryIcon />
+        </TooltipTrigger>
+        <TooltipContent>Run history</TooltipContent>
+      </Tooltip>
+
+      <ShortcutsPopover />
 
       {runLimit ? (
-        <UpgradeCard
-          compact
-          className="shrink-0 rounded-none border-x-0 border-t-0"
-          title="Monthly run limit reached"
-          description="This organisation has used every run its plan includes this month."
-        />
+        <div className="absolute inset-x-0 top-full z-30">
+          <UpgradeCard
+            compact
+            className="rounded-none border-x-0 border-t-0"
+            title="Monthly run limit reached"
+            description="This organisation has used every run its plan includes this month."
+          />
+        </div>
       ) : null}
 
       {triggerForm ? (

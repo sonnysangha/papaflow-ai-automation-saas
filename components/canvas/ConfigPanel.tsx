@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
-import type { Edge } from "@xyflow/react";
-import { XIcon } from "lucide-react";
+import { useReactFlow, type Edge } from "@xyflow/react";
+import { Trash2Icon, XIcon } from "lucide-react";
 
+import { TriggerChip } from "@/components/shared/TriggerChip";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,6 +12,7 @@ import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import type { Id } from "@/convex/_generated/dataModel";
+import { cn } from "@/lib/utils";
 import { categoryLabel } from "@/nodes/categories";
 import type { AnyNodeDef } from "@/nodes/define";
 import { NODES } from "@/nodes/registry";
@@ -41,6 +43,7 @@ import { lastRunFor, type LastRunStep, type RunStepRow } from "./last-run";
 import { LastRunSection } from "./LastRunSection";
 import { NodeGuide } from "./NodeGuide";
 import { NodeIcon } from "./node-icon";
+import { categoryTint } from "./node-summary";
 import { missingHint, resolvePickerKind } from "./picker-kind";
 import { ScheduleConfig } from "./ScheduleConfig";
 import { buildVariableGroups, type VariableGroup } from "./variables";
@@ -472,6 +475,9 @@ export function ConfigPanel({
 }: ConfigPanelProps) {
   const definition = NODES[node.data.nodeType];
   const [keyDraft, setKeyDraft] = useState(node.data.key);
+  // React Flow's own removal, so deleting from here behaves exactly like pressing Delete on the
+  // canvas: the node's edges go too, and the change reaches the graph through `onNodesChange`.
+  const { deleteElements } = useReactFlow();
 
   const schema = useMemo(() => inputsSchema(definition), [definition]);
   // The last run, twice over: the roots this node can reference (with the values they held) and
@@ -586,19 +592,36 @@ export function ConfigPanel({
   return (
     <aside
       aria-label="Node settings"
-      className="flex w-[360px] shrink-0 flex-col border-l border-border bg-card"
+      // Its own column while there is room for one. Under 900px it stops taking width from a canvas
+      // that has none to give and slides over it instead, which is what the close button is for.
+      className="flex w-[360px] shrink-0 flex-col border-l border-border bg-card max-[899px]:absolute max-[899px]:inset-y-0 max-[899px]:right-0 max-[899px]:z-20 max-[899px]:w-[min(360px,100%)] max-[899px]:shadow-lg"
     >
-      <div className="flex items-start gap-2 border-b border-border p-3">
-        <NodeIcon name={definition?.icon} className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+      <div className="flex items-start gap-2.5 border-b border-border p-3">
+        <span
+          aria-hidden
+          className={cn(
+            "grid size-8 shrink-0 place-items-center rounded-md",
+            categoryTint(definition?.category),
+          )}
+        >
+          <NodeIcon name={definition?.icon} className="size-4" />
+        </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <h2 className="truncate text-sm font-medium">
               {definition?.name ?? node.data.nodeType}
             </h2>
-            <Badge variant="outline" className="shrink-0">
-              {definition ? categoryLabel(definition.category) : "Unknown"}
-            </Badge>
+            {definition?.category === "trigger" ? (
+              <TriggerChip type={node.data.nodeType} className="shrink-0" />
+            ) : (
+              <Badge variant="outline" className="shrink-0">
+                {definition ? categoryLabel(definition.category) : "Unknown"}
+              </Badge>
+            )}
           </div>
+          <p className="mt-1 truncate font-mono text-xs text-muted-foreground" title={node.data.nodeType}>
+            {node.data.nodeType}
+          </p>
           <p className="mt-1 text-xs break-words text-muted-foreground">
             {definition?.description ?? `${node.data.nodeType} is not in the node registry.`}
           </p>
@@ -766,6 +789,28 @@ export function ConfigPanel({
           )}
         </div>
       </ScrollArea>
+
+      {/* The one destructive thing this panel can do, kept away from everything that only edits.
+          `deleteElements` is React Flow's own removal, so the node's edges go with it and the
+          canvas records one undo step — the same as pressing Delete with the node selected. */}
+      <div className="flex shrink-0 items-center justify-between gap-2 border-t border-border p-3">
+        <p className="min-w-0 truncate text-xs text-muted-foreground">
+          Deleting removes its wires too.
+        </p>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="shrink-0 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+          onClick={() => {
+            onClose();
+            void deleteElements({ nodes: [{ id: node.id }] });
+          }}
+        >
+          <Trash2Icon />
+          Delete node
+        </Button>
+      </div>
     </aside>
   );
 }

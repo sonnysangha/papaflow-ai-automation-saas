@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { ReactFlowProvider } from "@xyflow/react";
 import { useMutation, useQuery } from "convex/react";
-import { Redo2Icon, SaveIcon, Undo2Icon } from "lucide-react";
+import { ArrowLeftIcon, LayoutGridIcon, Redo2Icon, SaveIcon, Undo2Icon } from "lucide-react";
 import { toast } from "sonner";
 
 import {
@@ -16,9 +17,14 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Button } from "@/components/ui/button";
+import { WorkflowStatusPill } from "@/components/shared/status";
+import { TriggerChip } from "@/components/shared/TriggerChip";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { formatRelativeTime } from "@/components/workflows/relative-time";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { cn } from "@/lib/utils";
@@ -30,15 +36,25 @@ import { Canvas, type EditorControls } from "./Canvas";
 import { fromStoredGraph, type RunNodeState, type SaveState } from "./graph-io";
 import { carryOverSteps, latestStepByNode, type RunStepRow } from "./last-run";
 import { NodeSidebar } from "./NodeSidebar";
-import { FORM_TRIGGER, RunBar, type PublishWorkflowAction, type RunWorkflowAction } from "./RunBar";
+import {
+  COMPACT_BUTTON,
+  FORM_TRIGGER,
+  RunBar,
+  type PublishWorkflowAction,
+  type RunWorkflowAction,
+} from "./RunBar";
 import { RunTimeline } from "./RunTimeline";
 import { useLeaveGuard } from "./use-leave-guard";
 
 /** Stable identity for "no run yet", so the config panel does not re-memo on every render. */
 const EMPTY_STEPS: RunStepRow[] = [];
 
-/** The editor fills what is left of the viewport under the 3.5rem app header. */
-const SHELL = "flex h-[calc(100vh-3.5rem)] flex-col";
+/** The editor fills what is left of the viewport under the `h-14` app header. */
+const SHELL = "flex h-[calc(100dvh-3.5rem)] flex-col";
+
+/** What "Draft"/"Published" on the toolbar actually decides, in one sentence. */
+const PUBLISH_HINT =
+  "Published workflows respond to their triggers — webhooks, forms, schedules and chat messages. Drafts only run when you press Run.";
 
 const SAVE_LABEL: Record<SaveState, string> = {
   saved: "Saved",
@@ -75,12 +91,12 @@ function WorkflowName({ workflowId, name }: { workflowId: Id<"workflows">; name:
     return (
       <button
         type="button"
-        title="Rename workflow"
+        title={`${name} — click to rename`}
         onClick={() => {
           cancelledRef.current = false;
           setDraft(name);
         }}
-        className="max-w-72 truncate rounded-md px-1.5 py-1 text-sm font-medium hover:bg-muted"
+        className="max-w-[10rem] truncate rounded-md px-1.5 py-1 text-sm font-medium hover:bg-muted/50 lg:max-w-72"
       >
         {name}
       </button>
@@ -92,7 +108,7 @@ function WorkflowName({ workflowId, name }: { workflowId: Id<"workflows">; name:
       autoFocus
       value={draft}
       aria-label="Workflow name"
-      className="w-72"
+      className="h-8 w-[10rem] lg:w-72"
       onChange={(event) => setDraft(event.target.value)}
       onBlur={commit}
       onKeyDown={(event) => {
@@ -111,17 +127,25 @@ function WorkflowName({ workflowId, name }: { workflowId: Id<"workflows">; name:
  * Undo, Redo, Save, and where the graph stands.
  *
  * All three act on state the canvas owns, reached through the controls it reports up; until it has
- * mounted and sent them, the buttons are there but disabled rather than absent, so the header does
- * not change shape a frame after it appears. Titles carry the shortcuts, and are the tooltip a
- * disabled button can still show.
+ * mounted and sent them, the buttons are there but disabled rather than absent, so the toolbar does
+ * not change shape a frame after it appears.
+ *
+ * A disabled button receives no pointer events, so Undo and Redo keep a plain `title` rather than a
+ * tooltip that would never open in the state you most want to ask about it.
  */
-function SaveControls({ controls }: { controls: EditorControls | null }) {
+function SaveControls({ controls, savedAt }: { controls: EditorControls | null; savedAt: number | null }) {
   const saveState = controls?.saveState ?? "saved";
   const dirty = controls?.dirty ?? false;
   const saving = saveState === "saving";
+  // "Saved · 2m ago" once this session has actually written something; a canvas that opened clean
+  // and was never touched just says "Saved", because it has no moment to point at.
+  const label =
+    saveState === "saved" && savedAt !== null
+      ? `Saved · ${formatRelativeTime(savedAt)}`
+      : SAVE_LABEL[saveState];
 
   return (
-    <div className="ml-auto flex items-center gap-1.5">
+    <>
       <Button
         variant="ghost"
         size="icon-sm"
@@ -142,43 +166,57 @@ function SaveControls({ controls }: { controls: EditorControls | null }) {
       >
         <Redo2Icon />
       </Button>
+
+      {/* One press, one undo step: `tidy` moves the nodes through the same `setNodes` a drag does,
+          so Undo puts the pile back exactly as it was. `title` rather than a tooltip for the same
+          reason as Undo and Redo — it is disabled on a canvas with nothing to arrange. */}
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        aria-label="Tidy up"
+        title="Tidy up layout — space every node out along its wires"
+        disabled={!controls?.canTidy}
+        onClick={() => controls?.tidy()}
+      >
+        <LayoutGridIcon />
+      </Button>
+
       <Button
         size="sm"
         variant={dirty ? "default" : "outline"}
         disabled={!dirty || saving}
-        title="Save the canvas (⌘/Ctrl + S)"
+        aria-label="Save"
+        title={`${label} — save the canvas (⌘/Ctrl + S)`}
         onClick={() => void controls?.save()}
+        className={COMPACT_BUTTON}
       >
         <SaveIcon />
-        Save
+        <span className="max-lg:hidden">Save</span>
       </Button>
-      <span className="ml-1 flex items-center gap-2 text-xs text-muted-foreground">
-        <span aria-hidden className={cn("size-2 rounded-full", SAVE_TONE[saveState])} />
-        <span role="status">{SAVE_LABEL[saveState]}</span>
+
+      <span className="ml-0.5 hidden items-center gap-1.5 text-xs whitespace-nowrap text-muted-foreground lg:flex">
+        <span aria-hidden className={cn("size-1.5 rounded-full", SAVE_TONE[saveState])} />
+        <span role="status">{label}</span>
       </span>
-    </div>
+    </>
   );
 }
 
 function EditorSkeleton() {
   return (
     <div className={SHELL}>
-      <div className="flex h-12 shrink-0 items-center gap-3 border-b border-border px-4">
+      <div className="flex h-12 shrink-0 items-center gap-3 border-b border-border bg-background px-3">
         <Skeleton className="h-4 w-44" />
+        <Skeleton className="ml-auto h-7 w-56" />
       </div>
       <div className="flex min-h-0 flex-1">
-        <div className="w-64 shrink-0 space-y-2 border-r border-border p-3">
+        <div className="hidden w-72 shrink-0 space-y-2 border-r border-border p-3 lg:block">
           {["a", "b", "c", "d"].map((key) => (
-            <Skeleton key={key} className="h-14 w-full" />
+            <Skeleton key={key} className="h-14 w-full rounded-lg" />
           ))}
         </div>
-        <div className="flex min-w-0 flex-1 flex-col">
-          <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-3">
-            <Skeleton className="h-8 w-28" />
-          </div>
-          <div className="min-h-0 flex-1 p-3">
-            <Skeleton className="h-full w-full" />
-          </div>
+        <div className="min-h-0 min-w-0 flex-1 p-3">
+          <Skeleton className="h-full w-full rounded-xl" />
         </div>
       </div>
     </div>
@@ -243,6 +281,27 @@ export function Editor({
   // strip can draw them. Null until the canvas has mounted and sent its first set.
   const [controls, setControls] = useState<EditorControls | null>(null);
   const dirty = controls?.dirty ?? false;
+  const saveState = controls?.saveState ?? "saved";
+
+  // When this session last wrote the graph, so the toolbar can say "Saved · 2m ago" rather than
+  // only "Saved". Stamped on the `saving` → `saved` transition, which is the only moment a save
+  // actually landed; a canvas opened clean and never touched has nothing to report and says so by
+  // leaving this null. The tick re-renders the relative time while it is on screen.
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [, setNow] = useState(0);
+  const wasSavingRef = useRef(false);
+  useEffect(() => {
+    if (saveState === "saving") wasSavingRef.current = true;
+    else if (wasSavingRef.current && saveState === "saved") {
+      wasSavingRef.current = false;
+      setSavedAt(Date.now());
+    }
+  }, [saveState]);
+  useEffect(() => {
+    if (savedAt === null || saveState !== "saved") return;
+    const timer = window.setInterval(() => setNow((tick) => tick + 1), 30_000);
+    return () => window.clearInterval(timer);
+  }, [saveState, savedAt]);
 
   // The navigation the leave dialog is holding up, and the callback that lets it continue.
   const [leaving, setLeaving] = useState<{ proceed: () => void } | null>(null);
@@ -334,85 +393,125 @@ export function Editor({
 
   return (
     <ReactFlowProvider>
-      <div className={SHELL}>
-        <div className="flex h-12 shrink-0 items-center gap-3 border-b border-border px-4">
-          <WorkflowName workflowId={workflow._id} name={workflow.name} />
-          <span className="text-xs text-muted-foreground">v{workflow.version}</span>
-          <SaveControls controls={controls} />
-        </div>
+      <TooltipProvider delay={300}>
+        <div className={SHELL}>
+          {/*
+            One row for the whole editor: where you are and what this workflow is on the left, what
+            you can do to it on the right. `relative`, because the two things that have to be read
+            rather than glanced at — a refused publish, the monthly run wall — hang under it instead
+            of pushing the canvas down or wrapping the row. Nothing here stacks: below `lg` the
+            labelled buttons drop their labels and the name gets narrower.
+          */}
+          <div className="relative flex h-12 shrink-0 items-center gap-2 border-b border-border bg-background px-3">
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Link
+                    href="/w"
+                    aria-label="All workflows"
+                    className={buttonVariants({ variant: "ghost", size: "icon-sm" })}
+                  />
+                }
+              >
+                <ArrowLeftIcon />
+              </TooltipTrigger>
+              <TooltipContent>All workflows</TooltipContent>
+            </Tooltip>
 
-        <div className="flex min-h-0 flex-1">
-          <NodeSidebar />
-          <div className="flex min-w-0 flex-1 flex-col">
-            <RunBar
-              workflowId={workflow._id}
-              status={workflow.status}
-              triggerType={triggerType}
-              triggerSample={triggerSample}
-              triggerForm={triggerForm}
-              latest={latest}
-              runWorkflow={runWorkflow}
-              publishWorkflow={publishWorkflow}
-              builderOpen={builderOpen}
-              onOpenBuilder={() => setBuilderOpen((open) => !open)}
-            />
-            <div className="min-h-0 flex-1">
-              <Canvas
-                key={workflow._id}
-                workflow={workflow}
-                runByNode={runByNode}
-                steps={panelSteps}
-                focusNode={focusNode}
-                onControlsChange={setControls}
-                onSelectedNodeChange={setSelectedNodeId}
+            <WorkflowName workflowId={workflow._id} name={workflow.name} />
+
+            <span title={PUBLISH_HINT} className="shrink-0">
+              <WorkflowStatusPill status={workflow.status} />
+            </span>
+            <span className="shrink-0 font-mono text-xs text-muted-foreground">
+              v{workflow.version}
+            </span>
+            {triggerType ? (
+              <TriggerChip type={triggerType} className="hidden shrink-0 xl:inline-flex" />
+            ) : null}
+
+            <div className="ml-auto flex items-center gap-1.5">
+              <SaveControls controls={controls} savedAt={savedAt} />
+              <Separator orientation="vertical" className="mx-0.5 h-5" />
+              <RunBar
+                workflowId={workflow._id}
+                status={workflow.status}
+                triggerType={triggerType}
+                triggerSample={triggerSample}
+                triggerForm={triggerForm}
+                latest={latest}
+                runWorkflow={runWorkflow}
+                publishWorkflow={publishWorkflow}
+                builderOpen={builderOpen}
+                onOpenBuilder={() => setBuilderOpen((open) => !open)}
               />
             </div>
-            {/* Under the canvas rather than in the run bar: it is a chart of one run, and the bar
-                above is about starting the next one. */}
-            <RunTimeline
-              workflowId={workflow._id}
-              graph={workflow.graph}
-              selectedNodeId={selectedNodeId ?? undefined}
-              onSelectNode={focusOnNode}
-              latestRunId={latest?._id ?? null}
-              latestStatus={latest?.status ?? null}
-            />
           </div>
 
-          {builderOpen ? (
-            <BuilderPanel workflowId={workflow._id} onClose={() => setBuilderOpen(false)} />
-          ) : null}
-        </div>
-      </div>
+          {/* Three columns: the palette folds, the canvas takes what is left, and the settings panel
+              (inside `Canvas`, beside the flow) appears only while a node is selected. */}
+          <div className="flex min-h-0 flex-1">
+            <NodeSidebar />
+            <div className="flex min-w-0 flex-1 flex-col">
+              <div className="min-h-0 flex-1">
+                <Canvas
+                  key={workflow._id}
+                  workflow={workflow}
+                  runByNode={runByNode}
+                  steps={panelSteps}
+                  focusNode={focusNode}
+                  onControlsChange={setControls}
+                  onSelectedNodeChange={setSelectedNodeId}
+                  onBuildWithAi={() => setBuilderOpen(true)}
+                />
+              </div>
+              {/* Under the canvas rather than in the toolbar: it is a chart of one run, and the bar
+                  above is about starting the next one. */}
+              <RunTimeline
+                workflowId={workflow._id}
+                graph={workflow.graph}
+                selectedNodeId={selectedNodeId ?? undefined}
+                onSelectNode={focusOnNode}
+                latestRunId={latest?._id ?? null}
+                latestStatus={latest?.status ?? null}
+              />
+            </div>
 
-      {/*
-        An in-app navigation, held. Three ways out and no default: the dialog cannot guess whether
-        the half-drawn branch on the canvas is worth keeping. Cancel is the safe one and is what
-        Escape and a click outside do.
-      */}
-      <AlertDialog
-        open={leaving !== null}
-        onOpenChange={(open) => {
-          if (!open) setLeaving(null);
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>You have unsaved changes</AlertDialogTitle>
-            <AlertDialogDescription>
-              Your changes to {workflow.name} are still only on this canvas. Leaving without saving
-              throws them away.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" onClick={discardAndLeave}>
-              Discard and leave
-            </AlertDialogAction>
-            <AlertDialogAction onClick={saveAndLeave}>Save and leave</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+            {builderOpen ? (
+              <BuilderPanel workflowId={workflow._id} onClose={() => setBuilderOpen(false)} />
+            ) : null}
+          </div>
+        </div>
+
+        {/*
+          An in-app navigation, held. Three ways out and no default: the dialog cannot guess whether
+          the half-drawn branch on the canvas is worth keeping. Cancel is the safe one and is what
+          Escape and a click outside do.
+        */}
+        <AlertDialog
+          open={leaving !== null}
+          onOpenChange={(open) => {
+            if (!open) setLeaving(null);
+          }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>You have unsaved changes</AlertDialogTitle>
+              <AlertDialogDescription>
+                Your changes to {workflow.name} are still only on this canvas. Leaving without saving
+                throws them away.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction variant="destructive" onClick={discardAndLeave}>
+                Discard and leave
+              </AlertDialogAction>
+              <AlertDialogAction onClick={saveAndLeave}>Save and leave</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </TooltipProvider>
     </ReactFlowProvider>
   );
 }

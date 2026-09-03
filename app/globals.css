@@ -152,6 +152,7 @@
 .react-flow__controls {
   @apply overflow-hidden rounded-lg border border-border bg-card shadow-sm;
   box-shadow: none;
+  margin: 0.75rem;
 }
 
 .react-flow__controls-button {
@@ -170,8 +171,55 @@
   @apply outline-2 -outline-offset-2 outline-ring;
 }
 
+/*
+ * The minimap sits in the bottom-right of the canvas column. Its own `<svg>` carries React Flow's
+ * light-mode `background-color` inline, so the background is overridden here as well as the frame.
+ */
 .react-flow__minimap {
   @apply rounded-lg border border-border bg-card;
+  margin: 0.75rem;
+}
+
+.react-flow__minimap-svg {
+  @apply bg-card;
+}
+
+.react-flow__minimap-node {
+  @apply fill-muted-foreground stroke-none;
+}
+
+/* The window you are actually looking at, cut out of a wash of the page's own background. */
+.react-flow__minimap-mask {
+  fill: var(--background);
+  fill-opacity: 0.65;
+}
+
+/*
+ * Gone under 900px, where the settings panel overlays the right-hand side of the canvas: a map of
+ * a graph you cannot see is worse than no map, and it would sit under the panel it duplicates.
+ */
+@media (max-width: 899px) {
+  .pf-canvas-minimap {
+    display: none;
+  }
+}
+
+/*
+ * The dots the canvas is ruled with. React Flow paints them with a hard-coded light-mode colour on
+ * the `<circle>` itself, so this restates them as a token — one grid weight, both themes.
+ */
+.react-flow__background circle {
+  @apply fill-muted-foreground/40;
+}
+
+/* A connection point reads as a target on hover rather than only when you are already on it. */
+.react-flow__handle {
+  @apply transition-colors;
+}
+
+.react-flow__handle:hover,
+.react-flow__node:hover .react-flow__handle {
+  @apply bg-primary;
 }
 
 .react-flow__attribution {

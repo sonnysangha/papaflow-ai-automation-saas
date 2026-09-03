@@ -24,25 +24,39 @@ import { cn } from "@/lib/utils";
 import { CATEGORIES } from "@/nodes/categories";
 import { nodeCatalogue, type CatalogueEntry } from "@/nodes/registry";
 
+import { initialPaletteCollapsed } from "./editor-layout";
 import { NODE_DRAG_MIME } from "./graph-io";
 import { NodeIcon } from "./node-icon";
+import { categoryTint } from "./node-summary";
 import { NODE_SEARCH_INPUT_ID, hasModifier, isTypingTarget } from "./shortcuts";
 
-const CARD = "block rounded-lg border border-border bg-background p-2.5 transition-colors";
+const CARD = "block rounded-lg border border-border bg-card px-3 py-2 transition-colors";
 
-/** The icon, name, badge and description — the same block whatever the card turns out to be. */
+/** The icon tile, name, badge and description — the same block whatever the card turns out to be. */
 function NodeSummary({ entry, badge }: { entry: CatalogueEntry; badge: ReactNode }) {
   return (
-    <>
-      <div className="flex items-center gap-2">
-        <NodeIcon name={entry.icon} className="h-4 w-4 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 flex-1 truncate text-sm font-medium">{entry.name}</span>
-        {badge}
+    <div className="flex min-w-0 items-start gap-2.5">
+      {/* The same tinted tile the node wears once it is on the canvas, so dragging one across is
+          a move rather than a transformation. */}
+      <span
+        aria-hidden
+        className={cn(
+          "mt-0.5 grid size-8 shrink-0 place-items-center rounded-md",
+          categoryTint(entry.category),
+        )}
+      >
+        <NodeIcon name={entry.icon} className="size-4" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="min-w-0 flex-1 truncate text-sm font-medium">{entry.name}</span>
+          {badge}
+        </div>
+        <p className="mt-0.5 line-clamp-2 text-xs break-words text-muted-foreground">
+          {entry.description}
+        </p>
       </div>
-      <p className="mt-1 line-clamp-2 text-xs break-words text-muted-foreground">
-        {entry.description}
-      </p>
-    </>
+    </div>
   );
 }
 
@@ -93,7 +107,7 @@ function NodeSidebarItem({
         href={need.href}
         draggable={false}
         title={`Connect ${need.label} before using this node`}
-        className={cn(CARD, "hover:border-ring hover:bg-muted")}
+        className={cn(CARD, "hover:border-ring hover:bg-muted/50")}
       >
         <div className="opacity-50">
           <NodeSummary entry={entry} badge={badge} />
@@ -118,7 +132,7 @@ function NodeSidebarItem({
         CARD,
         disabled
           ? "cursor-not-allowed"
-          : "cursor-grab hover:border-ring hover:bg-muted active:cursor-grabbing",
+          : "cursor-grab hover:border-ring hover:bg-muted/50 active:cursor-grabbing",
       )}
     >
       {/* Dimming the *contents* rather than the card leaves the upgrade link at full contrast —
@@ -173,9 +187,15 @@ function subscribeToCollapse(onChange: () => void): () => void {
   };
 }
 
+/**
+ * Folded or not, right now. With nothing stored this is a judgement about the window rather than
+ * a preference (`initialPaletteCollapsed`): on a narrow screen the palette would leave no canvas,
+ * so it starts out of the way and the first deliberate toggle stores an answer that always wins
+ * from then on.
+ */
 function readCollapsed(): boolean {
   try {
-    return window.localStorage.getItem(COLLAPSE_KEY) === "1";
+    return initialPaletteCollapsed(window.innerWidth, window.localStorage.getItem(COLLAPSE_KEY));
   } catch {
     return false;
   }
@@ -240,7 +260,7 @@ export function NodeSidebar() {
     return (
       <aside
         aria-label="Nodes, collapsed"
-        className="flex w-10 shrink-0 flex-col items-center gap-1 border-r border-border bg-card py-2"
+        className="flex w-12 shrink-0 flex-col items-center gap-1 border-r border-border bg-card py-2"
       >
         <Button
           type="button"
@@ -261,8 +281,8 @@ export function NodeSidebar() {
   }
 
   return (
-    <aside className="flex w-64 shrink-0 flex-col border-r border-border bg-card">
-      <div className="border-b border-border p-3">
+    <aside className="flex w-72 shrink-0 flex-col border-r border-border bg-card">
+      <div className="shrink-0 border-b border-border bg-card p-3">
         <div className="flex items-center gap-1.5">
         <div className="relative min-w-0 flex-1">
           <SearchIcon
@@ -320,7 +340,7 @@ export function NodeSidebar() {
         ) : (
           groups.map((group) => (
             <div key={group.id} className="mb-4 last:mb-0">
-              <h2 className="mb-2 px-0.5 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+              <h2 className="mb-2 px-0.5 text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
                 {group.label}
               </h2>
               <div className="space-y-2">

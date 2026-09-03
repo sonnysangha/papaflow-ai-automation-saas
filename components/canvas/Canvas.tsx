@@ -19,10 +19,10 @@ import {
   type OnMoveEnd,
   type Viewport,
 } from "@xyflow/react";
-import { useMutation } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import { ConvexError } from "convex/values";
-import { LayoutTemplateIcon } from "lucide-react";
+import { LayoutTemplateIcon, SparklesIcon, WorkflowIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import {
@@ -69,9 +69,11 @@ import {
   undo as undoHistory,
   type History,
 } from "./history";
+import { autoLayout, canAutoLayout } from "./auto-layout";
 import type { RunStepRow } from "./last-run";
+import { nodeSetup, type NodeSetup, type SetupConnection } from "./node-setup";
 import { hasModifier, isTypingTarget } from "./shortcuts";
-import { WorkflowNode } from "./WorkflowNode";
+import { NodeSetupContext, WorkflowNode } from "./WorkflowNode";
 
 // Module scope on purpose: a fresh object here remounts every node on every render.
 const nodeTypes: NodeTypes = { [PAPAFLOW_NODE_TYPE]: WorkflowNode };
@@ -111,10 +113,14 @@ export type EditorControls = {
   dirty: boolean;
   canUndo: boolean;
   canRedo: boolean;
+  /** Whether there is an arrangement to make: two nodes or more. */
+  canTidy: boolean;
   /** Writes the current graph. Resolves false when it did not land — a conflict, or an error. */
   save: () => Promise<boolean>;
   undo: () => void;
   redo: () => void;
+  /** Spaces every node out along its wires, and fits the result in the viewport. */
+  tidy: () => void;
 };
 
 /** One graph as the undo stack holds it, with the string the sameness of two graphs is decided by. */
@@ -142,6 +148,8 @@ type CanvasProps = {
   onControlsChange: (controls: EditorControls) => void;
   /** Reports which single node is selected, so a panel outside the canvas can follow along. */
   onSelectedNodeChange?: (nodeId: string | null) => void;
+  /** Opens the Builder chat — offered from the empty canvas as well as from the toolbar. */
+  onBuildWithAi?: () => void;
 };
 
 /** The `ConvexError({ code, ... })` payload, or null for a transport or unexpected error. */
@@ -165,6 +173,7 @@ export function Canvas({
   focusNode,
   onControlsChange,
   onSelectedNodeChange,
+  onBuildWithAi,
 }: CanvasProps) {
   const saveGraph = useMutation(api.workflows.saveGraph);
   const { fitView, screenToFlowPosition, setViewport } = useReactFlow<WorkflowNodeType, Edge>();
@@ -352,6 +361,36 @@ export function Canvas({
     applyHistory(redoHistory(historyRef.current, Date.now()));
   }, [applyHistory]);
 
+  /**
+   * "Tidy up": lay every node out along its wires.
+   *
+   * It goes through `setNodes` and nothing else, which is the same path a drag-move takes — so the
+   * effect that watches the graph marks the canvas unsaved and pushes exactly one undo entry, and
+   * Undo puts the pile back where it was. There is deliberately no second history mechanism here.
+   *
+   * The nodes are read inside the updater rather than closed over, so dragging a node does not
+   * hand the toolbar a new callback sixty times a second.
+   */
+  const tidy = useCallback(() => {
+    setNodes((current) => {
+      if (!canAutoLayout(current)) return current;
+      const positions = autoLayout(current, edges);
+      let changed = false;
+      const next = current.map((node) => {
+        const at = positions[node.id];
+        if (!at || (node.position.x === at.x && node.position.y === at.y)) return node;
+        changed = true;
+        return { ...node, position: at };
+      });
+      return changed ? next : current;
+    });
+    // After the layout, not with it: React Flow has to measure the moved nodes before it can frame
+    // them, and `fitView` reads the store the commit above is about to write.
+    requestAnimationFrame(() => {
+      void fitView({ padding: 0.2, duration: 300 });
+    });
+  }, [edges, fitView, setNodes]);
+
   // Live run status from the `steps` subscription, merged into the nodes React Flow renders.
   // `toStoredGraph` drops `data.status`, so the effect below sees an unchanged graph key and the
   // canvas does not become dirty — a run lighting the canvas up is not an edit.
@@ -491,18 +530,22 @@ export function Canvas({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [redo, save, undo]);
 
-  // The header's controls, reported up whenever one of them changes.
+  // The toolbar's controls, reported up whenever one of them changes. Keyed on the node *count*
+  // rather than on the nodes, so moving one does not rebuild this on every animation frame.
+  const nodeCount = nodes.length;
   const controls = useMemo<EditorControls>(
     () => ({
       saveState,
       dirty,
       canUndo: undoable.canUndo,
       canRedo: undoable.canRedo,
+      canTidy: nodeCount > 1,
       save,
       undo,
       redo,
+      tidy,
     }),
-    [dirty, redo, save, saveState, undo, undoable.canRedo, undoable.canUndo],
+    [dirty, nodeCount, redo, save, saveState, tidy, undo, undoable.canRedo, undoable.canUndo],
   );
 
   useEffect(() => {
@@ -663,6 +706,28 @@ export function Canvas({
   }, [edges, nodes, runByNode]);
 
   /**
+   * What each node still needs before it could run — a missing connection, a dead token, an empty
+   * required field, a node this plan does not include.
+   *
+   * The two subscriptions it reads are the same ones the palette and the config panel's connection
+   * picker use, so a card, a dropdown and a dimmed palette entry can never disagree about whether
+   * this org has a usable Slack token. The result is handed to the cards through context rather
+   * than written into `node.data`: it is derived from the org, not from the document, and a
+   * connection changing must not light up Save, push an undo entry or wake the save effect.
+   */
+  const connections = useQuery(api.connections.list);
+  const plan = useQuery(api.plan.current, {});
+  const planFeatures = plan?.features;
+  const setupByNode = useMemo(() => {
+    const byNode: Record<string, NodeSetup> = {};
+    for (const node of nodes) {
+      const setup = nodeSetup(node, connections as readonly SetupConnection[] | undefined, planFeatures);
+      if (setup.state !== "ready") byNode[node.id] = setup;
+    }
+    return byNode;
+  }, [connections, nodes, planFeatures]);
+
+  /**
    * Drops a starter template onto an empty canvas.
    *
    * This is the same graph `workflows.create` would have been handed from the workflow list; here
@@ -697,86 +762,117 @@ export function Canvas({
   return (
     // Node tooltips wait a beat: panning across a busy canvas must not set off every node at once.
     <TooltipProvider delay={400}>
-      <div className="flex h-full min-h-0 w-full">
-        <div className="min-w-0 flex-1">
-          <ReactFlow<WorkflowNodeType, Edge>
-            nodes={nodes}
-            edges={styledEdges}
-            nodeTypes={nodeTypes}
-            edgeTypes={edgeTypes}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onConnect={onConnect}
-            onMoveEnd={onMoveEnd}
-            isValidConnection={isValidConnection}
-            onDrop={onDrop}
-            onDragOver={onDragOver}
-            defaultViewport={initial.graph.viewport}
-            fitView={!initial.graph.viewport}
-            deleteKeyCode={["Backspace", "Delete"]}
-            colorMode="system"
-            minZoom={0.2}
-            className="bg-background"
-            aria-label="Workflow canvas"
-          >
-            <Background gap={16} />
-            {/* Zoom in / out / fit view, in the app's own tokens rather than React Flow's default
-                white-on-white — see the `.react-flow__controls` block in `app/globals.css`. */}
-            <Controls
-              showInteractive={false}
-              aria-label="Canvas zoom controls"
-              fitViewOptions={{ padding: 0.2, duration: 200 }}
-            />
-            <MiniMap pannable zoomable ariaLabel="Canvas minimap" />
+      {/* `relative`, because under 900px the settings panel stops taking width and overlays the
+          canvas from the right instead of squeezing it into a strip. */}
+      <div className="relative flex h-full min-h-0 w-full">
+        {/* Only the flow needs to know what each node is missing; the panel reads the node it is
+            editing directly. */}
+        <NodeSetupContext.Provider value={setupByNode}>
+          <div className="min-w-0 flex-1">
+            <ReactFlow<WorkflowNodeType, Edge>
+              nodes={nodes}
+              edges={styledEdges}
+              nodeTypes={nodeTypes}
+              edgeTypes={edgeTypes}
+              onNodesChange={onNodesChange}
+              onEdgesChange={onEdgesChange}
+              onConnect={onConnect}
+              onMoveEnd={onMoveEnd}
+              isValidConnection={isValidConnection}
+              onDrop={onDrop}
+              onDragOver={onDragOver}
+              defaultViewport={initial.graph.viewport}
+              fitView={!initial.graph.viewport}
+              deleteKeyCode={["Backspace", "Delete"]}
+              colorMode="system"
+              minZoom={0.2}
+              className="bg-background"
+              aria-label="Workflow canvas"
+            >
+                {/* Dots rather than lines: a ruled surface you can judge distance on without it
+                  competing with the wires. Their colour is a token, in `app/globals.css`. */}
+              <Background gap={20} size={1} />
+              {/* Zoom in / out / fit view, in the app's own tokens rather than React Flow's default
+                  white-on-white — see the `.react-flow__controls` block in `app/globals.css`. */}
+              <Controls
+                showInteractive={false}
+                aria-label="Canvas zoom controls"
+                fitViewOptions={{ padding: 0.2, duration: 200 }}
+              />
+              {/* Bottom-right of the canvas column, and gone below 900px, where the settings panel
+                  overlays that corner (`.pf-canvas-minimap` in `app/globals.css`). */}
+              <MiniMap pannable zoomable ariaLabel="Canvas minimap" className="pf-canvas-minimap" />
 
-            {/*
-              Someone else's newer graph, held back because this canvas has edits of its own. A
-              panel rather than a dialog on purpose: the user is mid-edit, and the right thing is to
-              tell them, not to take the canvas away from them.
-            */}
-            {remote ? (
-              <Panel position="top-center" className="mt-2">
-                <div
-                  role="status"
-                  className="flex max-w-md items-center gap-3 rounded-lg border border-border bg-card/95 px-3 py-2 text-sm shadow-sm backdrop-blur-sm"
-                >
-                  <span>
-                    {remote.fromBuilder
-                      ? "The Builder changed this workflow"
-                      : "This workflow changed elsewhere"}{" "}
-                    — Save to overwrite, or
-                  </span>
-                  <Button variant="outline" size="sm" onClick={reloadTheirs}>
-                    Reload theirs
-                  </Button>
-                </div>
-              </Panel>
-            ) : null}
+              {/*
+                Someone else's newer graph, held back because this canvas has edits of its own. A
+                panel rather than a dialog on purpose: the user is mid-edit, and the right thing is to
+                tell them, not to take the canvas away from them.
+              */}
+              {remote ? (
+                <Panel position="top-center" className="mt-2">
+                  <div
+                    role="status"
+                    className="flex max-w-md items-center gap-3 rounded-lg border border-border bg-card/95 px-3 py-2 text-sm shadow-sm backdrop-blur-sm"
+                  >
+                    <span>
+                      {remote.fromBuilder
+                        ? "The Builder changed this workflow"
+                        : "This workflow changed elsewhere"}{" "}
+                      — Save to overwrite, or
+                    </span>
+                    <Button variant="outline" size="sm" onClick={reloadTheirs}>
+                      Reload theirs
+                    </Button>
+                  </div>
+                </Panel>
+              ) : null}
 
-            {nodes.length === 0 ? (
-              <Panel position="top-center" className="pointer-events-none mt-24">
-                <div className="pointer-events-auto flex max-w-sm flex-col items-center gap-3 rounded-xl border border-dashed border-border bg-card/80 px-6 py-8 text-center backdrop-blur-sm">
-                  <p className="text-sm font-medium">This canvas is empty</p>
-                  <p className="text-sm text-muted-foreground">
-                    Drag a trigger here from the left, or start from a template and change what you
-                    do not want.
-                  </p>
-                  <TemplateDialog
-                    onPick={applyTemplate}
-                    title="Start from a template"
-                    description="Each one drops a working graph onto this canvas. Nothing is locked — edit or delete any node afterwards."
-                    trigger={
-                      <Button variant="outline" size="sm">
-                        <LayoutTemplateIcon />
-                        Pick a template
-                      </Button>
-                    }
-                  />
-                </div>
-              </Panel>
-            ) : null}
-          </ReactFlow>
-        </div>
+              {/*
+                Nothing here yet. An overlay rather than a card in a corner: an empty canvas has no
+                other content to sit beside, and the three ways to start one — drag, template,
+                describe it — are the whole of what the page can do right now. Everything but the
+                buttons lets the pointer through, so dragging a node onto the middle still works.
+              */}
+              {nodes.length === 0 ? (
+                <Panel position="top-center" className="pointer-events-none mt-20">
+                  <div className="flex max-w-sm flex-col items-center gap-3 px-6 text-center">
+                    <span
+                      aria-hidden
+                      className="grid size-12 place-items-center rounded-xl border border-border bg-card text-muted-foreground"
+                    >
+                      <WorkflowIcon className="size-5" />
+                    </span>
+                    <div className="space-y-1">
+                      <p className="text-sm font-medium">Start with a trigger</p>
+                      <p className="text-sm text-muted-foreground">
+                        Drag one in from the left, or start from something that already works.
+                      </p>
+                    </div>
+                    <div className="pointer-events-auto flex flex-wrap items-center justify-center gap-2">
+                      <TemplateDialog
+                        onPick={applyTemplate}
+                        title="Start from a template"
+                        description="Each one drops a working graph onto this canvas. Nothing is locked — edit or delete any node afterwards."
+                        trigger={
+                          <Button variant="outline" size="sm">
+                            <LayoutTemplateIcon />
+                            Use a template
+                          </Button>
+                        }
+                      />
+                      {onBuildWithAi ? (
+                        <Button variant="ghost" size="sm" onClick={onBuildWithAi}>
+                          <SparklesIcon />
+                          Build with AI
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+                </Panel>
+              ) : null}
+            </ReactFlow>
+          </div>
+        </NodeSetupContext.Provider>
 
         {selected ? (
           <ConfigPanel

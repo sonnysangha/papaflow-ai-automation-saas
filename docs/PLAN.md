@@ -61,7 +61,7 @@ One text box: "When someone fills in my contact form, qualify them with Claude, 
 - **validate_workflow** `v1`: Dangling edges, unconfigured required inputs, template references to nodes that don't exist, Condition without both branches. Returns a fix list.
 - **run_workflow · list_runs · get_run** `v2` (the plan's old `test_run`, split in three): `run_workflow` starts a manual run with an optional payload and waits for it; `list_runs` is one line per recent run; `get_run` is a run's step rows in order with status, duration, error, the unresolved-template `warnings`, and input/output trimmed to ~2 KB each. Loop passes are numbered and an Agent node's tool calls are labelled with their parent. **The run is started through `POST /api/engine/run` in the Next app, not `start()` here** — a workflow function only exists after the Workflow SDK's compiler has transformed it, and that happens in the Next build, not in the agent's own Vercel service (Phase 12 addendum item 5 in `docs/research/eve-spike.md`). The route authenticates with `ENGINE_SECRET` as a bearer token compared with `timingSafeEqual`, and calls the same `startRun` the Run button's server action calls.
 - **ask_user** `v1`: eve's own `ask_question`, left enabled — a plain clarifying question when the prompt is ambiguous ("which Slack channel?").
-- **finish** `v2`: Publishes the workflow, returns a summary and how it starts (never the webhook URL — it carries `webhookSecret`). **Publishing goes through `POST /api/engine/publish` in the Next app, not a Convex mutation** — a Schedule trigger's "on" is the workflow's `status` *and* a durable scheduler run sleeping until the next occurrence, and only the Next app can `start()` one, so while `finish` wrote the status through `api.builder.activate` a schedule-triggered workflow it finished was live in the canvas and never fired. The route authenticates the same way `/api/engine/run` does (`ENGINE_SECRET` as a bearer token compared with `timingSafeEqual`) and calls the same `applyPublish()` (`lib/publish-server.ts`) the Publish button's server action calls, with the plan read from Clerk's Backend API. A plan that refuses the interval answers 400 `too_frequent` and leaves the workflow *unpublished*, so the model can slow the schedule down with `configure_node` and call `finish` again.
+- **finish** `v2`: Publishes the workflow, returns a summary and how it starts (never the webhook URL — it carries `webhookSecret`). **Publishing goes through `POST /api/engine/publish` in the Next app, not a Convex mutation** — a Schedule trigger's "on" is the workflow's `status` *and* a durable Convex job armed for the next occurrence, and deciding whether the interval is even allowed needs the plan (a Clerk concern the Next app, not Convex, can resolve), so while `finish` wrote the status through `api.builder.activate` a schedule-triggered workflow it finished was live in the canvas and never scheduled. The route authenticates the same way `/api/engine/run` does (`ENGINE_SECRET` as a bearer token compared with `timingSafeEqual`) and calls the same `applyPublish()` (`lib/publish-server.ts`) the Publish button's server action calls, with the plan read from Clerk's Backend API. A plan that refuses the interval answers 400 `too_frequent` and leaves the workflow *unpublished*, so the model can slow the schedule down with `configure_node` and call `finish` again.
 
 ### The credential handoff
 
@@ -134,7 +134,7 @@ Every trigger ends in the same place: a route handler that writes an execution r
 | Manual | Run button → server action | Clerk session | Optional sample JSON | The first thing that works. |
 | Webhook | `/api/hooks/{workflowId}/{secret}` | Unguessable secret in the path | Body, headers, query | Generic inbound. Curl it on camera. |
 | Form | Public page `/f/{workflowId}` | None needed, add Turnstile later | Field values | Makes the demo self-contained. |
-| Schedule | A long-lived scheduler run, see below | n/a | `{ firedAt }` | No cron infrastructure at all. |
+| Schedule | Convex alarm clock → `/api/engine/schedule-tick`, see below | `ENGINE_SECRET` bearer | `{ firedAt, scheduleId }` | No cron infrastructure at all. |
 | Slack mention | `/api/events/slack` | HMAC-SHA256 of `v0:{ts}:{body}` with signing secret; echo `url_verification` challenge once | Event object | Ack within 3 seconds or Slack retries. |
 | Discord slash command | `/api/events/discord` | Ed25519 over timestamp + body with the app public key; answer PING with type 1 | Command name, options, user, channel | Reply type 5 (deferred) inside 3s, then PATCH the original message when the run finishes. |
 | Telegram message | `/api/events/telegram/{connectionId}` | `X-Telegram-Bot-Api-Secret-Token` header equals the stored secret | Update object | Set with `setWebhook` when the connection is created. |
@@ -145,26 +145,37 @@ Every trigger ends in the same place: a route handler that writes an execution r
 
 ### Schedules without cron
 
-Vercel Cron Jobs are static in `vercel.json`, which is useless for per-user schedules. Workflow SDK's `sleep()` has no maximum and costs nothing while sleeping, so a schedule is just a workflow that loops: compute the next fire time in a step, `sleep(untilThatDate)`, `start(runGraph)` from a step, repeat. Pausing the schedule is `run.cancel()`; editing the cron cancels and starts a new scheduler run. Runs are capped at 25,000 events, so after a few hundred iterations the scheduler starts a fresh copy of itself and returns ("continue as new"). A once-a-minute schedule needs that about every two days (8 events per iteration against the 25,000 cap; keep runs under ~2,000 events for fast replay); a daily one never does.
+Vercel Cron Jobs are static in `vercel.json`, which is useless for per-user schedules. The first cut of this used the Workflow SDK's `sleep()`, which has no maximum and costs nothing while sleeping — a schedule as a workflow that loops: compute the next fire time in a step, `sleep(untilThatDate)`, `start(runGraph)` from a step, repeat. It worked, but it meant one *Active* Workflow SDK run per published schedule forever, roughly eight recorded events per tick, and continue-as-new bookkeeping (the 25,000-event cap forces a fresh copy of the run every few hundred iterations, and pausing has to cancel whichever copy is currently sleeping).
+
+**Convex is the alarm clock instead** (decision 2026-09-03): a published schedule is a row in `schedules` plus one durable Convex scheduled job (`ctx.scheduler.runAt`) armed for the next occurrence — no sleeping process anywhere. When the job wakes, `convex/schedules.ts#fire` POSTs `/api/engine/schedule-tick` with `ENGINE_SECRET`; that route re-reads the schedule and the workflow, decides whether the tick may start a run, calls `startRun` exactly like every other trigger, and hands back the next occurrence for `fire` to arm in turn.
 
 ```ts
-// workflows/scheduler.ts
-import { sleep } from "workflow";
+// convex/schedules.ts (internal action, scheduled by ctx.scheduler.runAt/runAfter)
+export const fire = internalAction({
+  args: { scheduleId: v.id("schedules"), plannedAt: v.number(), attempt: v.number() },
+  handler: async (ctx, { scheduleId, plannedAt, attempt }) => {
+    const schedule = await ctx.runQuery(internal.schedules.byId, { scheduleId });
+    if (!schedule || !schedule.enabled) return null;
 
-export async function scheduler({ scheduleId, cron }: { scheduleId: string; cron: string }) {
-  "use workflow";
-  for (let i = 0; i < 200; i++) {
-    const nextAt = await computeNext({ cron });                 // "use step": cron-parser, returns ISO string
-    await sleep(new Date(nextAt));                              // no compute while waiting
-    const stillActive = await fireSchedule({ scheduleId, firedAt: nextAt });
-    //  "use step": checks the schedule is still enabled, writes an execution row, start(runGraph, …)
-    if (!stillActive) return;
-  }
-  await start(scheduler, [{ scheduleId, cron }], { deploymentId: "latest" }); // v5: start() is step-backed and allowed in a workflow body; "latest" picks up new code
-}
+    if (attempt === 0) {
+      // Exactly-once: plannedAt is the instant this tick was *due*, so a duplicate delivery of the
+      // same tick — a retry, a double-fire — is refused rather than starting a second run.
+      const claimed = await ctx.runMutation(internal.schedules.claimTick, { scheduleId, plannedAt });
+      if (!claimed) return null;
+    }
+
+    const response = await fetch(`${process.env.APP_ORIGIN}/api/engine/schedule-tick`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${process.env.ENGINE_SECRET}` },
+      body: JSON.stringify({ scheduleId, workflowId: schedule.workflowId, orgId: schedule.orgId, plannedAt }),
+    });
+    // 200 → record the tick and arm `nextAt`; 4xx → disarm (unpublished); 5xx/unreachable → retry
+    // up to three times a minute apart, then arm a fallback fifteen minutes out.
+  },
+});
 ```
 
-Store the scheduler's `runId` on the schedule row so pause is `getRun(runId).cancel()`. Everything the loop needs is in its arguments or in step results, which is all determinism asks for.
+Pausing is `disarm`: cancel the pending job, disable the row. Editing the cron re-arms: `arm` cancels whatever was pending before it schedules the replacement, so at most one job per schedule exists at a time. `ctx.scheduler.cancel()` throws if the job it names has already completed, so every cancel site checks `ctx.db.system.get(jobId).state.kind === "pending"` first — verified against `node_modules/convex@1.45.0`'s `server/scheduler.d.ts`, which documents the throw; the public docs page is silent on it. An hourly schedule now costs 24 Convex function calls and 24 HTTP requests a day, and a Vercel Workflow run is spent only when a tick actually starts one.
 
 ## OAuth
 
@@ -358,7 +369,7 @@ Every node is one file: zod `inputs` (generates the config form, validates befor
 - **Manual** `v1`: Run button with optional sample JSON.
 - **Webhook** `v1`: Unique URL per workflow. Body, headers, query become the output.
 - **Form** `v1`: Hosted public form page per workflow, fields defined in the node.
-- **Schedule** `v1`: Cron or "every N minutes". **Publish** starts the scheduler run and **Unpublish** cancels it (`lib/schedules-server.ts`, called from the `publishWorkflow` server action and from `POST /api/schedules`, which is kept for compatibility) — there is no separate Enable switch, because a published workflow whose schedule was not also enabled is a workflow that silently never fires.
+- **Schedule** `v1`: Cron or "every N minutes". **Publish** arms the Convex job and **Unpublish** disarms it (`lib/schedules-server.ts`, called from the `publishWorkflow` server action and from `POST /api/schedules`, which is kept for compatibility) — there is no separate Enable switch, because a published workflow whose schedule was not also armed is a workflow that silently never fires.
 - **Telegram message** `v1`: Bot receives a message. Simplest inbound trigger to demo from a phone.
 - **Discord slash command** `v2`: Interactions endpoint, Ed25519, deferred reply then PATCH with the result.
 - **Slack mention** `v2`: Events API `app_mention`, challenge handshake, 3s ack.
@@ -415,7 +426,7 @@ Ordered so something runs durably inside the first 25 minutes and each chapter a
 8. **Generic OAuth + Slack** _(10 min)_ — Provider config, state, callback, encrypt, channel picker. Then Notion as "same module, new config".
 9. **Wait and Approval** _(8 min)_ — `sleep()` for a Wait node, then the Approval node: Slack buttons, `createHook`, interactivity route calls `resumeHook`. Press the button on a phone.
 10. **Agent node with eve** _(12 min)_ — `withEve`, the Runtime agent directory, `defineDynamic` returning the org's connector tools, `eve/client` from the step. Drop a skill markdown file in and watch it change behaviour.
-11. **Schedule trigger** _(5 min)_ — The sleeping scheduler workflow. Set "every 2 minutes", press **Publish** (which is what starts it), and let it fire once while you talk. On Free the same press is refused with the plan's hourly floor, which is the gate worth showing.
+11. **Schedule trigger** _(5 min)_ — Convex as the alarm clock, no cron server anywhere. Set "every 2 minutes", press **Publish** (which is what arms it), and let it fire once while you talk. On Free the same press is refused with the plan's hourly floor, which is the gate worth showing.
 12. **Clerk Billing** _(10 min)_ — Plans for Organizations with feature slugs, `<PricingTable for="organization" />`, `<Show when={{ feature: "org:pro_connectors" }}>` on the Pro node cards, `has()` in the run route, `PLAN_LIMITS` in the `createWorkflow` mutation, billing webhook into Convex. Hit the 3-workflow wall on Free, upgrade on the test gateway, wall disappears.
 13. **The Builder agent** _(15 min)_ — Second eve directory, the editing tools as Convex mutations, `request_connection` with `ask()` and the credential widget. Type the climax workflow into the box and watch the canvas draw itself, pause for a Slack connect, carry on. Then run it.
 
@@ -445,7 +456,7 @@ Built by the Builder from one sentence, then triggered by one form submission. I
 - **Resend**: 403 without a `User-Agent` header. Free tier is 100 emails/day and inbound counts.
 - **Notion**: `data_source_id`, not `database_id`. `Notion-Version: 2026-03-11`. Webhook subscriptions are UI-only and carry IDs only.
 - **Teams**: Old incoming webhooks died in May 2026. Workflows URL + Adaptive Card (Message Cards also accepted).
-- **Schedules**: A once-a-minute scheduler hits the 25k-events-per-run cap in about two days. Continue-as-new every ~200 iterations.
+- **Schedules**: `ctx.scheduler.cancel()` throws if the job it names has already completed — every re-arm and disarm checks `ctx.db.system.get(jobId).state.kind === "pending"` first. `APP_ORIGIN` on the Convex dev deployment is Convex's own copy, set separately from Vercel's; `http://localhost:3000` there is unreachable from Convex's cloud, so a local schedule test needs `npx convex dev --local` or a tunnel.
 
 ## Sources
 

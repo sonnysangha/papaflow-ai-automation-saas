@@ -44,6 +44,7 @@ import { cn } from "@/lib/utils";
 import { NODES } from "@/nodes/registry";
 
 import { ConfigPanel } from "./ConfigPanel";
+import { edgeRunState, type EdgeRunTone } from "./edge-run-state";
 import { EdgeWithLabel, LABELLED_EDGE_TYPE, type LabelledEdgeData } from "./EdgeWithLabel";
 import {
   DEFAULT_HANDLE,
@@ -76,10 +77,23 @@ import { WorkflowNode } from "./WorkflowNode";
 const nodeTypes: NodeTypes = { [PAPAFLOW_NODE_TYPE]: WorkflowNode };
 const edgeTypes: EdgeTypes = { [LABELLED_EDGE_TYPE]: EdgeWithLabel };
 
-/** Applied to the edge the run actually followed out of a branching node. */
-const TAKEN_EDGE_CLASS = "[&_.react-flow__edge-path]:stroke-primary";
 /** …and to its siblings, so an untaken branch reads as "this did not happen". */
 const UNTAKEN_EDGE_CLASS = "opacity-40";
+
+/**
+ * One Tailwind class per `EdgeRunTone` (`edge-run-state.ts`), targeting the `<path>` React Flow
+ * always renders inside an edge regardless of which edge component drew it — the same
+ * arbitrary-variant trick `UNTAKEN_EDGE_CLASS` already relies on. `"success"` keeps the exact class
+ * a taken edge has always used, so a finished run still looks the way it did before live wires
+ * existed; `"running"` and `"failed"` are new. `"neutral"` is never actually read (the branch below
+ * returns early on it) but is here so indexing by the full union type-checks.
+ */
+const EDGE_TONE_CLASS: Record<EdgeRunTone, string> = {
+  neutral: "",
+  running: "[&_.react-flow__edge-path]:stroke-amber-500",
+  success: "[&_.react-flow__edge-path]:stroke-primary",
+  failed: "[&_.react-flow__edge-path]:stroke-destructive",
+};
 
 export type WorkflowDoc = FunctionReturnType<typeof api.workflows.get>;
 
@@ -595,10 +609,12 @@ export function Canvas({
   }, [fitView, focusNode, setNodes]);
 
   /**
-   * Branch feedback: once a node has finished, the edge leaving the handle its step recorded is
-   * drawn in the primary colour and the rest are dimmed, which is what makes an untaken Condition
-   * branch grey out. Styling lives here rather than in state — `toStoredGraph` ignores `className`,
-   * but writing it into `edges` would still churn the save effect on every run.
+   * Live run feedback on every wire, from `edgeRunState` (`edge-run-state.ts`): a branch the run
+   * did not take dims exactly as before, and one it did lights up while the node at its far end is
+   * still working (an animated, amber wire), settles solid once that node succeeds (the same
+   * primary colour a taken edge has always used), or turns the failed tone if it did not. Styling
+   * lives here rather than in state — `toStoredGraph` ignores `className` and `animated`, but
+   * writing either into `edges` would still churn the save effect on every run.
    */
   const styledEdges = useMemo(() => {
     // One lookup per edge instead of a scan per edge, and the branch names come from the same
@@ -629,14 +645,19 @@ export function Canvas({
           }
         : edge;
 
-      const source = runByNode[edge.source];
-      if (source?.status !== "success") return typed;
-      // A node that records no handle (everything but Condition/Switch) took all of its edges.
-      const taken = source.handle ? handle === source.handle : true;
+      const run = edgeRunState({
+        sourceStatus: runByNode[edge.source]?.status,
+        sourceHandle: runByNode[edge.source]?.handle,
+        handle,
+        targetStatus: runByNode[edge.target]?.status,
+      });
+      // Nothing to say yet — no run, or the source has not finished — so the edge stays exactly as
+      // `typed` left it, branch label included.
+      if (run.taken && run.tone === "neutral") return typed;
       return {
         ...typed,
-        animated: false,
-        className: cn(edge.className, taken ? TAKEN_EDGE_CLASS : UNTAKEN_EDGE_CLASS),
+        animated: run.animated,
+        className: cn(edge.className, run.taken ? EDGE_TONE_CLASS[run.tone] : UNTAKEN_EDGE_CLASS),
       };
     });
   }, [edges, nodes, runByNode]);

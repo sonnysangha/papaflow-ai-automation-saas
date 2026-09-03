@@ -43,7 +43,7 @@ connectors/               one file per provider: how a user connects (fields, te
   api/oauth/{provider}/   authorize + callback
   api/connections/        credential save routes (seal into Convex)
 convex/                   schema, queries, mutations, httpAction webhooks (Clerk)
-workflows/                "use workflow" functions: run-graph.ts, scheduler.ts
+workflows/                "use workflow" functions: run-graph.ts
 workflows/steps/          "use step" functions: run-node.ts, …
 nodes/                    one file per node type (see "Node definition" below), registry.ts
 lib/oauth/                generic OAuth2 module + providers.ts configs
@@ -90,7 +90,7 @@ Register in `nodes/registry.ts`. Adding a connector = one file + one registry li
 
 ## Convex tables (initial)
 
-`workflows` (graph JSON + `version`), `executions` (with `planSlug` snapshot), `steps` (one per node per execution), `connections` (ciphertext), `schedules` (with scheduler `runId`), `usage` (runs per month per org), `oauthStates`, `builderSessions`, `webhookEvents` (delivery dedupe for Stripe/GitHub). No Clerk mirror tables.
+`workflows` (graph JSON + `version`), `executions` (with `planSlug` snapshot), `steps` (one per node per execution), `connections` (ciphertext), `schedules` (with the Convex job id it is armed on), `usage` (runs per month per org), `oauthStates`, `builderSessions`, `webhookEvents` (delivery dedupe for Stripe/GitHub). No Clerk mirror tables.
 
 There is no Clerk webhook: organisations, memberships and plans are read from Clerk (session claims in Convex, `<Show>`/`has()` in the app, Backend API in the engine).
 
@@ -106,7 +106,7 @@ Each phase ends green on `pnpm typecheck && pnpm test`, with a manual check list
 6. **Token connectors**: Discord webhook + bot, Telegram send, HTTP-with-connection.
 7. **OAuth**: generic module, Slack (channel picker), Notion, Airtable. Check: revoke in Slack → step fails with "needs reconnect".
 8. **Control**: Wait (`sleep`), Approval (Slack buttons → `resumeHook`), Wait-for-webhook, Loop (sequential).
-9. **Schedules**: scheduler workflow with continue-as-new, pause = cancel.
+9. **Schedules**: Convex is the alarm clock — one durable Convex scheduled job per published schedule POSTs `/api/engine/schedule-tick`, which starts the run and hands back the next occurrence for Convex to arm in turn; pause = disarm (cancel the job, disable the row).
 10. **Runtime agent (eve)**: `withEve`, `agents/runtime`, `defineDynamic` tools from connections, Agent node calling `eve/client`.
 11. **Billing**: Clerk plans + features (`clerk enable billing --for orgs`, `clerk config patch`), `<PricingTable>`, `<Show>`, `PLAN_LIMITS`, plan from session claims + Clerk Backend API for the engine, usage counters, gating in `createWorkflow` / `startExecution` / `runNode`.
 12. **Builder agent (eve)**: `agents/builder`, editing tools as Convex mutations, `request_connection` with `ask()` + credential widget in the chat panel, `validate_workflow`, `finish`.
@@ -115,7 +115,7 @@ Spikes to run before phases 10 and 12 (half a day each, throwaway): eve `withEve
 
 ## Env vars
 
-Next.js/Vercel: `CONVEX_DEPLOY_KEY` (prod key on Production, preview key on Preview), `CONVEX_URL` (Production and Preview: the Convex deployment URL the **eve services** talk to — they are separate Vercel services that share the project's env vars, and `NEXT_PUBLIC_CONVEX_URL` exists only inside the Next build, where Next inlines it into the Next bundle; `lib/engine-env.ts` reads `CONVEX_URL` first and falls back to `NEXT_PUBLIC_CONVEX_URL` — spelled out literally, because only the literal `process.env.NEXT_PUBLIC_CONVEX_URL` is inlined, and a computed read would make `CONVEX_URL` mandatory for every run and trigger too. Still never set `NEXT_PUBLIC_CONVEX_URL` or `CONVEX_DEPLOYMENT` on Vercel), `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`, `CREDENTIALS_KEK`, `ENGINE_SECRET`, `APP_ORIGIN`, optional `RESEND_API_KEY` (platform email fallback), optional `AI_GATEWAY_API_KEY` (house model locally; OIDC on Vercel), optional OAuth apps `SLACK_CLIENT_ID/SECRET`, `NOTION_CLIENT_ID/SECRET`, `AIRTABLE_CLIENT_ID/SECRET`, `LINEAR_CLIENT_ID/SECRET`, optional `SCHEDULER_MAX_ITERATIONS` (ticks per scheduler run before continue-as-new; default 200, set to 2 locally to watch a handover). Local only (written by `npx convex dev`): `CONVEX_DEPLOYMENT`, `NEXT_PUBLIC_CONVEX_URL` (locally that one is enough — `pnpm dev` passes it down to the eve dev server; never add `CONVEX_URL` to `.env.local`, because `npx convex dev` writes neither URL when it parses both names out of that file); set `CONVEX_ALLOW_ANONYMOUS=false`. Convex deployment (`npx convex env set`, repeat `--prod`): `CLERK_FRONTEND_API_URL` (issuer for auth.config.ts), `ENGINE_SECRET`. Every third-party credential (AI keys, bot tokens, webhook URLs, signing secrets, OAuth tokens) is a per-org **connection** users add inside the app — never an env var.
+Next.js/Vercel: `CONVEX_DEPLOY_KEY` (prod key on Production, preview key on Preview), `CONVEX_URL` (Production and Preview: the Convex deployment URL the **eve services** talk to — they are separate Vercel services that share the project's env vars, and `NEXT_PUBLIC_CONVEX_URL` exists only inside the Next build, where Next inlines it into the Next bundle; `lib/engine-env.ts` reads `CONVEX_URL` first and falls back to `NEXT_PUBLIC_CONVEX_URL` — spelled out literally, because only the literal `process.env.NEXT_PUBLIC_CONVEX_URL` is inlined, and a computed read would make `CONVEX_URL` mandatory for every run and trigger too. Still never set `NEXT_PUBLIC_CONVEX_URL` or `CONVEX_DEPLOYMENT` on Vercel), `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`, `CREDENTIALS_KEK`, `ENGINE_SECRET`, `APP_ORIGIN`, optional `RESEND_API_KEY` (platform email fallback), optional `AI_GATEWAY_API_KEY` (house model locally; OIDC on Vercel), optional OAuth apps `SLACK_CLIENT_ID/SECRET`, `NOTION_CLIENT_ID/SECRET`, `AIRTABLE_CLIENT_ID/SECRET`, `LINEAR_CLIENT_ID/SECRET`. Local only (written by `npx convex dev`): `CONVEX_DEPLOYMENT`, `NEXT_PUBLIC_CONVEX_URL` (locally that one is enough — `pnpm dev` passes it down to the eve dev server; never add `CONVEX_URL` to `.env.local`, because `npx convex dev` writes neither URL when it parses both names out of that file); set `CONVEX_ALLOW_ANONYMOUS=false`. Convex deployment (`npx convex env set`, repeat `--prod`): `CLERK_FRONTEND_API_URL` (issuer for auth.config.ts), `ENGINE_SECRET`, `APP_ORIGIN` (where `convex/schedules.ts#fire` POSTs a tick — the deployment's own copy, not inherited from Vercel; on the cloud dev deployment `APP_ORIGIN=http://localhost:3000` is unreachable, so a tick just retries and falls back — test a real schedule locally with `npx convex dev --local` or a tunnel). Every third-party credential (AI keys, bot tokens, webhook URLs, signing secrets, OAuth tokens) is a per-org **connection** users add inside the app — never an env var.
 
 ## Working style
 

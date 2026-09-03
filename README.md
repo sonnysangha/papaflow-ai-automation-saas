@@ -42,31 +42,49 @@ triggers on, and **Unpublish** to switch them off again (the badge then reads `P
 | --- | --- |
 | Webhook (`/api/hooks/<id>/<secret>`) | `409 not_published` |
 | Form (`/f/<id>`) | the page renders with a banner; a submit gets `409 not_published` |
-| Schedule | the tick is spent and logged (`fireSchedule:not-published`), nothing runs |
+| Schedule | the tick is refused (`409 not_published`); Convex disarms the job |
 | Telegram / Stripe events | not listed as a listener; the provider still gets its `200` |
 
 The URLs themselves work before publishing — they have to, or there would be nothing to paste into
 the sending system.
 
-**Publishing a Schedule trigger starts it.** A schedule is two things at once: a row in `schedules`,
-and a durable Workflow SDK run sleeping until the next occurrence. Press **Publish** and the server
-action (`app/(app)/w/[workflowId]/actions.ts#publishWorkflow`) does both — it validates the interval
-against the plan, writes the row and `start()`s `workflows/scheduler.ts` — and **Unpublish** cancels
-that run and disables the row. There is no separate Enable switch; the Schedule trigger's panel only
-reports what publishing left behind, with the next three fire times. If your plan will not run the
-interval you asked for (`free_org` is once an hour) publishing is refused with a message saying so,
-and the workflow stays unpublished rather than becoming a published workflow that never fires.
+### How schedules run
 
-The sleeping scheduler run costs nothing while it sleeps — no compute is held during `sleep()`, only
-storage for the event log — so an hourly schedule is a run that is idle 99.9% of the time. It shows
-as **Active** in Vercel's Workflows list, which is correct: it is a live run, waiting.
+**Convex is the alarm clock, this app is the brain, Vercel Workflows is the muscle.** A schedule is
+two things at once: a row in `schedules`, and one durable Convex scheduled job armed for the next
+occurrence (`convex/schedules.ts`). Press **Publish** and the server action
+(`app/(app)/w/[workflowId]/actions.ts#publishWorkflow`) does both — it validates the interval against
+the plan, writes the row, then arms the job — and **Unpublish** disarms it and disables the row.
+There is no separate Enable switch; the Schedule trigger's panel only reports what publishing left
+behind, with the next three fire times and, in amber, why the last tick did not land if it did not.
+If your plan will not run the interval you asked for (`free_org` is once an hour) publishing is
+refused with a message saying so, and the workflow stays unpublished rather than becoming a published
+workflow that never fires.
 
-Anything that moves the status *without* the action — the Builder's `finish`, an older client
-calling `api.workflows.setStatus` — cannot strand a schedule: `fireSchedule` re-reads the workflow
-on every tick and skips one that is not `active` (`fireSchedule:not-published` in the logs), so the
-schedule resumes if it is published again and fires nothing meanwhile. It does mean a workflow the
-Builder published still needs one press of **Publish** to get a scheduler run; the trigger's panel
-says so when that is the case.
+**A tick costs one Convex function call, not a sleeping process.** When the armed job wakes,
+`convex/schedules.ts#fire` POSTs `/api/engine/schedule-tick`, which is where every decision actually
+lives — is this still published, what does the plan allow, when is the next occurrence — and starts
+the run through the *same* `startRun` every other trigger uses. The response tells Convex what to arm
+next, so nothing polls and nothing sits **Active** in a dashboard between ticks the way a sleeping
+Workflow SDK run used to: an hourly schedule is 24 Convex calls and 24 HTTP requests a day, whatever
+your plan, and a Vercel Workflow run is spent only when a run actually starts.
+
+Anything that moves the status *without* the action — the Builder's `finish`, an older client calling
+`api.workflows.setStatus` — cannot strand a schedule: `/api/engine/schedule-tick` re-reads the
+workflow on every tick and refuses one that is not `active` with `409 not_published`, which tells
+Convex to disarm — the schedule resumes the moment it is published again, because publishing re-arms
+it. A tick that cannot reach the app at all (a deploy in progress, a network blip) is retried three
+times a minute apart, then Convex arms a fallback fifteen minutes out on its own so the schedule
+recovers without anyone pressing Publish again; the trigger's panel shows the reason in amber
+("Last tick could not reach the app: …") whenever that has happened.
+
+**Locally, this needs a reachable `APP_ORIGIN`.** The alarm rings from Convex's own cloud, not from
+your machine, so `APP_ORIGIN=http://localhost:3000` — fine for every other trigger, which your
+browser or `curl` calls directly — is unreachable from there; a tick just retries and eventually
+falls back, and nothing runs. Testing a real schedule locally needs either `npx convex dev --local`
+(a Convex backend running on your own machine, which *can* reach `localhost`) or a tunnel (`ngrok
+http 3000`, `cloudflared tunnel`) with the cloud dev deployment's `APP_ORIGIN` pointed at it
+(`npx convex env set APP_ORIGIN <tunnel-url>`).
 
 **On localhost**, the form page and the webhook URL work straight from your browser or `curl`, because
 your machine is the one calling them:
@@ -172,9 +190,9 @@ save rather than raising a version conflict.
 
 ## Deploying
 
-Every push to `main` builds Production on Vercel (project `papaflow`, team `sonnysanghas-projects`): the build command in `vercel.ts` runs `npx convex deploy --cmd 'pnpm build' --cmd-url-env-var-name NEXT_PUBLIC_CONVEX_URL`, which pushes the Convex functions to the production deployment, compiles the Workflow SDK functions (`runGraph`, `scheduler`) and builds both eve services (`/eve/agents/runtime`, `/eve/agents/builder`). Live at https://papaflow.vercel.app.
+Every push to `main` builds Production on Vercel (project `papaflow`, team `sonnysanghas-projects`): the build command in `vercel.ts` runs `npx convex deploy --cmd 'pnpm build' --cmd-url-env-var-name NEXT_PUBLIC_CONVEX_URL`, which pushes the Convex functions (schedules' alarm clock among them) to the production deployment, compiles the Workflow SDK's `runGraph` and builds both eve services (`/eve/agents/runtime`, `/eve/agents/builder`). Live at https://papaflow.vercel.app.
 
-Vercel env (Production): `CONVEX_DEPLOY_KEY`, `CONVEX_URL`, `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`, `NEXT_PUBLIC_CLERK_SIGN_IN_URL`, `NEXT_PUBLIC_CLERK_SIGN_UP_URL`, `ENGINE_SECRET`, `CREDENTIALS_KEK`, `APP_ORIGIN`. Convex production env: `CLERK_FRONTEND_API_URL`, `ENGINE_SECRET`. Never set `NEXT_PUBLIC_CONVEX_URL` or `CONVEX_DEPLOYMENT` on Vercel.
+Vercel env (Production): `CONVEX_DEPLOY_KEY`, `CONVEX_URL`, `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`, `NEXT_PUBLIC_CLERK_SIGN_IN_URL`, `NEXT_PUBLIC_CLERK_SIGN_UP_URL`, `ENGINE_SECRET`, `CREDENTIALS_KEK`, `APP_ORIGIN`. Convex production env: `CLERK_FRONTEND_API_URL`, `ENGINE_SECRET`, `APP_ORIGIN` (the schedule alarm clock's own outbound call to `/api/engine/schedule-tick` — set on the Convex deployment itself with `npx convex env set`, not inherited from Vercel's copy). Never set `NEXT_PUBLIC_CONVEX_URL` or `CONVEX_DEPLOYMENT` on Vercel.
 
 `CONVEX_URL` is the production Convex deployment URL (`https://content-albatross-126.convex.cloud`), and it is what makes the two agents work in production. `convex deploy --cmd-url-env-var-name NEXT_PUBLIC_CONVEX_URL` injects that name into the **Next build process**, where Next inlines it into the Next bundle; the eve services (`/eve/agents/runtime`, `/eve/agents/builder`) are separate Vercel services that only see the project's environment variables, so without `CONVEX_URL` every Builder tool answers "service unavailable" and the Runtime agent resolves no connector tools. `lib/engine-env.ts` reads `CONVEX_URL` first and falls back to `NEXT_PUBLIC_CONVEX_URL`, which is why local development needs nothing extra and why runs, triggers and schedules keep working inside the Next runtime without it — that fallback is written as the literal `process.env.NEXT_PUBLIC_CONVEX_URL` so Next's build-time substitution still applies to it. Do not add `CONVEX_URL` to `.env.local`: `npx convex dev` writes neither URL when it finds both names in that file.
 

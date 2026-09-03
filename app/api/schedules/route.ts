@@ -19,11 +19,11 @@ import {
  * functions the publish action does, so the two can never disagree about what enabling means.
  *
  * It stays a route rather than a Convex mutation for the reason it always did: a schedule is a row
- * in `schedules` *and* a durable Workflow SDK run, and only code that can reach both can keep them
- * agreeing. A client that could flip `enabled` on its own would be able to leave a paused schedule
- * with a run still firing it.
+ * in `schedules` *and* a durable Convex job armed for the next occurrence, and only code that can
+ * reach both can keep them agreeing. A client that could flip `enabled` on its own would be able to
+ * leave a paused schedule with a job still firing it.
  *
- * Node runtime, not Edge: `lib/schedules-server.ts` reaches the Workflow SDK's `start()`/`getRun()`.
+ * Node runtime, not Edge: `lib/schedules-server.ts` reaches Convex through `ConvexHttpClient`.
  *
  * Gating runs in the three layers CLAUDE.md rule 3 asks for. This is the middle one: `has()` for
  * the `schedules` feature, and — for an org without it — the plan's own `minScheduleMinutes` floor,
@@ -101,7 +101,6 @@ export async function POST(request: Request): Promise<Response> {
       cron: result.cron,
       timezone: result.timezone,
       nextAt: result.nextAt,
-      runId: result.runId,
     },
     200,
   );

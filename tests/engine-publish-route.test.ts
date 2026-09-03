@@ -4,55 +4,45 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * `POST /api/engine/publish` — the door the Builder's `finish` knocks on.
  *
  * It exists because publishing is not a status write. A Schedule trigger's "on" is the workflow's
- * `status` *and* a durable scheduler run sleeping until the next occurrence, and only the Next app
- * can `start()` one — so while `finish` published through a Convex mutation, a schedule-triggered
- * workflow the Builder built was live in the canvas and never fired. What is under test here is
- * that the route is the *same* publish the button performs (`lib/publish-server.ts`), wearing a
- * doorman: a constant-time secret check, an org that travels in the body rather than being assumed,
- * and a status code the agent can tell apart — 4xx is the model's to act on, 401 and 5xx end its
- * turn.
+ * `status` *and* a durable Convex job armed for the next occurrence (`convex/schedules.ts`), and
+ * only the Next app can decide that — so while `finish` published through a Convex mutation, a
+ * schedule-triggered workflow the Builder built was live in the canvas and never fired. What is
+ * under test here is that the route is the *same* publish the button performs
+ * (`lib/publish-server.ts`), wearing a doorman: a constant-time secret check, an org that travels in
+ * the body rather than being assumed, and a status code the agent can tell apart — 4xx is the
+ * model's to act on, 401 and 5xx end its turn.
  *
- * Convex, Clerk's billing read and the Workflow SDK are replaced; the schedule maths
- * (`lib/schedule.ts`) is not, because "would this fire more often than the plan allows?" is half of
- * what is being tested. Factories rather than automocks: `@/lib/engine-client` pulls in the workflow
- * definitions and `@/workflows/scheduler` pulls in the step files, neither of which a route test
- * should load.
+ * Convex and Clerk's billing read are replaced; the schedule maths (`lib/schedule.ts`) is not,
+ * because "would this fire more often than the plan allows?" is half of what is being tested. A
+ * factory rather than an automock: `@/lib/engine-client` pulls in the workflow definitions a route
+ * test has no business loading.
  */
 const { getOrgPlan } = vi.hoisted(() => ({ getOrgPlan: vi.fn() }));
 vi.mock("@/lib/billing", () => ({ getOrgPlan }));
 
 const {
+  armSchedule,
+  disarmSchedule,
   getScheduleForWorkflow,
   getWorkflowForRun,
-  setScheduleEnabled,
-  setScheduleRunId,
   setWorkflowStatus,
   upsertSchedule,
 } = vi.hoisted(() => ({
+  armSchedule: vi.fn(),
+  disarmSchedule: vi.fn(),
   getScheduleForWorkflow: vi.fn(),
   getWorkflowForRun: vi.fn(),
-  setScheduleEnabled: vi.fn(),
-  setScheduleRunId: vi.fn(),
   setWorkflowStatus: vi.fn(),
   upsertSchedule: vi.fn(),
 }));
 vi.mock("@/lib/engine-client", () => ({
+  armSchedule,
+  disarmSchedule,
   getScheduleForWorkflow,
   getWorkflowForRun,
-  setScheduleEnabled,
-  setScheduleRunId,
   setWorkflowStatus,
   upsertSchedule,
 }));
-
-const { start, getRun, cancel } = vi.hoisted(() => {
-  const cancel = vi.fn();
-  return { cancel, start: vi.fn(), getRun: vi.fn(() => ({ cancel })) };
-});
-vi.mock("workflow/api", () => ({ start, getRun }));
-
-const { scheduler } = vi.hoisted(() => ({ scheduler: vi.fn() }));
-vi.mock("@/workflows/scheduler", () => ({ scheduler }));
 
 process.env.ENGINE_SECRET = "engine-secret";
 
@@ -101,11 +91,9 @@ beforeEach(() => {
   getScheduleForWorkflow.mockResolvedValue(null);
   getWorkflowForRun.mockResolvedValue(graphWith({ mode: "every", everyMinutes: 60 }));
   upsertSchedule.mockResolvedValue(SCHEDULE_ID);
-  setScheduleRunId.mockResolvedValue(undefined);
-  setScheduleEnabled.mockResolvedValue(undefined);
+  armSchedule.mockResolvedValue(undefined);
+  disarmSchedule.mockResolvedValue(undefined);
   setWorkflowStatus.mockResolvedValue(undefined);
-  start.mockResolvedValue({ runId: "wrun_new" });
-  cancel.mockResolvedValue(undefined);
 });
 
 describe("POST /api/engine/publish — who may ask", () => {
@@ -136,7 +124,7 @@ describe("POST /api/engine/publish — who may ask", () => {
 });
 
 describe("POST /api/engine/publish — publishing", () => {
-  it("starts the schedule and publishes, in that order, on the plan Clerk reports", async () => {
+  it("arms the schedule and publishes, in that order, on the plan Clerk reports", async () => {
     const response = await POST(post(BODY));
 
     expect(response.status).toBe(200);
@@ -150,11 +138,10 @@ describe("POST /api/engine/publish — publishing", () => {
     expect(upsertSchedule).toHaveBeenCalledWith(
       expect.objectContaining({ orgId: "org_1", workflowId: WORKFLOW_ID, enabled: true }),
     );
-    expect(start).toHaveBeenCalledTimes(1);
-    expect(setScheduleRunId).toHaveBeenCalledWith({
+    expect(armSchedule).toHaveBeenCalledWith({
       scheduleId: SCHEDULE_ID,
       orgId: "org_1",
-      runId: "wrun_new",
+      nextAt: expect.any(Number),
     });
     expect(setWorkflowStatus).toHaveBeenCalledWith({
       workflowId: WORKFLOW_ID,
@@ -162,12 +149,12 @@ describe("POST /api/engine/publish — publishing", () => {
       status: "active",
     });
     // Schedule first: a plan that refuses the interval must leave the workflow unpublished.
-    expect(start.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(armSchedule.mock.invocationCallOrder[0]).toBeLessThan(
       setWorkflowStatus.mock.invocationCallOrder[0],
     );
   });
 
-  it("publishes a workflow with no Schedule trigger without starting anything", async () => {
+  it("publishes a workflow with no Schedule trigger without arming anything", async () => {
     getWorkflowForRun.mockResolvedValue(graphWith(null));
 
     const response = await POST(post(BODY));
@@ -179,12 +166,12 @@ describe("POST /api/engine/publish — publishing", () => {
       orgId: "org_1",
       status: "active",
     });
-    expect(start).not.toHaveBeenCalled();
+    expect(armSchedule).not.toHaveBeenCalled();
     expect(upsertSchedule).not.toHaveBeenCalled();
-    expect(setScheduleEnabled).not.toHaveBeenCalled();
+    expect(disarmSchedule).not.toHaveBeenCalled();
   });
 
-  it("unpublishes, then pauses whatever was sleeping on the schedule", async () => {
+  it("unpublishes, then disarms whatever Convex job was armed for the schedule", async () => {
     getScheduleForWorkflow.mockResolvedValue({
       _id: SCHEDULE_ID,
       orgId: "org_1",
@@ -192,7 +179,7 @@ describe("POST /api/engine/publish — publishing", () => {
       cron: "0 * * * *",
       timezone: "UTC",
       enabled: true,
-      runId: "wrun_sleeping",
+      jobId: "job_sleeping",
       updatedAt: 1,
     });
 
@@ -205,16 +192,11 @@ describe("POST /api/engine/publish — publishing", () => {
       orgId: "org_1",
       status: "paused",
     });
-    expect(cancel).toHaveBeenCalledWith({ cancelReason: expect.stringContaining(WORKFLOW_ID) });
-    expect(setScheduleEnabled).toHaveBeenCalledWith({
-      scheduleId: SCHEDULE_ID,
-      orgId: "org_1",
-      enabled: false,
-    });
+    expect(disarmSchedule).toHaveBeenCalledWith({ scheduleId: SCHEDULE_ID, orgId: "org_1" });
     // Status first: it alone already stops every trigger, so an unreachable schedule store can
     // never be the reason a workflow stays live.
     expect(setWorkflowStatus.mock.invocationCallOrder[0]).toBeLessThan(
-      setScheduleEnabled.mock.invocationCallOrder[0],
+      disarmSchedule.mock.invocationCallOrder[0],
     );
   });
 });
@@ -235,7 +217,7 @@ describe("POST /api/engine/publish — refusals the agent can act on", () => {
 
     expect(setWorkflowStatus).not.toHaveBeenCalled();
     expect(upsertSchedule).not.toHaveBeenCalled();
-    expect(start).not.toHaveBeenCalled();
+    expect(armSchedule).not.toHaveBeenCalled();
   });
 
   it("lets the same schedule through once the org is on a paid plan", async () => {
@@ -256,7 +238,7 @@ describe("POST /api/engine/publish — refusals the agent can act on", () => {
     expect(response.status).toBe(404);
     expect(await response.json()).toMatchObject({ code: "not_found" });
     expect(setWorkflowStatus).not.toHaveBeenCalled();
-    expect(start).not.toHaveBeenCalled();
+    expect(armSchedule).not.toHaveBeenCalled();
   });
 
   it("answers 400 for a Schedule trigger whose configuration is not one", async () => {

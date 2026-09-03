@@ -9,47 +9,38 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * the decision — who may enable a schedule, on what interval, in which order the two writes happen,
  * and what is left behind when one of them refuses.
  *
- * Convex and the Workflow SDK are replaced; the schedule maths (`lib/schedule.ts`) is not, because
- * "would this fire more often than the plan allows?" is the answer being tested.
- *
- * Factories rather than automocks: `@/lib/engine-client` pulls in the workflow definitions and
- * `@/workflows/scheduler` pulls in the step files, none of which these tests should load.
+ * Convex is the alarm clock now (`convex/schedules.ts`): enabling a schedule arms a durable Convex
+ * job instead of starting a Workflow SDK run, and pausing disarms it. `@/lib/engine-client` is
+ * replaced with a factory so these tests never load the workflow definitions it pulls in; the
+ * schedule maths (`lib/schedule.ts`) is not, because "would this fire more often than the plan
+ * allows?" is the answer being tested.
  */
 const { auth } = vi.hoisted(() => ({ auth: vi.fn() }));
 vi.mock("@clerk/nextjs/server", () => ({ auth }));
 
 const {
+  armSchedule,
+  disarmSchedule,
   getScheduleForWorkflow,
   getWorkflowForRun,
-  setScheduleEnabled,
-  setScheduleRunId,
   setWorkflowStatus,
   upsertSchedule,
 } = vi.hoisted(() => ({
+  armSchedule: vi.fn(),
+  disarmSchedule: vi.fn(),
   getScheduleForWorkflow: vi.fn(),
   getWorkflowForRun: vi.fn(),
-  setScheduleEnabled: vi.fn(),
-  setScheduleRunId: vi.fn(),
   setWorkflowStatus: vi.fn(),
   upsertSchedule: vi.fn(),
 }));
 vi.mock("@/lib/engine-client", () => ({
+  armSchedule,
+  disarmSchedule,
   getScheduleForWorkflow,
   getWorkflowForRun,
-  setScheduleEnabled,
-  setScheduleRunId,
   setWorkflowStatus,
   upsertSchedule,
 }));
-
-const { start, getRun, cancel } = vi.hoisted(() => {
-  const cancel = vi.fn();
-  return { cancel, start: vi.fn(), getRun: vi.fn(() => ({ cancel })) };
-});
-vi.mock("workflow/api", () => ({ start, getRun }));
-
-const { scheduler } = vi.hoisted(() => ({ scheduler: vi.fn() }));
-vi.mock("@/workflows/scheduler", () => ({ scheduler }));
 
 const {
   enableSchedule,
@@ -90,7 +81,7 @@ function scheduleRow(overrides: Record<string, unknown> = {}) {
     cron: "0 * * * *",
     timezone: "UTC",
     enabled: true,
-    runId: "wrun_sleeping",
+    jobId: "job_sleeping",
     updatedAt: 1,
     ...overrides,
   };
@@ -115,11 +106,9 @@ beforeEach(() => {
   getScheduleForWorkflow.mockResolvedValue(null);
   getWorkflowForRun.mockResolvedValue(graphWith({ mode: "every", everyMinutes: 60 }));
   upsertSchedule.mockResolvedValue(SCHEDULE_ID);
-  setScheduleRunId.mockResolvedValue(undefined);
-  setScheduleEnabled.mockResolvedValue(undefined);
+  armSchedule.mockResolvedValue(undefined);
+  disarmSchedule.mockResolvedValue(undefined);
   setWorkflowStatus.mockResolvedValue(undefined);
-  start.mockResolvedValue({ runId: "wrun_new" });
-  cancel.mockResolvedValue(undefined);
 });
 
 describe("publishDecision — what Publish means", () => {
@@ -172,7 +161,7 @@ describe("schedulePlan — which plan the interval is judged against", () => {
 });
 
 describe("enableSchedule", () => {
-  it("writes the row, starts the scheduler, then records the run id", async () => {
+  it("writes the row, then arms the Convex job for the first occurrence", async () => {
     const result = await enableSchedule({
       workflowId: WORKFLOW_ID,
       orgId: "org_1",
@@ -180,9 +169,10 @@ describe("enableSchedule", () => {
       plan: "free_org",
     });
 
-    expect(result).toMatchObject({ ok: true, unchanged: false, cron: "0 * * * *", runId: "wrun_new" });
+    expect(result).toMatchObject({ ok: true, unchanged: false, cron: "0 * * * *" });
+    expect(result.ok && result.nextAt).toEqual(expect.any(Number));
 
-    // The row is written first, because its id is the scheduler run's only argument…
+    // The row is written first, because its id is the job's only real argument…
     expect(upsertSchedule).toHaveBeenCalledWith(
       expect.objectContaining({
         orgId: "org_1",
@@ -192,17 +182,11 @@ describe("enableSchedule", () => {
         enabled: true,
       }),
     );
-    // …then the run starts on the current deployment (only the handover asks for "latest")…
-    expect(start).toHaveBeenCalledWith(
-      scheduler,
-      [{ scheduleId: SCHEDULE_ID, cron: "0 * * * *", timezone: "UTC" }],
-      { attributes: { scheduleId: SCHEDULE_ID, orgId: "org_1" } },
-    );
-    // …and only then does the row learn which run to cancel when someone unpublishes.
-    expect(setScheduleRunId).toHaveBeenCalledWith({
+    // …and only then is the job armed against the id that write just produced.
+    expect(armSchedule).toHaveBeenCalledWith({
       scheduleId: SCHEDULE_ID,
       orgId: "org_1",
-      runId: "wrun_new",
+      nextAt: expect.any(Number),
     });
   });
 
@@ -214,7 +198,7 @@ describe("enableSchedule", () => {
     expect(result).toMatchObject({ ok: false, code: "too_frequent" });
     expect(result.ok === false && result.error).toMatch(/hour/);
     expect(upsertSchedule).not.toHaveBeenCalled();
-    expect(start).not.toHaveBeenCalled();
+    expect(armSchedule).not.toHaveBeenCalled();
   });
 
   it("reads the graph the caller already has rather than fetching it twice", async () => {
@@ -226,17 +210,16 @@ describe("enableSchedule", () => {
     });
 
     expect(getWorkflowForRun).not.toHaveBeenCalled();
-    expect(start).toHaveBeenCalledTimes(1);
+    expect(armSchedule).toHaveBeenCalledTimes(1);
   });
 
-  it("leaves an unchanged, already-running schedule alone rather than delaying it", async () => {
-    getScheduleForWorkflow.mockResolvedValue(scheduleRow({ runId: "wrun_existing", nextAt: 1_800_000 }));
+  it("leaves an unchanged, already-armed schedule alone rather than delaying it", async () => {
+    getScheduleForWorkflow.mockResolvedValue(scheduleRow({ jobId: "job_existing", nextAt: 1_800_000 }));
 
     const result = await enableSchedule({ workflowId: WORKFLOW_ID, orgId: "org_1", plan: "free_org" });
 
-    expect(result).toMatchObject({ ok: true, unchanged: true, runId: "wrun_existing" });
-    expect(cancel).not.toHaveBeenCalled();
-    expect(start).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: true, unchanged: true, nextAt: 1_800_000 });
+    expect(armSchedule).not.toHaveBeenCalled();
     expect(upsertSchedule).not.toHaveBeenCalled();
   });
 
@@ -246,7 +229,7 @@ describe("enableSchedule", () => {
     expect(await enableSchedule({ workflowId: WORKFLOW_ID, orgId: "org_1", plan: "free_org" })).toMatchObject(
       { ok: false, code: "not_found" },
     );
-    expect(start).not.toHaveBeenCalled();
+    expect(armSchedule).not.toHaveBeenCalled();
   });
 
   it("tells a malformed id from an unreachable store", async () => {
@@ -266,7 +249,7 @@ describe("enableSchedule", () => {
 });
 
 describe("pauseSchedule", () => {
-  it("cancels the sleeping run and disables the row", async () => {
+  it("disarms the Convex job", async () => {
     getScheduleForWorkflow.mockResolvedValue(scheduleRow());
 
     expect(await pauseSchedule({ workflowId: WORKFLOW_ID, orgId: "org_1" })).toMatchObject({
@@ -274,13 +257,7 @@ describe("pauseSchedule", () => {
       scheduled: true,
     });
 
-    expect(getRun).toHaveBeenCalledWith("wrun_sleeping");
-    expect(cancel).toHaveBeenCalledWith({ cancelReason: expect.stringContaining(WORKFLOW_ID) });
-    expect(setScheduleEnabled).toHaveBeenCalledWith({
-      scheduleId: SCHEDULE_ID,
-      orgId: "org_1",
-      enabled: false,
-    });
+    expect(disarmSchedule).toHaveBeenCalledWith({ scheduleId: SCHEDULE_ID, orgId: "org_1" });
   });
 
   it("is a success when there is nothing to pause, so Publish can be pressed twice", async () => {
@@ -288,25 +265,32 @@ describe("pauseSchedule", () => {
       ok: true,
       scheduled: false,
     });
-    expect(cancel).not.toHaveBeenCalled();
-    expect(setScheduleEnabled).not.toHaveBeenCalled();
+    expect(disarmSchedule).not.toHaveBeenCalled();
   });
 
-  it("still disables the row when the run has already gone", async () => {
-    getScheduleForWorkflow.mockResolvedValue(scheduleRow({ runId: "wrun_gone" }));
-    cancel.mockRejectedValue(new Error("run not found"));
+  it("is idempotent by construction: disarming an already-gone job is Convex's problem, not this one's", async () => {
+    // `convex/schedules.ts#disarm` tolerates a job that has already fired or been cancelled on its
+    // own (unlike the old design, where cancelling a *finished* Workflow SDK run had to be caught
+    // here) — so a call that resolves at all, whatever state the job was actually in, is a success.
+    getScheduleForWorkflow.mockResolvedValue(scheduleRow({ jobId: "job_gone" }));
 
     expect(await pauseSchedule({ workflowId: WORKFLOW_ID, orgId: "org_1" })).toMatchObject({ ok: true });
-    expect(setScheduleEnabled).toHaveBeenCalledWith({
-      scheduleId: SCHEDULE_ID,
-      orgId: "org_1",
-      enabled: false,
+    expect(disarmSchedule).toHaveBeenCalledWith({ scheduleId: SCHEDULE_ID, orgId: "org_1" });
+  });
+
+  it("answers upstream_error rather than throw when Convex cannot be reached", async () => {
+    getScheduleForWorkflow.mockResolvedValue(scheduleRow());
+    disarmSchedule.mockRejectedValue(new Error("fetch failed"));
+
+    expect(await pauseSchedule({ workflowId: WORKFLOW_ID, orgId: "org_1" })).toMatchObject({
+      ok: false,
+      code: "upstream_error",
     });
   });
 });
 
 describe("publishWorkflow — one switch", () => {
-  it("starts the schedule and publishes, in that order", async () => {
+  it("arms the schedule and publishes, in that order", async () => {
     const result = await publishWorkflow(WORKFLOW_ID, true);
 
     expect(result).toEqual({
@@ -321,9 +305,9 @@ describe("publishWorkflow — one switch", () => {
       status: "active",
     });
     // Schedule first: a plan that refuses the interval must leave the workflow unpublished, and a
-    // schedule enabled a beat early cannot fire, because `fireSchedule` skips a workflow that is
-    // not `active` yet.
-    expect(start.mock.invocationCallOrder[0]).toBeLessThan(
+    // job armed a beat early cannot fire, because `/api/engine/schedule-tick` refuses a workflow
+    // that is not `active` yet.
+    expect(armSchedule.mock.invocationCallOrder[0]).toBeLessThan(
       setWorkflowStatus.mock.invocationCallOrder[0],
     );
   });
@@ -336,7 +320,7 @@ describe("publishWorkflow — one switch", () => {
     expect(result).toMatchObject({ ok: false, code: "too_frequent" });
     expect(result.ok === false && result.error).toMatch(/Upgrade/);
     expect(setWorkflowStatus).not.toHaveBeenCalled();
-    expect(start).not.toHaveBeenCalled();
+    expect(armSchedule).not.toHaveBeenCalled();
     expect(upsertSchedule).not.toHaveBeenCalled();
   });
 
@@ -345,7 +329,7 @@ describe("publishWorkflow — one switch", () => {
     getWorkflowForRun.mockResolvedValue(graphWith({ mode: "every", everyMinutes: 2 }));
 
     expect(await publishWorkflow(WORKFLOW_ID, true)).toMatchObject({ ok: true, scheduled: true });
-    expect(start).toHaveBeenCalledTimes(1);
+    expect(armSchedule).toHaveBeenCalledTimes(1);
   });
 
   it("lets the schedules feature lift the interval floor", async () => {
@@ -370,16 +354,11 @@ describe("publishWorkflow — one switch", () => {
       orgId: "org_1",
       status: "paused",
     });
-    expect(cancel).toHaveBeenCalledWith({ cancelReason: expect.stringContaining(WORKFLOW_ID) });
-    expect(setScheduleEnabled).toHaveBeenCalledWith({
-      scheduleId: SCHEDULE_ID,
-      orgId: "org_1",
-      enabled: false,
-    });
+    expect(disarmSchedule).toHaveBeenCalledWith({ scheduleId: SCHEDULE_ID, orgId: "org_1" });
     // Status first: it alone already stops every trigger, so an unreachable schedule store can
     // never be the reason a workflow stays live.
     expect(setWorkflowStatus.mock.invocationCallOrder[0]).toBeLessThan(
-      setScheduleEnabled.mock.invocationCallOrder[0],
+      disarmSchedule.mock.invocationCallOrder[0],
     );
   });
 
@@ -409,10 +388,9 @@ describe("publishWorkflow — one switch", () => {
       orgId: "org_1",
       status: "active",
     });
-    expect(start).not.toHaveBeenCalled();
+    expect(armSchedule).not.toHaveBeenCalled();
     expect(upsertSchedule).not.toHaveBeenCalled();
-    expect(setScheduleEnabled).not.toHaveBeenCalled();
-    expect(getRun).not.toHaveBeenCalled();
+    expect(disarmSchedule).not.toHaveBeenCalled();
   });
 
   it("answers not_found for a workflow that is not this organisation's", async () => {

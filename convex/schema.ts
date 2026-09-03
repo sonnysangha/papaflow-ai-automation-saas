@@ -120,15 +120,32 @@ export default defineSchema({
     // a table scan (`connections.idsByMetaValue`).
     .index("by_provider_external", ["provider", "externalId"]),
 
+  // Convex is the alarm clock: one durable scheduled job per published schedule, which wakes and
+  // asks the Next app to start the run (`internal.schedules.fire` → POST /api/engine/schedule-tick).
   schedules: defineTable({
     orgId: v.string(),
     workflowId: v.id("workflows"),
     cron: v.string(),
     timezone: v.optional(v.string()),
     enabled: v.boolean(),
-    runId: v.optional(v.string()),
+    // The `_scheduled_functions` row that will fire this schedule next. "Pause" cancels it, and a
+    // re-arm cancels it before scheduling its replacement, so at most one job per schedule is
+    // pending at a time.
+    jobId: v.optional(v.id("_scheduled_functions")),
     nextAt: v.optional(v.number()),
+    // The instant `jobId` was armed for. Identical to `nextAt` while a job is pending; it travels
+    // with the job as its argument, which is what makes a tick claimable exactly once.
+    plannedAt: v.optional(v.number()),
     lastFiredAt: v.optional(v.number()),
+    // Why the last tick could not reach the app, shown on the Schedule trigger's panel. Cleared by
+    // the next tick that works.
+    lastError: v.optional(v.string()),
+    /** Failed deliveries of the current tick. Back to 0 the moment one succeeds. */
+    attempts: v.optional(v.number()),
+    // Legacy: the sleeping Workflow SDK scheduler run this table used to point at, before Convex
+    // became the alarm clock. Nothing writes it any more; it stays optional so rows written by the
+    // old design still validate.
+    runId: v.optional(v.string()),
     updatedAt: v.number(),
   })
     .index("by_org", ["orgId"])

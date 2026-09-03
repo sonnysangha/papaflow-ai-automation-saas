@@ -176,6 +176,16 @@ export function ScheduleConfig({ workflowId, inputs }: ScheduleConfigProps) {
         )}
       </div>
 
+      {status?.schedule?.lastError !== undefined && (
+        // Convex is the alarm clock now: this is the one write the app never gets a chance to make,
+        // because the tick that would have made it never reached the app at all (or the app refused
+        // it outright). Amber rather than `text-destructive` — the schedule is not broken, it is one
+        // missed or refused tick away from working again, and it keeps retrying on its own.
+        <p className="text-xs text-amber-600 dark:text-amber-500">
+          Last tick could not reach the app: {status.schedule.lastError}
+        </p>
+      )}
+
       <p className="text-xs text-muted-foreground">
         Publishing schedules the workflow that is <em>saved</em>: edit the interval above, let the
         canvas save, then unpublish and publish again.

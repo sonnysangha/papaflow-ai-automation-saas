@@ -705,11 +705,12 @@ export const getPublicForm = query({
 /* -------------------------------------------------------------------------------------------------
  * Schedules.
  *
- * The scheduler is a durable run, not a cron server: `workflows/scheduler.ts` sleeps until the next
- * fire time, starts the graph from a step, and repeats. That run has no session — and neither does
- * `app/api/schedules/route.ts` once it has finished checking Clerk — so both reach the `schedules`
- * table through the same secret-checked surface as the rest of the engine, carrying `orgId` for the
- * internal mutations to re-check against the row.
+ * Convex is the alarm clock: a published schedule is a row plus one durable Convex scheduled job
+ * (`convex/schedules.ts`), and there is no session anywhere near a tick — `fire` calls
+ * `POST /api/engine/schedule-tick` with `ENGINE_SECRET`, the same way `app/api/schedules/route.ts`
+ * reaches this file once it has finished checking Clerk. Both arrive here through the same
+ * secret-checked surface as the rest of the engine, carrying `orgId` for the internal mutations to
+ * re-check against the row.
  * ---------------------------------------------------------------------------------------------- */
 
 /** One schedule row. Nothing on it is secret: a cron, a timezone, a run id and two timestamps. */
@@ -764,46 +765,32 @@ export const upsertSchedule = mutation({
   },
 });
 
-/** Pauses or resumes a schedule. Pausing clears the run id the route has just cancelled. */
-export const setScheduleEnabled = mutation({
-  args: {
-    secret: v.string(),
-    scheduleId: v.id("schedules"),
-    orgId: v.string(),
-    enabled: v.boolean(),
-  },
-  returns: v.null(),
-  handler: async (ctx, { secret, ...args }) => {
+/**
+ * Arms the schedule for `nextAt`: cancels whatever Convex job was pending, schedules a fresh
+ * `internal.schedules.fire` for the instant given, and remembers its id. Called once by
+ * `enableSchedule` (`lib/schedules-server.ts`) after it writes the row with `upsertSchedule`,
+ * because the job's only real argument is the id that write just produced.
+ */
+export const armSchedule = mutation({
+  args: { secret: v.string(), scheduleId: v.id("schedules"), orgId: v.string(), nextAt: v.number() },
+  returns: v.union(v.id("_scheduled_functions"), v.null()),
+  handler: async (ctx, { secret, ...args }): Promise<Id<"_scheduled_functions"> | null> => {
     guard(secret);
-    await ctx.runMutation(internal.schedules.setEnabled, args);
-    return null;
+    return await ctx.runMutation(internal.schedules.arm, args);
   },
 });
 
-/** Records the scheduler run now sleeping on this schedule — on enable, and on continue-as-new. */
-export const setScheduleRunId = mutation({
-  args: { secret: v.string(), scheduleId: v.id("schedules"), orgId: v.string(), runId: v.string() },
+/**
+ * Stops the schedule: cancels its pending Convex job and turns the row off. `lib/schedules-server.ts`
+ * calls this from `pauseSchedule` with no `lastError` (a person pressed Unpublish); `fire` itself
+ * calls the internal mutation directly when the app refuses a tick outright.
+ */
+export const disarmSchedule = mutation({
+  args: { secret: v.string(), scheduleId: v.id("schedules"), orgId: v.string() },
   returns: v.null(),
   handler: async (ctx, { secret, ...args }) => {
     guard(secret);
-    await ctx.runMutation(internal.schedules.setRunId, args);
-    return null;
-  },
-});
-
-/** Claims one tick: `lastFiredAt` is the tick that was due, which is what makes a retry a no-op. */
-export const markScheduleFired = mutation({
-  args: {
-    secret: v.string(),
-    scheduleId: v.id("schedules"),
-    orgId: v.string(),
-    firedAt: v.number(),
-    nextAt: v.optional(v.number()),
-  },
-  returns: v.null(),
-  handler: async (ctx, { secret, ...args }) => {
-    guard(secret);
-    await ctx.runMutation(internal.schedules.markFired, args);
+    await ctx.runMutation(internal.schedules.disarm, args);
     return null;
   },
 });

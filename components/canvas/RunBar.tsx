@@ -21,8 +21,10 @@ import { formatAbsoluteTime, formatRelativeTime } from "@/components/workflows/r
 import { api } from "@/convex/_generated/api";
 import type { Doc, Id } from "@/convex/_generated/dataModel";
 import { cn } from "@/lib/utils";
+import type { FormSpec } from "@/nodes/triggers/form";
 import { NODES } from "@/nodes/registry";
 
+import { FormRunDialog } from "./FormRunDialog";
 import { NodeIcon } from "./node-icon";
 import {
   CANVAS_SHORTCUTS,
@@ -58,6 +60,8 @@ export type PublishWorkflowAction = (
 >;
 
 const MANUAL_TRIGGER = "manual.trigger";
+/** Exported so `Editor` can find the Form trigger's node the same way this file gates on it. */
+export const FORM_TRIGGER = "form.trigger";
 
 /**
  * A failed run is either the plan wall or something unexpected. Server actions hand back an
@@ -258,6 +262,8 @@ type RunBarProps = {
   triggerType: string | undefined;
   /** The Manual trigger's configured sample, shown in the payload box until the user edits it. */
   triggerSample?: string;
+  /** The saved Form trigger's fields, so Run can open the test dialog instead of the JSON box. */
+  triggerForm?: FormSpec;
   latest: LatestExecution | undefined;
   runWorkflow: RunWorkflowAction;
   /** Publish/unpublish, which also starts or cancels a Schedule trigger's scheduler run. */
@@ -282,6 +288,7 @@ export function RunBar({
   onOpenBuilder,
   builderOpen,
   triggerSample,
+  triggerForm,
 }: RunBarProps) {
   // What the user typed wins; until then the box mirrors the trigger node's own sample.
   const [typed, setTyped] = useState<string | null>(null);
@@ -291,9 +298,12 @@ export function RunBar({
   // Sticky once hit: the wall stays visible under the bar until a run actually starts, because a
   // toast that has faded is no explanation for a Run button that keeps doing nothing.
   const [runLimit, setRunLimit] = useState(false);
+  // The form-answers dialog, opened by Run instead of running immediately.
+  const [formDialogOpen, setFormDialogOpen] = useState(false);
 
   const definition = triggerType ? NODES[triggerType] : undefined;
   const isManual = triggerType === MANUAL_TRIGGER;
+  const isForm = triggerType === FORM_TRIGGER && Boolean(triggerForm);
 
   // Invalid JSON is not a blocker — `runWorkflow` falls back to `{}` — but the field says so.
   const sampleValid = useMemo(() => {
@@ -305,18 +315,40 @@ export function RunBar({
     }
   }, [sample]);
 
+  // Shared by the plain Run path (Manual's typed sample, or `{}` for every other trigger) and the
+  // form dialog's "Run with these answers": one place owns starting the transition, clearing or
+  // setting the run-limit wall, and toasting a failure, so both paths behave identically once a
+  // payload is decided.
+  const runWithPayload = useCallback(
+    (payloadJson: string) => {
+      startTransition(async () => {
+        try {
+          await runWorkflow(workflowId, payloadJson);
+          setRunLimit(false);
+        } catch (error) {
+          console.error(error);
+          setRunLimit(isRunLimit(error));
+          toast.error(runErrorMessage(error));
+        }
+      });
+    },
+    [runWorkflow, workflowId],
+  );
+
   const onRun = useCallback(() => {
-    startTransition(async () => {
-      try {
-        await runWorkflow(workflowId, isManual ? sample : "{}");
-        setRunLimit(false);
-      } catch (error) {
-        console.error(error);
-        setRunLimit(isRunLimit(error));
-        toast.error(runErrorMessage(error));
-      }
-    });
-  }, [isManual, runWorkflow, sample, workflowId]);
+    runWithPayload(isManual ? sample : "{}");
+  }, [isManual, runWithPayload, sample]);
+
+  // What pressing Run (or its shortcut) actually does: a Form trigger opens the answers dialog
+  // instead of running blind, so a payload shaped like `{}` never reaches a workflow that expects
+  // `values.<field>`. Every other trigger keeps running immediately, exactly as before.
+  const onRunClick = useCallback(() => {
+    if (isForm) {
+      setFormDialogOpen(true);
+      return;
+    }
+    onRun();
+  }, [isForm, onRun]);
 
   const canRun = !pending && Boolean(triggerType);
 
@@ -334,7 +366,7 @@ export function RunBar({
       if (event.key === "Enter" && hasModifier(event)) {
         if (!canRun) return;
         event.preventDefault();
-        onRun();
+        onRunClick();
         return;
       }
 
@@ -349,7 +381,7 @@ export function RunBar({
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [canRun, onRun]);
+  }, [canRun, onRunClick]);
 
   return (
     <>
@@ -380,9 +412,15 @@ export function RunBar({
 
         <Button
           size="sm"
-          onClick={onRun}
+          onClick={onRunClick}
           disabled={!canRun}
-          title={triggerType ? "Run the workflow (⌘/Ctrl + Enter)" : "Drag a trigger onto the canvas first"}
+          title={
+            !triggerType
+              ? "Drag a trigger onto the canvas first"
+              : isForm
+                ? "Fill in a test submission (⌘/Ctrl + Enter)"
+                : "Run the workflow (⌘/Ctrl + Enter)"
+          }
         >
           <PlayIcon />
           {pending ? "Starting…" : "Run"}
@@ -428,6 +466,17 @@ export function RunBar({
           className="shrink-0 rounded-none border-x-0 border-t-0"
           title="Monthly run limit reached"
           description="This organisation has used every run its plan includes this month."
+        />
+      ) : null}
+
+      {triggerForm ? (
+        <FormRunDialog
+          workflowId={workflowId}
+          spec={triggerForm}
+          open={formDialogOpen}
+          onOpenChange={setFormDialogOpen}
+          pending={pending}
+          onRun={runWithPayload}
         />
       ) : null}
     </>

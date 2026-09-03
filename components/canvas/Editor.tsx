@@ -22,6 +22,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { cn } from "@/lib/utils";
+import { parseFormSpec } from "@/nodes/triggers/form";
 import { NODES } from "@/nodes/registry";
 
 import { BuilderPanel } from "./BuilderPanel";
@@ -29,7 +30,7 @@ import { Canvas, type EditorControls } from "./Canvas";
 import { fromStoredGraph, type RunNodeState, type SaveState } from "./graph-io";
 import { carryOverSteps, latestStepByNode, type RunStepRow } from "./last-run";
 import { NodeSidebar } from "./NodeSidebar";
-import { RunBar, type PublishWorkflowAction, type RunWorkflowAction } from "./RunBar";
+import { FORM_TRIGGER, RunBar, type PublishWorkflowAction, type RunWorkflowAction } from "./RunBar";
 import { RunTimeline } from "./RunTimeline";
 import { useLeaveGuard } from "./use-leave-guard";
 
@@ -318,6 +319,17 @@ export function Editor({
     return typeof sample === "string" ? sample : undefined;
   }, [workflow]);
 
+  // The saved Form trigger's fields, so the run bar can open the test dialog with exactly what the
+  // public page would ask for — parsed through the node's own schema the same way `getPublicForm`
+  // is on the server, so defaults are filled in and a half-configured field does not reach the UI.
+  const triggerForm = useMemo(() => {
+    if (!workflow) return undefined;
+    const { nodes } = fromStoredGraph(workflow.graph);
+    const trigger = nodes.find((node) => NODES[node.data.nodeType]?.category === "trigger");
+    if (trigger?.data.nodeType !== FORM_TRIGGER) return undefined;
+    return parseFormSpec(trigger.data.inputs) ?? undefined;
+  }, [workflow]);
+
   if (workflow === undefined) return <EditorSkeleton />;
 
   return (
@@ -337,6 +349,7 @@ export function Editor({
               status={workflow.status}
               triggerType={triggerType}
               triggerSample={triggerSample}
+              triggerForm={triggerForm}
               latest={latest}
               runWorkflow={runWorkflow}
               publishWorkflow={publishWorkflow}

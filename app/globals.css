@@ -177,6 +177,18 @@
 .react-flow__attribution {
   @apply bg-transparent text-muted-foreground/60;
 }
+
+/*
+ * A live run's wires (`edge-run-state.ts`) animate with React Flow's own dashed-stroke `animated`
+ * edge flag. The OS-level motion preference turns the moving dashes off; the tone underneath — the
+ * colour that says a wire is actually carrying the run right now — is a separate Tailwind class on
+ * the same `<path>` and is untouched by this rule, so "what happened" still reads at a glance.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .react-flow__edge.animated path {
+    animation: none;
+  }
+}
 /*
  * Markdown from the Builder agent, scoped to `.pf-chat-md` so none of it reaches the rest of the
  * app: `MessageMarkdown` is the only thing that wears the class, and every rule below is a

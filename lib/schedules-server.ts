@@ -1,35 +1,34 @@
-import { getRun, start } from "workflow/api";
-
 import type { Id } from "@/convex/_generated/dataModel";
 import {
+  armSchedule,
+  disarmSchedule,
   getScheduleForWorkflow,
   getWorkflowForRun,
-  setScheduleEnabled,
-  setScheduleRunId,
   upsertSchedule,
   type WorkflowForRun,
 } from "@/lib/engine-client";
 import { nextFireTime, validateSchedule } from "@/lib/schedule";
 import { parseScheduleInputs, scheduleTriggerNode } from "@/nodes/triggers/schedule";
-import { scheduler } from "@/workflows/scheduler";
 
 /**
  * Turning a Schedule trigger on and off — the half of the operation that no client can do.
  *
- * A schedule is two things at once: a row in `schedules`, and a durable Workflow SDK run sleeping
- * until the next occurrence. Only code that can reach both can keep them agreeing, so both moves
- * live here — validate, upsert, `start()`, store the run id; or cancel the run and disable the row.
+ * A schedule is two things at once: a row in `schedules`, and a durable Convex job armed for the
+ * next occurrence (`convex/schedules.ts`). Only code that can reach both can keep them agreeing, so
+ * both moves live here — validate, upsert the row, arm the job; or disarm the job and disable the
+ * row. Neither move touches Vercel Workflows at all: Convex's own scheduler is the alarm clock now,
+ * and the app only hears from it again when a tick's `POST /api/engine/schedule-tick` lands
+ * (`app/api/engine/schedule-tick/route.ts`), which is what actually starts the run.
  *
  * Two callers, one behaviour: the `publishWorkflow` server action (publishing *is* enabling, which
  * is the whole point of this module existing) and `POST /api/schedules`, kept for the clients that
- * still call it. Both run in the Next app, where `start()` is supported — "The `start()` function
- * programmatically triggers workflow executions from runtime contexts such as API routes, Server
- * Actions, or other server-side code" (`node_modules/workflow/docs/foundations/starting-workflows.mdx`).
- *
- * No `"use server"` directive here, deliberately: this module is reachable from workflow code's
- * import graph, and `node_modules/workflow/docs/api-reference/workflow-next/with-workflow.mdx`
- * says to "Keep `"use server"` on the files that define your Server Actions, and move shared logic
- * into separate modules that don't carry the directive."
+ * still call it. Both simply forward to `armSchedule`/`disarmSchedule` (`lib/engine-client.ts`),
+ * which reach Convex over `ConvexHttpClient` like every other engine-side write — there is nothing
+ * Next-runtime-specific left here, but the module stays free of a `"use server"` directive anyway:
+ * it is reachable from workflow code's import graph, and
+ * `node_modules/workflow/docs/api-reference/workflow-next/with-workflow.mdx` says to "Keep
+ * `"use server"` on the files that define your Server Actions, and move shared logic into separate
+ * modules that don't carry the directive."
  *
  * Gating is the middle of CLAUDE.md rule 3's three layers: the caller resolves the plan (a Clerk
  * concern) and this module judges the interval against it. Nothing here trusts a client-supplied
@@ -103,7 +102,6 @@ export type EnableScheduleSuccess = {
   cron: string;
   timezone: string;
   nextAt: number | null;
-  runId: string;
 };
 
 export type EnableScheduleResult = EnableScheduleSuccess | ScheduleFailure;
@@ -111,8 +109,6 @@ export type EnableScheduleResult = EnableScheduleSuccess | ScheduleFailure;
 export type PauseScheduleInput = {
   workflowId: string;
   orgId: string;
-  /** Shown in the run inspector as the cancel reason. Defaults to a paused-schedule sentence. */
-  reason?: string;
 };
 
 export type PauseScheduleResult =
@@ -134,22 +130,6 @@ function isMalformedId(cause: unknown): boolean {
 
 function failure(code: ScheduleErrorCode, error: string): ScheduleFailure {
   return { ok: false, code, error };
-}
-
-/**
- * Cancels a scheduler run, best effort. A run that has already finished, been cancelled, or been
- * garbage-collected is not a failure here: what the caller actually wants is "nothing is firing
- * this schedule any more", and a run that no longer exists satisfies that.
- */
-async function cancelSchedulerRun(runId: string, cancelReason: string): Promise<void> {
-  try {
-    await getRun(runId).cancel({ cancelReason });
-  } catch (cause) {
-    console.warn(
-      `schedules: could not cancel scheduler run ${runId}`,
-      cause instanceof Error ? cause.message : cause,
-    );
-  }
 }
 
 /** The workflow's schedule row, or a failure the caller can answer with. */
@@ -212,14 +192,13 @@ export function publishDecision({
 }
 
 /**
- * Starts (or restarts) the run that fires this workflow's Schedule trigger.
+ * Arms (or re-arms) the Convex job that fires this workflow's Schedule trigger.
  *
  * What fires is the *saved* graph, not anything the caller sent: an unsaved change to the interval
  * simply is not scheduled yet, which is also what the canvas' "Saved" indicator says.
  *
- * The row is written before the run is started, because its id is the run's only argument; the run
- * id is written back after, so a row with `enabled: true` and no `runId` is a schedule whose run is
- * still being enqueued rather than one with a lost run.
+ * The row is written before the job is armed, because its id is the job's only real argument —
+ * `armSchedule` needs a `schedules` row to patch before it can schedule anything against it.
  */
 export async function enableSchedule(input: EnableScheduleInput): Promise<EnableScheduleResult> {
   const { workflowId, orgId, userId, plan } = input;
@@ -250,11 +229,11 @@ export async function enableSchedule(input: EnableScheduleInput): Promise<Enable
 
   const { cron, timezone } = validation;
 
-  // Already running exactly this: leave the sleeping run alone. Restarting it would move the next
-  // fire time, so publishing a workflow that is already published would quietly delay it.
+  // Already armed on exactly this: leave the pending job alone. Re-arming would move the next fire
+  // time, so publishing a workflow that is already published would quietly delay it.
   if (
     existing?.enabled &&
-    existing.runId &&
+    existing.jobId &&
     existing.cron === cron &&
     existing.timezone === timezone
   ) {
@@ -265,15 +244,11 @@ export async function enableSchedule(input: EnableScheduleInput): Promise<Enable
       cron,
       timezone,
       nextAt: existing.nextAt ?? null,
-      runId: existing.runId,
     };
   }
 
-  // Anything else — a paused schedule, or an edited cron — is a new run, so the old one goes first.
-  if (existing?.runId) {
-    await cancelSchedulerRun(existing.runId, `Schedule changed for workflow ${workflowId}`);
-  }
-
+  // Anything else — a paused schedule, or an edited cron — gets a fresh job. `armSchedule` cancels
+  // whatever was pending before it schedules the replacement, so there is nothing to cancel here.
   const nextAt = nextFireTime({ mode: "cron", cron, timezone })?.getTime();
   const scheduleId = await upsertSchedule({
     orgId,
@@ -284,32 +259,27 @@ export async function enableSchedule(input: EnableScheduleInput): Promise<Enable
     nextAt,
   });
 
-  const run = await start(
-    scheduler,
-    [{ scheduleId, cron, timezone }],
-    // Plaintext run metadata, filterable in the run inspector. Ids only (CLAUDE.md rule 1).
-    { attributes: { scheduleId, orgId } },
-  );
-  await setScheduleRunId({ scheduleId, orgId, runId: run.runId });
+  // `nextAt` is only absent for an expression `validateSchedule` would already have refused as
+  // `invalid_cron` — there is nothing to arm, and the row is left enabled with no pending job rather
+  // than one sleeping on an occurrence that will never come.
+  if (nextAt !== undefined) await armSchedule({ scheduleId, orgId, nextAt });
 
-  console.log("schedules:enabled", { scheduleId, workflowId, orgId, cron, runId: run.runId, userId });
+  console.log("schedules:enabled", { scheduleId, workflowId, orgId, cron, nextAt, userId });
 
-  return {
-    ok: true,
-    unchanged: false,
-    scheduleId,
-    cron,
-    timezone,
-    nextAt: nextAt ?? null,
-    runId: run.runId,
-  };
+  return { ok: true, unchanged: false, scheduleId, cron, timezone, nextAt: nextAt ?? null };
 }
 
 /**
- * Stops firing this workflow's schedule: cancel the sleeping run, then disable the row.
+ * Stops firing this workflow's schedule: disarm its Convex job, then disable the row.
  *
  * Idempotent — a schedule that was never enabled, or has already been paused, is still a success.
- * Publish can be pressed twice, and a second press must not be an error.
+ * Publish can be pressed twice, and a second press must not be an error; so is a job that has
+ * already fired or been cancelled, which `disarm` on the Convex side already tolerates on its own
+ * (`convex/schedules.ts`), unlike the old design where cancelling a *finished* Workflow SDK run had
+ * to be caught here. What is still worth catching here is Convex being unreachable at all: the one
+ * write that both cancels the job and flips the row is atomic, so a failed call leaves both exactly
+ * as they were, and the caller (`applyPublish`) already treats a failure here as non-fatal to
+ * unpublishing — the workflow's `status` alone already stops every trigger.
  */
 export async function pauseSchedule(input: PauseScheduleInput): Promise<PauseScheduleResult> {
   const { workflowId, orgId } = input;
@@ -319,13 +289,12 @@ export async function pauseSchedule(input: PauseScheduleInput): Promise<PauseSch
   const existing = read.schedule;
   if (existing === null) return { ok: true, scheduled: false };
 
-  if (existing.runId) {
-    await cancelSchedulerRun(
-      existing.runId,
-      input.reason ?? `Schedule paused for workflow ${workflowId}`,
-    );
+  try {
+    await disarmSchedule({ scheduleId: existing._id, orgId });
+  } catch (cause) {
+    console.error("schedules: could not disarm the schedule", cause);
+    return failure("upstream_error", "Could not reach the schedule store. Try again.");
   }
-  await setScheduleEnabled({ scheduleId: existing._id, orgId, enabled: false });
 
   return { ok: true, scheduled: true, scheduleId: existing._id };
 }

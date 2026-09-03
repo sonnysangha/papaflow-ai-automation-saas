@@ -1,3 +1,5 @@
+> **Superseded on 2026-09-03.** The sleeping Workflow SDK scheduler described below was replaced by one Convex scheduled job per published schedule (`convex/schedules.ts` → `POST /api/engine/schedule-tick` → `startRun`). See README "How schedules run".
+
 # Phase 9 — Schedules Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: superpowers:subagent-driven-development — one Opus subagent per task. Tests first for the cron math.

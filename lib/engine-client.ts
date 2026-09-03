@@ -468,13 +468,14 @@ export async function getPublicForm(workflowId: string): Promise<PublicForm> {
 /* -------------------------------------------------------------------------------------------------
  * Schedules.
  *
- * Two session-less callers share this surface: `workflows/steps/schedule-steps.ts`, which re-reads
- * the row on every tick of a sleeping scheduler run, and `app/api/schedules/route.ts`, which has a
- * Clerk session but no Convex token — it has already checked the org itself and passes `orgId` down
- * for the internal mutations to re-check against the row.
+ * Two session-less callers share this surface: `convex/schedules.ts#fire`, which re-reads the row
+ * every time its Convex job wakes and POSTs `/api/engine/schedule-tick` (below), and
+ * `app/api/schedules/route.ts`, which has a Clerk session but no Convex token — it has already
+ * checked the org itself and passes `orgId` down for the internal mutations to re-check against the
+ * row.
  * ---------------------------------------------------------------------------------------------- */
 
-/** One `schedules` row: the cron, the run sleeping on it and the two timestamps. Never secret. */
+/** One `schedules` row: the cron, the Convex job armed for it, and the tick bookkeeping. Never secret. */
 export type ScheduleRow = NonNullable<FunctionReturnType<typeof api.engine.getSchedule>>;
 
 /** One `upsertSchedule` call — everything the row needs except the run id, which arrives after. */
@@ -517,50 +518,28 @@ export async function upsertSchedule(args: UpsertScheduleInput): Promise<Id<"sch
   return await client.mutation(api.engine.upsertSchedule, { secret, ...args });
 }
 
-/** Pauses or resumes a schedule. Pausing clears the run id the caller has just cancelled. */
-export async function setScheduleEnabled(args: {
-  scheduleId: string;
-  orgId: string;
-  enabled: boolean;
-}): Promise<void> {
+/**
+ * Arms the schedule for `nextAt`: Convex cancels whatever job was pending and schedules a fresh
+ * `fire` for that instant. `enableSchedule` calls this once it has written the row with
+ * `upsertSchedule`, because the job's only real argument is the id that write just produced.
+ */
+export async function armSchedule(args: { scheduleId: string; orgId: string; nextAt: number }): Promise<void> {
   const { client, secret } = engineClient();
-  await client.mutation(api.engine.setScheduleEnabled, {
+  await client.mutation(api.engine.armSchedule, {
     secret,
     scheduleId: scheduleRef(args.scheduleId),
     orgId: args.orgId,
-    enabled: args.enabled,
-  });
-}
-
-/** Records the scheduler run now sleeping on this schedule — on enable, and on continue-as-new. */
-export async function setScheduleRunId(args: {
-  scheduleId: string;
-  orgId: string;
-  runId: string;
-}): Promise<void> {
-  const { client, secret } = engineClient();
-  await client.mutation(api.engine.setScheduleRunId, {
-    secret,
-    scheduleId: scheduleRef(args.scheduleId),
-    orgId: args.orgId,
-    runId: args.runId,
-  });
-}
-
-/** Claims one tick: `firedAt` is the tick that was due, so a retried step writes the same value. */
-export async function markScheduleFired(args: {
-  scheduleId: string;
-  orgId: string;
-  firedAt: number;
-  nextAt?: number;
-}): Promise<void> {
-  const { client, secret } = engineClient();
-  await client.mutation(api.engine.markScheduleFired, {
-    secret,
-    scheduleId: scheduleRef(args.scheduleId),
-    orgId: args.orgId,
-    firedAt: args.firedAt,
     nextAt: args.nextAt,
+  });
+}
+
+/** Stops the schedule: cancels its pending Convex job and turns the row off. */
+export async function disarmSchedule(args: { scheduleId: string; orgId: string }): Promise<void> {
+  const { client, secret } = engineClient();
+  await client.mutation(api.engine.disarmSchedule, {
+    secret,
+    scheduleId: scheduleRef(args.scheduleId),
+    orgId: args.orgId,
   });
 }
 

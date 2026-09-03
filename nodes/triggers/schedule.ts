@@ -5,19 +5,21 @@ import { defineNode } from "../define";
 /**
  * The Schedule trigger: this workflow runs itself, on a repeat.
  *
- * There is no cron infrastructure behind it. Enabling the schedule starts one durable run of
- * `workflows/scheduler.ts`, which computes the next fire time in a step, `sleep()`s until it, starts
- * the graph, and goes back to sleep — so a paused schedule is a cancelled run and there is nothing
- * to poll. `app/api/schedules/route.ts` owns that transition; this node only describes what the
- * user asked for.
+ * There is no cron server, and nothing polls. Enabling the schedule arms one durable Convex
+ * scheduled job (`convex/schedules.ts`) for the next occurrence; when it fires, Convex POSTs
+ * `/api/engine/schedule-tick`, which starts the graph and hands back the *next* occurrence for
+ * Convex to arm in turn — so a paused schedule is a cancelled Convex job and there is nothing left
+ * sleeping anywhere. `lib/schedules-server.ts` (called from the Publish button and
+ * `app/api/schedules/route.ts`) owns that transition; this node only describes what the user asked
+ * for.
  *
  * `mode` decides which of the next two fields matters: `every` generates the cron
  * (`lib/schedule.ts#toCron`), `cron` is the expression itself. Both end up as cron on the
- * `schedules` row, because that is the only language the scheduler speaks.
+ * `schedules` row, because that is the only language a tick speaks.
  *
- * As with every other trigger, nothing calls `run` during a real run: the scheduler hands its
- * payload to `startRun`, which writes the trigger's step row from it. It stays here so the node is
- * complete on its own, and answers with exactly the shape the scheduler produces.
+ * As with every other trigger, nothing calls `run` during a real run: the schedule-tick route hands
+ * its payload to `startRun`, which writes the trigger's step row from it. It stays here so the node
+ * is complete on its own, and answers with exactly the shape that route produces.
  */
 export const scheduleTriggerNode = defineNode({
   type: "schedule.trigger",

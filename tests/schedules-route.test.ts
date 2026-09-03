@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
- * `POST /api/schedules`, with Clerk, Convex and the Workflow SDK replaced.
+ * `POST /api/schedules`, with Clerk and Convex replaced.
  *
  * The route is now a thin adapter: publishing is the switch users press (`publishWorkflow` in
  * `app/(app)/w/[workflowId]/actions.ts`), and this endpoint is kept for anything already calling
@@ -10,46 +10,32 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * `tests/schedules-server.test.ts` covers the same functions from the other side.
  *
  * What is under test is therefore the decision plus its HTTP dress — who may enable a schedule, on
- * what interval, what happens to the run that was already sleeping on it, and which status each
- * refusal earns — not Convex or the SDK. Clerk Billing is not switched on yet, so `has()` answers
+ * what interval, what happens to the Convex job that was already armed for it, and which status
+ * each refusal earns — not Convex itself. Clerk Billing is not switched on yet, so `has()` answers
  * false for everybody here too: the free path (an hourly schedule on `free_org`) is the one the
  * phase check actually walks.
  *
- * Factories rather than automocks: `@/lib/engine-client` pulls in the workflow definitions and
- * `@/workflows/scheduler` pulls in the step files, none of which a route test should load.
+ * A factory rather than an automock: `@/lib/engine-client` pulls in the workflow definitions a
+ * route test has no business loading.
  */
 const { auth } = vi.hoisted(() => ({ auth: vi.fn() }));
 vi.mock("@clerk/nextjs/server", () => ({ auth }));
 
-const {
-  getScheduleForWorkflow,
-  getWorkflowForRun,
-  setScheduleEnabled,
-  setScheduleRunId,
-  upsertSchedule,
-} = vi.hoisted(() => ({
-  getScheduleForWorkflow: vi.fn(),
-  getWorkflowForRun: vi.fn(),
-  setScheduleEnabled: vi.fn(),
-  setScheduleRunId: vi.fn(),
-  upsertSchedule: vi.fn(),
-}));
+const { armSchedule, disarmSchedule, getScheduleForWorkflow, getWorkflowForRun, upsertSchedule } =
+  vi.hoisted(() => ({
+    armSchedule: vi.fn(),
+    disarmSchedule: vi.fn(),
+    getScheduleForWorkflow: vi.fn(),
+    getWorkflowForRun: vi.fn(),
+    upsertSchedule: vi.fn(),
+  }));
 vi.mock("@/lib/engine-client", () => ({
+  armSchedule,
+  disarmSchedule,
   getScheduleForWorkflow,
   getWorkflowForRun,
-  setScheduleEnabled,
-  setScheduleRunId,
   upsertSchedule,
 }));
-
-const { start, getRun, cancel } = vi.hoisted(() => {
-  const cancel = vi.fn();
-  return { cancel, start: vi.fn(), getRun: vi.fn(() => ({ cancel })) };
-});
-vi.mock("workflow/api", () => ({ start, getRun }));
-
-const { scheduler } = vi.hoisted(() => ({ scheduler: vi.fn() }));
-vi.mock("@/workflows/scheduler", () => ({ scheduler }));
 
 const { POST } = await import("@/app/api/schedules/route");
 
@@ -100,10 +86,8 @@ beforeEach(() => {
   getScheduleForWorkflow.mockResolvedValue(null);
   getWorkflowForRun.mockResolvedValue(graphWith({ mode: "every", everyMinutes: 60 }));
   upsertSchedule.mockResolvedValue(SCHEDULE_ID);
-  setScheduleRunId.mockResolvedValue(undefined);
-  setScheduleEnabled.mockResolvedValue(undefined);
-  start.mockResolvedValue({ runId: "wrun_new" });
-  cancel.mockResolvedValue(undefined);
+  armSchedule.mockResolvedValue(undefined);
+  disarmSchedule.mockResolvedValue(undefined);
 });
 
 describe("POST /api/schedules — who may ask", () => {
@@ -114,7 +98,7 @@ describe("POST /api/schedules — who may ask", () => {
 
     expect(response.status).toBe(401);
     expect(await response.json()).toMatchObject({ code: "unauthorized" });
-    expect(start).not.toHaveBeenCalled();
+    expect(armSchedule).not.toHaveBeenCalled();
     expect(upsertSchedule).not.toHaveBeenCalled();
   });
 
@@ -135,7 +119,7 @@ describe("POST /api/schedules — who may ask", () => {
     const response = await POST(post({ workflowId: "definitely-not-an-id", action: "enable" }));
 
     expect(response.status).toBe(404);
-    expect(start).not.toHaveBeenCalled();
+    expect(armSchedule).not.toHaveBeenCalled();
   });
 
   it("answers 502 rather than 404 when the store itself is unreachable", async () => {
@@ -151,7 +135,7 @@ describe("POST /api/schedules — who may ask", () => {
     expect((await POST(post("not json"))).status).toBe(400);
     expect((await POST(post({ workflowId: WORKFLOW_ID, action: "delete" }))).status).toBe(400);
     expect((await POST(post({ action: "enable" }))).status).toBe(400);
-    expect(start).not.toHaveBeenCalled();
+    expect(armSchedule).not.toHaveBeenCalled();
   });
 });
 
@@ -168,10 +152,10 @@ describe("POST /api/schedules — enable", () => {
     expect(body.error).toMatch(/2 min/);
 
     expect(upsertSchedule).not.toHaveBeenCalled();
-    expect(start).not.toHaveBeenCalled();
+    expect(armSchedule).not.toHaveBeenCalled();
   });
 
-  it("enables an hourly schedule on the free plan and starts the scheduler", async () => {
+  it("enables an hourly schedule on the free plan and arms the Convex job", async () => {
     const response = await POST(post({ workflowId: WORKFLOW_ID, action: "enable" }));
 
     expect(response.status).toBe(200);
@@ -181,10 +165,9 @@ describe("POST /api/schedules — enable", () => {
       scheduleId: SCHEDULE_ID,
       cron: "0 * * * *",
       timezone: "UTC",
-      runId: "wrun_new",
     });
 
-    // The row is written first, because its id is the scheduler run's only argument…
+    // The row is written first, because its id is the job's only real argument…
     expect(upsertSchedule).toHaveBeenCalledWith(
       expect.objectContaining({
         orgId: "org_1",
@@ -194,21 +177,15 @@ describe("POST /api/schedules — enable", () => {
         enabled: true,
       }),
     );
-    // …then the run starts on the current deployment (only the handover asks for "latest")…
-    expect(start).toHaveBeenCalledWith(
-      scheduler,
-      [{ scheduleId: SCHEDULE_ID, cron: "0 * * * *", timezone: "UTC" }],
-      { attributes: { scheduleId: SCHEDULE_ID, orgId: "org_1" } },
-    );
-    // …and only then does the row learn which run to cancel when someone presses pause.
-    expect(setScheduleRunId).toHaveBeenCalledWith({
+    // …and only then is the Convex job armed against the id that write just produced.
+    expect(armSchedule).toHaveBeenCalledWith({
       scheduleId: SCHEDULE_ID,
       orgId: "org_1",
-      runId: "wrun_new",
+      nextAt: expect.any(Number),
     });
   });
 
-  it("stores a fire time the scheduler and the canvas agree on", async () => {
+  it("stores a fire time the Convex job and the canvas agree on", async () => {
     const response = await POST(post({ workflowId: WORKFLOW_ID, action: "enable" }));
     const body = (await response.json()) as { nextAt: number | null };
 
@@ -252,7 +229,7 @@ describe("POST /api/schedules — enable", () => {
     const response = await POST(post({ workflowId: WORKFLOW_ID, action: "enable" }));
 
     expect(response.status).toBe(404);
-    expect(start).not.toHaveBeenCalled();
+    expect(armSchedule).not.toHaveBeenCalled();
   });
 
   it("refuses a graph with no Schedule trigger in it", async () => {
@@ -273,7 +250,7 @@ describe("POST /api/schedules — enable", () => {
 
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({ code: "invalid_cron" });
-    expect(start).not.toHaveBeenCalled();
+    expect(armSchedule).not.toHaveBeenCalled();
   });
 
   it("refuses an expression that is not a cron with 400 rather than 403", async () => {
@@ -283,10 +260,10 @@ describe("POST /api/schedules — enable", () => {
 
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({ code: "invalid_cron" });
-    expect(start).not.toHaveBeenCalled();
+    expect(armSchedule).not.toHaveBeenCalled();
   });
 
-  it("leaves an unchanged, already-running schedule alone rather than delaying it", async () => {
+  it("leaves an unchanged, already-armed schedule alone rather than delaying it", async () => {
     getScheduleForWorkflow.mockResolvedValue({
       _id: SCHEDULE_ID,
       orgId: "org_1",
@@ -294,7 +271,7 @@ describe("POST /api/schedules — enable", () => {
       cron: "0 * * * *",
       timezone: "UTC",
       enabled: true,
-      runId: "wrun_existing",
+      jobId: "job_existing",
       nextAt: 1_800_000,
       updatedAt: 1,
     });
@@ -305,14 +282,13 @@ describe("POST /api/schedules — enable", () => {
     expect(await response.json()).toMatchObject({
       enabled: true,
       unchanged: true,
-      runId: "wrun_existing",
+      nextAt: 1_800_000,
     });
-    expect(cancel).not.toHaveBeenCalled();
-    expect(start).not.toHaveBeenCalled();
+    expect(armSchedule).not.toHaveBeenCalled();
     expect(upsertSchedule).not.toHaveBeenCalled();
   });
 
-  it("cancels the sleeping run and starts a new one when the cron has changed", async () => {
+  it("re-arms the Convex job when the cron has changed", async () => {
     getScheduleForWorkflow.mockResolvedValue({
       _id: SCHEDULE_ID,
       orgId: "org_1",
@@ -320,20 +296,21 @@ describe("POST /api/schedules — enable", () => {
       cron: "0 0 * * *",
       timezone: "UTC",
       enabled: true,
-      runId: "wrun_old",
+      jobId: "job_old",
       updatedAt: 1,
     });
 
     const response = await POST(post({ workflowId: WORKFLOW_ID, action: "enable" }));
 
     expect(response.status).toBe(200);
-    expect(getRun).toHaveBeenCalledWith("wrun_old");
-    expect(cancel).toHaveBeenCalledWith({ cancelReason: expect.stringContaining(WORKFLOW_ID) });
-    expect(start).toHaveBeenCalledTimes(1);
-    expect(await response.json()).toMatchObject({ unchanged: false, runId: "wrun_new" });
+    // Cancelling whatever was armed for the old cron is Convex's job now (`arm` in
+    // `convex/schedules.ts`, exercised in `convex/schedules.test.ts`) — from here, all this route
+    // can see is that a fresh job was armed for the new occurrence.
+    expect(armSchedule).toHaveBeenCalledTimes(1);
+    expect(await response.json()).toMatchObject({ unchanged: false, cron: "0 * * * *" });
   });
 
-  it("starts the new run even when cancelling the old one fails", async () => {
+  it("arms the job for a row that was previously disabled", async () => {
     getScheduleForWorkflow.mockResolvedValue({
       _id: SCHEDULE_ID,
       orgId: "org_1",
@@ -341,20 +318,19 @@ describe("POST /api/schedules — enable", () => {
       cron: "0 0 * * *",
       timezone: "UTC",
       enabled: false,
-      runId: "wrun_gone",
+      jobId: undefined,
       updatedAt: 1,
     });
-    cancel.mockRejectedValue(new Error("run not found"));
 
     const response = await POST(post({ workflowId: WORKFLOW_ID, action: "enable" }));
 
     expect(response.status).toBe(200);
-    expect(start).toHaveBeenCalledTimes(1);
+    expect(armSchedule).toHaveBeenCalledTimes(1);
   });
 });
 
 describe("POST /api/schedules — pause", () => {
-  it("cancels the sleeping run and disables the row", async () => {
+  it("disarms the Convex job and disables the row", async () => {
     getScheduleForWorkflow.mockResolvedValue({
       _id: SCHEDULE_ID,
       orgId: "org_1",
@@ -362,7 +338,7 @@ describe("POST /api/schedules — pause", () => {
       cron: "0 * * * *",
       timezone: "UTC",
       enabled: true,
-      runId: "wrun_sleeping",
+      jobId: "job_sleeping",
       updatedAt: 1,
     });
 
@@ -371,13 +347,7 @@ describe("POST /api/schedules — pause", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ enabled: false, scheduled: true });
 
-    expect(getRun).toHaveBeenCalledWith("wrun_sleeping");
-    expect(cancel).toHaveBeenCalledWith({ cancelReason: expect.stringContaining(WORKFLOW_ID) });
-    expect(setScheduleEnabled).toHaveBeenCalledWith({
-      scheduleId: SCHEDULE_ID,
-      orgId: "org_1",
-      enabled: false,
-    });
+    expect(disarmSchedule).toHaveBeenCalledWith({ scheduleId: SCHEDULE_ID, orgId: "org_1" });
     // Pausing never touches the graph, so it never has to read it.
     expect(getWorkflowForRun).not.toHaveBeenCalled();
   });
@@ -387,11 +357,10 @@ describe("POST /api/schedules — pause", () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ enabled: false, scheduled: false });
-    expect(cancel).not.toHaveBeenCalled();
-    expect(setScheduleEnabled).not.toHaveBeenCalled();
+    expect(disarmSchedule).not.toHaveBeenCalled();
   });
 
-  it("still disables the row when the run has already gone", async () => {
+  it("answers 502 rather than throw when Convex cannot be reached to disarm", async () => {
     getScheduleForWorkflow.mockResolvedValue({
       _id: SCHEDULE_ID,
       orgId: "org_1",
@@ -399,18 +368,14 @@ describe("POST /api/schedules — pause", () => {
       cron: "0 * * * *",
       timezone: "UTC",
       enabled: true,
-      runId: "wrun_gone",
+      jobId: "job_sleeping",
       updatedAt: 1,
     });
-    cancel.mockRejectedValue(new Error("run not found"));
+    disarmSchedule.mockRejectedValue(new Error("fetch failed"));
 
     const response = await POST(post({ workflowId: WORKFLOW_ID, action: "pause" }));
 
-    expect(response.status).toBe(200);
-    expect(setScheduleEnabled).toHaveBeenCalledWith({
-      scheduleId: SCHEDULE_ID,
-      orgId: "org_1",
-      enabled: false,
-    });
+    expect(response.status).toBe(502);
+    expect(await response.json()).toMatchObject({ code: "upstream_error" });
   });
 });

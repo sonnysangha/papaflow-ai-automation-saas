@@ -207,11 +207,11 @@ export const saveGraph = mutation({
  *
  * **This mutation moves the switch and nothing else.** The canvas publishes through the
  * `publishWorkflow` server action instead, because a Schedule trigger's "on" is two writes — this
- * status *and* a sleeping scheduler run — and only the server can make both. Anything that flips
- * the status on its own (the Builder agent, an older client) therefore risks leaving a schedule
- * enabled on an unpublished workflow; that is safe by construction rather than by luck, because
- * `fireSchedule` skips a workflow whose status is not `active` and the schedule simply resumes if
- * it is published again (`workflows/steps/schedule-steps.ts`).
+ * status *and* a durable Convex job armed for the next occurrence — and only the server can make
+ * both. Anything that flips the status on its own (the Builder agent, an older client) therefore
+ * risks leaving a schedule enabled on an unpublished workflow; that is safe by construction rather
+ * than by luck, because `app/api/engine/schedule-tick/route.ts` refuses a tick whose workflow is not
+ * `active` and the schedule simply resumes firing once it is published again.
  */
 export const setStatus = mutation({
   args: {
@@ -269,9 +269,10 @@ export const rename = mutation({
 /**
  * Deletes a workflow. Executions and steps are left alone; Phase 2 decides their retention.
  *
- * The schedule row goes with it, because it is configuration rather than history. A scheduler run
- * that was sleeping on it is *not* cancelled here (a mutation cannot reach the Workflow SDK) and
- * does not need to be: its next `fireSchedule` step finds no row and the run returns.
+ * The schedule row goes with it, because it is configuration rather than history — and unlike the
+ * old Workflow SDK design, a mutation *can* reach Convex's own scheduler, so the alarm clock does
+ * not outlive the row it points at: `internal.schedules.removeForWorkflow` cancels the pending job
+ * before it deletes the row, rather than leaving a Convex job to wake up, find nothing, and return.
  */
 export const remove = mutation({
   args: { id: v.id("workflows") },

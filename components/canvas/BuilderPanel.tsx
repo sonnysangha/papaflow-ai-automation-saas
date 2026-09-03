@@ -3,7 +3,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Show, useAuth } from "@clerk/nextjs";
 import { useEveAgent, type EveMessage, type EveMessagePart } from "eve/react";
-import { CheckIcon, LoaderIcon, SparklesIcon, WrenchIcon, XIcon } from "lucide-react";
+import {
+  ArrowDownIcon,
+  CheckIcon,
+  LoaderIcon,
+  SparklesIcon,
+  WrenchIcon,
+  XIcon,
+} from "lucide-react";
 
 import { UpgradeCard } from "@/components/billing/UpgradeCard";
 import { Button } from "@/components/ui/button";
@@ -22,6 +29,8 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { cn } from "@/lib/utils";
 
 import { CredentialWidget } from "./CredentialWidget";
+import { MessageMarkdown } from "./MessageMarkdown";
+import { isNearBottom, transcriptSignature } from "./scroll-follow";
 
 /**
  * "Build with AI": a chat beside the canvas whose tool calls draw on it.
@@ -251,16 +260,15 @@ function MessageBubble({ message }: { message: EveMessage }) {
         const key = `${message.id}-${index}`;
 
         if (part.type === "text" && part.text.trim().length > 0) {
-          return (
-            <p
-              key={key}
-              className={cn(
-                "whitespace-pre-wrap rounded-lg px-3 py-2 text-sm",
-                isUser ? "bg-primary/10" : "bg-muted/40",
-              )}
-            >
+          // The user's own words are shown exactly as typed; only the agent's are Markdown.
+          return isUser ? (
+            <p key={key} className="whitespace-pre-wrap rounded-lg bg-primary/10 px-3 py-2 text-sm">
               {part.text}
             </p>
+          ) : (
+            <MessageMarkdown key={key} className="rounded-lg bg-muted/40 px-3 py-2">
+              {part.text}
+            </MessageMarkdown>
           );
         }
 
@@ -333,6 +341,63 @@ function BuilderChat({
       return request ? [request] : [];
     });
 
+  // ---------------------------------------------------------------------------------------------
+  // Following the conversation.
+  //
+  // The transcript rides to the bottom as the agent writes, but only while the reader is already
+  // there. Scroll up to re-read what it did three tools ago and it stays put; a pill offers the way
+  // back. `pinnedRef` is what the scroll effect reads (an effect must not depend on a state value
+  // it would have to be re-run to see), and `pinned` is the same answer for rendering.
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const pinnedRef = useRef(true);
+  const [pinned, setPinned] = useState(true);
+  // A smooth scroll passes through positions nowhere near the bottom and fires a scroll event at
+  // each of them; without a settling window the "Jump to latest" animation would un-pin the
+  // transcript and put the pill straight back. A timestamp rather than a timer: nothing to clean up.
+  const settledAtRef = useRef(0);
+
+  const jump = useCallback(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    // Read at click time, not at render: no server/client mismatch, and it follows the OS setting
+    // if it changes mid-session. Reduced motion turns the glide into a jump.
+    const behavior: ScrollBehavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      ? "auto"
+      : "smooth";
+    pinnedRef.current = true;
+    setPinned(true);
+    settledAtRef.current = behavior === "smooth" ? performance.now() + 600 : 0;
+    viewport.scrollTo({ top: viewport.scrollHeight, behavior });
+  }, []);
+
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+
+    const onScroll = () => {
+      const next = isNearBottom(viewport);
+      if (!next && performance.now() < settledAtRef.current) return;
+      if (next === pinnedRef.current) return;
+      pinnedRef.current = next;
+      setPinned(next);
+    };
+
+    viewport.addEventListener("scroll", onScroll, { passive: true });
+    return () => viewport.removeEventListener("scroll", onScroll);
+  }, []);
+
+  // Keyed on what the transcript draws — plus the status, which moves the bottom when the pending
+  // question blocks and the "Working"/"Ready" line change — rather than on the snapshot identity,
+  // which is new on every stream event. Instant, not smooth: a reply arrives a token at a time and
+  // re-starting an animation on each one lags behind the text and fights the listener above. Smooth
+  // is for the pill, where one deliberate click deserves one deliberate glide.
+  const signature = `${transcriptSignature(messages)}#${agent.status}`;
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport || !pinnedRef.current) return;
+    viewport.scrollTo({ top: viewport.scrollHeight, behavior: "auto" });
+  }, [signature]);
+
   const send = useCallback(() => {
     const message = draft.trim();
     if (message.length === 0 || locked) return;
@@ -352,46 +417,63 @@ function BuilderChat({
 
   return (
     <PanelShell onClose={onClose}>
-      <ScrollArea className="min-h-0 flex-1">
-        <div className="space-y-3 p-3">
-          {messages.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              Describe the workflow you want and I will build it on the canvas — one node at a time,
-              so you can watch it take shape. I will ask before connecting anything.
-            </p>
-          ) : (
-            messages.map((message) => <MessageBubble key={message.id} message={message} />)
-          )}
+      {/* `relative` so the pill can hang over the bottom of the transcript; the flex column keeps
+          the scroll area's height resolving exactly as it did before the wrapper existed. */}
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        <ScrollArea viewportRef={viewportRef} className="min-h-0 flex-1">
+          <div className="space-y-3 p-3">
+            {messages.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                Describe the workflow you want and I will build it on the canvas — one node at a time,
+                so you can watch it take shape. I will ask before connecting anything.
+              </p>
+            ) : (
+              messages.map((message) => <MessageBubble key={message.id} message={message} />)
+            )}
 
-          {questions.map((request) => (
-            <AskBlock
-              key={request.requestId}
-              prompt={request.prompt}
-              options={request.options ?? []}
-              allowFreeform={request.allowFreeform ?? false}
-              disabled={locked}
-              onOption={(optionId) => answer(request.requestId, { optionId })}
-              onText={(text) => answer(request.requestId, { text })}
-            />
-          ))}
+            {questions.map((request) => (
+              <AskBlock
+                key={request.requestId}
+                prompt={request.prompt}
+                options={request.options ?? []}
+                allowFreeform={request.allowFreeform ?? false}
+                disabled={locked}
+                onOption={(optionId) => answer(request.requestId, { optionId })}
+                onText={(text) => answer(request.requestId, { text })}
+              />
+            ))}
 
-          {connectionRequests.map((request) => (
-            <CredentialWidget
-              key={request.requestId}
-              request={request}
-              disabled={locked}
-              onConnected={(connectionId) => answer(request.requestId, { text: connectionId })}
-              onCancel={() => answer(request.requestId, { optionId: CANCEL_OPTION_ID })}
-            />
-          ))}
+            {connectionRequests.map((request) => (
+              <CredentialWidget
+                key={request.requestId}
+                request={request}
+                disabled={locked}
+                onConnected={(connectionId) => answer(request.requestId, { text: connectionId })}
+                onCancel={() => answer(request.requestId, { optionId: CANCEL_OPTION_ID })}
+              />
+            ))}
 
-          {agent.error ? (
-            <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
-              {agent.error.message}
-            </p>
-          ) : null}
-        </div>
-      </ScrollArea>
+            {agent.error ? (
+              <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                {agent.error.message}
+              </p>
+            ) : null}
+          </div>
+        </ScrollArea>
+
+        {pinned ? null : (
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            className="absolute inset-x-0 bottom-3 mx-auto w-fit rounded-full border border-border shadow-md"
+            onClick={jump}
+          >
+            <ArrowDownIcon />
+            Jump to latest
+          </Button>
+        )}
+      </div>
 
       <form
         className="shrink-0 border-t border-border p-3"

@@ -7,7 +7,9 @@ export default defineConfig({
     projects: [
       {
         extends: true,
-        test: { name: "unit", environment: "node", include: ["tests/**/*.test.ts", "{lib,nodes,workflows,connectors}/**/*.test.ts"] },
+        // `.tsx` too: a component pure enough to render with `renderToStaticMarkup` is tested here,
+        // in plain node, rather than dragging jsdom in for assertions about markup.
+        test: { name: "unit", environment: "node", include: ["tests/**/*.test.{ts,tsx}", "{lib,nodes,workflows,connectors}/**/*.test.ts"] },
       },
       {
         extends: true,

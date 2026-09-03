@@ -177,3 +177,122 @@
 .react-flow__attribution {
   @apply bg-transparent text-muted-foreground/60;
 }
+/*
+ * Markdown from the Builder agent, scoped to `.pf-chat-md` so none of it reaches the rest of the
+ * app: `MessageMarkdown` is the only thing that wears the class, and every rule below is a
+ * descendant of it. Sizes are tuned for the ~400px chat panel — headings barely larger than body
+ * text, tight vertical rhythm — and every colour is an app token, so the dark theme follows.
+ */
+.pf-chat-md {
+  @apply text-sm leading-relaxed wrap-break-word;
+}
+
+.pf-chat-md > :first-child {
+  @apply mt-0;
+}
+
+.pf-chat-md > :last-child {
+  @apply mb-0;
+}
+
+.pf-chat-md p {
+  @apply my-2;
+}
+
+.pf-chat-md h1,
+.pf-chat-md h2,
+.pf-chat-md h3,
+.pf-chat-md h4,
+.pf-chat-md h5,
+.pf-chat-md h6 {
+  @apply mt-3 mb-1 font-semibold text-foreground;
+}
+
+.pf-chat-md h1 {
+  @apply text-base;
+}
+
+.pf-chat-md h2,
+.pf-chat-md h3,
+.pf-chat-md h4,
+.pf-chat-md h5,
+.pf-chat-md h6 {
+  @apply text-sm;
+}
+
+.pf-chat-md ul {
+  @apply my-2 list-disc space-y-1 ps-5;
+}
+
+.pf-chat-md ol {
+  @apply my-2 list-decimal space-y-1 ps-5;
+}
+
+.pf-chat-md li::marker {
+  @apply text-muted-foreground;
+}
+
+.pf-chat-md li > ul,
+.pf-chat-md li > ol {
+  @apply my-1;
+}
+
+/* GFM task lists: `remark-gfm` marks these, and a checkbox reads better without a bullet too. */
+.pf-chat-md li.task-list-item {
+  @apply -ms-5 list-none;
+}
+
+.pf-chat-md li.task-list-item input[type="checkbox"] {
+  @apply me-1.5 align-[-0.1em];
+}
+
+.pf-chat-md a {
+  @apply font-medium text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground;
+}
+
+.pf-chat-md blockquote {
+  @apply my-2 border-s-2 border-border ps-3 text-muted-foreground;
+}
+
+.pf-chat-md hr {
+  @apply my-3 border-border;
+}
+
+/* Inline code only: the `<code>` inside a fence is the block below, and is styled with it. */
+.pf-chat-md :not(pre) > code {
+  @apply rounded bg-muted px-1 py-0.5 font-mono text-[0.85em] text-foreground;
+}
+
+.pf-chat-md .pf-chat-md-block {
+  @apply my-2 overflow-hidden rounded-md border border-border bg-muted/50;
+}
+
+.pf-chat-md .pf-chat-md-lang {
+  @apply block border-b border-border px-2 py-1 font-mono text-[10px] tracking-wide text-muted-foreground uppercase;
+}
+
+.pf-chat-md pre {
+  @apply overflow-x-auto p-2 font-mono text-xs leading-relaxed;
+}
+
+.pf-chat-md pre code {
+  @apply bg-transparent p-0 font-mono text-xs;
+}
+
+/* A table is the one thing that will not fit 400px: scroll the table, never the panel. */
+.pf-chat-md table {
+  @apply my-2 block w-full overflow-x-auto border-collapse text-xs;
+}
+
+.pf-chat-md th,
+.pf-chat-md td {
+  @apply border border-border px-2 py-1 text-left align-top;
+}
+
+.pf-chat-md th {
+  @apply bg-muted/50 font-medium;
+}
+
+.pf-chat-md img {
+  @apply my-2 max-w-full rounded-md;
+}

@@ -7,6 +7,8 @@ const eslintConfig = defineConfig([
   ...nextTs,
   // Override default ignores of eslint-config-next.
   globalIgnores([
+    // Workflow subagents check out branches under .claude/worktrees; their generated output is not ours to lint.
+    ".claude/worktrees/**",
     "convex/_generated/**",
     "app/.well-known/**",
     // eve's build output: `next dev` writes a compiled agent bundle under the repo root and under

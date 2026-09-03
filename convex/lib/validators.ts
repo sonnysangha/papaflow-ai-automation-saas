@@ -47,6 +47,12 @@ export const connectionCreateArgs = {
   hint: v.string(),
   /** Connector-supplied, non-secret: `{ models, fetchedAt, … }`. Projected through `safeMeta`. */
   meta: v.any(),
+  /**
+   * The provider's id for the account this credential belongs to (Slack's `team_id`), lifted out
+   * of `meta` by the connector's `externalIdFrom` so it can be indexed. Absent for the providers
+   * that have no such id, and for anything the connector's `test()` did not report.
+   */
+  externalId: v.optional(v.string()),
   requiresFeature: v.optional(v.string()),
 } as const;
 

@@ -4,7 +4,7 @@ import { limitsForPlan } from "../lib/plans";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internalQuery, mutation, query } from "./_generated/server";
-import { orgConnection } from "./connections";
+import { connectionMatch, orgConnection } from "./connections";
 import {
   connectionCreateArgs,
   connectionKindValidator,
@@ -412,13 +412,56 @@ export const listOrgConnections = query({
   },
 });
 
-/** Merges connector-discovered, non-secret facts into `meta` (the model list, a workspace name). */
+/**
+ * The connections a provider-side account maps to — how `POST /api/events/slack`, one URL for the
+ * whole deployment, finds the rows a delivery could belong to.
+ *
+ * Not org-scoped, because the caller has no org: all it holds is the workspace id inside a signed
+ * body. That is why the projection is this thin — an id to open, its org, and a label for the log —
+ * and why the route still has to verify the delivery against each candidate's own signing secret
+ * before it does anything with the answer.
+ */
+type ConnectionMatch = typeof connectionMatch.type;
+
+export const listConnectionsByExternalId = query({
+  args: { secret: v.string(), provider: v.string(), externalId: v.string() },
+  returns: v.array(connectionMatch),
+  handler: async (ctx, { secret, ...args }): Promise<ConnectionMatch[]> => {
+    guard(secret);
+    return await ctx.runQuery(internal.connections.byExternalId, args);
+  },
+});
+
+/**
+ * The same lookup against `meta`, for connections created before `externalId` was a column.
+ *
+ * Ids only (`internal.connections.idsByMetaValue`), and a separate call rather than a silent
+ * fallback inside the query above, so that a route reaching for it is visible at the call site:
+ * this one is an indexed *scan* of a provider's rows, not a point lookup.
+ */
+export const listConnectionIdsByMeta = query({
+  args: { secret: v.string(), provider: v.string(), key: v.string(), value: v.string() },
+  returns: v.array(v.id("connections")),
+  handler: async (ctx, { secret, ...args }): Promise<Id<"connections">[]> => {
+    guard(secret);
+    return await ctx.runQuery(internal.connections.idsByMetaValue, args);
+  },
+});
+
+/**
+ * Merges connector-discovered, non-secret facts into `meta` (the model list, a workspace name).
+ *
+ * `externalId` is the indexed copy of one of those facts (Slack's `team_id`); it is written here
+ * too so a re-test that finds the credential now points at a different workspace moves the index
+ * with it. Absent means "leave the column alone".
+ */
 export const updateConnectionMeta = mutation({
   args: {
     secret: v.string(),
     connectionId: v.id("connections"),
     orgId: v.string(),
     meta: v.any(),
+    externalId: v.optional(v.string()),
   },
   returns: v.null(),
   handler: async (ctx, { secret, ...args }) => {

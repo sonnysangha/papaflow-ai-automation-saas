@@ -142,7 +142,7 @@ Vercel env (Production): `CONVEX_DEPLOY_KEY`, `CONVEX_URL`, `NEXT_PUBLIC_CLERK_P
 ## Stop points (things only you can do)
 
 - **Your own AI key** — add an OpenAI / Anthropic / Gemini / Groq connection on the Connections page; the LLM, Extract, Classify, AI Agent and Builder features need it (or `AI_GATEWAY_API_KEY` locally for the house model).
-- **Chat credentials** for a live Approval check — a Telegram bot token is the quickest; Slack needs its signing secret and the interactivity URL shown on the connection; Discord needs the public key and the interactions URL.
+- **Chat credentials** for a live Approval check — a Telegram bot token is the quickest; Slack needs its signing secret (the manifest in the Add-connection dialog already points Interactivity at `<origin>/api/events/slack`, the same URL for every connection); Discord needs the public key and the interactions URL.
 - **Preview deployments** — generate a *preview* Convex deploy key in the Convex dashboard and add it as `CONVEX_DEPLOY_KEY` scoped to Preview, plus `APP_ORIGIN` and `NEXT_PUBLIC_CLERK_SIGN_UP_URL` on Preview. A preview key creates a Convex deployment **per branch**, so the agents on a preview also need `CONVEX_URL` set to that branch's deployment URL (see `docs/PROVISIONING.md`).
 - **Team plan seats** — Clerk dashboard → Subscription plans → Plans for Organizations → Team → Seat-based.
 - **Going to a real domain** — `clerk deploy` (owned domain + DNS + your Stripe account), then repeat the Convex integration for the production Clerk instance.

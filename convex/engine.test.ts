@@ -714,6 +714,212 @@ describe("api.engine", () => {
   });
 });
 
+/**
+ * Finding a connection from what a *provider* knows about it, rather than from an organisation.
+ *
+ * `POST /api/events/slack` is one URL for the whole deployment — it has to be, because the app
+ * manifest that creates a user's Slack app is generated before any connection exists — so the only
+ * thing identifying a delivery is the workspace id inside it. `meta` is `v.any()` and cannot be
+ * indexed, which is why `externalId` is a column with an index of its own, and why rows written
+ * before it existed still have to be findable through a scan.
+ */
+describe("api.engine connection lookups by workspace", () => {
+  const TEAM = "T024BE7LD";
+  const SEALED = { v: 1 as const, keyId: "k1", iv: "aXY=", tag: "dGFn", ct: "Y2lwaGVy" };
+
+  /** A connection as `/api/connections` writes one: insert, then patch the sealed secret. */
+  async function addConnection(
+    t: Awaited<ReturnType<typeof setup>>["t"],
+    overrides: {
+      orgId?: string;
+      provider?: string;
+      label?: string;
+      externalId?: string;
+      meta?: Record<string, unknown>;
+    } = {},
+  ): Promise<Id<"connections">> {
+    const orgId = overrides.orgId ?? ORG;
+    const connectionId = await t.mutation(api.engine.createConnection, {
+      secret: SECRET,
+      orgId,
+      createdBy: "user_1",
+      provider: overrides.provider ?? "slack",
+      kind: "botToken",
+      label: overrides.label ?? "Acme",
+      hint: "abcd",
+      meta: overrides.meta ?? { team_id: TEAM, team_name: "Acme" },
+      ...(overrides.externalId === undefined ? {} : { externalId: overrides.externalId }),
+    });
+
+    await t.mutation(api.engine.patchConnectionSecret, {
+      secret: SECRET,
+      connectionId,
+      orgId,
+      sealed: SEALED,
+    });
+    return connectionId;
+  }
+
+  test("listConnectionsByExternalId finds every org's connection to one workspace", async () => {
+    const { t } = await setup();
+    const mine = await addConnection(t, { externalId: TEAM, label: "Acme (ours)" });
+    const theirs = await addConnection(t, {
+      orgId: "org_2",
+      externalId: TEAM,
+      label: "Acme (theirs)",
+    });
+    // Same workspace id, different provider — and a Slack row for another workspace.
+    await addConnection(t, { provider: "discord-bot", externalId: TEAM });
+    await addConnection(t, { externalId: "T99999999" });
+
+    const found = await t.query(api.engine.listConnectionsByExternalId, {
+      secret: SECRET,
+      provider: "slack",
+      externalId: TEAM,
+    });
+
+    // Two organisations can install the same Slack app into the same workspace; the route tries
+    // each candidate's signing secret and the signature picks.
+    expect(found.map((row) => row.id).sort()).toEqual([mine, theirs].sort());
+    expect(found.map((row) => row.orgId).sort()).toEqual([ORG, "org_2"].sort());
+
+    // Identity and status only — no `meta`, no `hint`, and above all no sealed secret.
+    for (const row of found) {
+      expect(Object.keys(row).sort()).toEqual(["id", "label", "orgId", "status"]);
+      expect(row.status).toBe("active");
+    }
+    expect(JSON.stringify(found)).not.toContain("Y2lwaGVy");
+  });
+
+  test("listConnectionsByExternalId is empty for a workspace nobody connected", async () => {
+    const { t } = await setup();
+    await addConnection(t, { externalId: TEAM });
+
+    expect(
+      await t.query(api.engine.listConnectionsByExternalId, {
+        secret: SECRET,
+        provider: "slack",
+        externalId: "T00000000",
+      }),
+    ).toEqual([]);
+  });
+
+  test("a connection created without an external id is invisible to the index", async () => {
+    const { t } = await setup();
+    // A row from before the column existed: the workspace is in `meta` and nowhere else.
+    const legacy = await addConnection(t, { meta: { team_id: TEAM, team_name: "Acme" } });
+
+    expect(
+      await t.query(api.engine.listConnectionsByExternalId, {
+        secret: SECRET,
+        provider: "slack",
+        externalId: TEAM,
+      }),
+    ).toEqual([]);
+
+    // Which is what the fallback scan is for. Ids only, one provider at a time.
+    const ids = await t.query(api.engine.listConnectionIdsByMeta, {
+      secret: SECRET,
+      provider: "slack",
+      key: "team_id",
+      value: TEAM,
+    });
+    expect(ids).toEqual([legacy]);
+  });
+
+  test("the meta scan stays inside its provider and matches on the exact value", async () => {
+    const { t } = await setup();
+    await addConnection(t, { meta: { team_id: TEAM } });
+    await addConnection(t, { provider: "discord-bot", meta: { team_id: TEAM } });
+    await addConnection(t, { meta: { team_id: `${TEAM}-not-really` } });
+    await addConnection(t, { meta: "not an object" as unknown as Record<string, unknown> });
+
+    expect(
+      await t.query(api.engine.listConnectionIdsByMeta, {
+        secret: SECRET,
+        provider: "slack",
+        key: "team_id",
+        value: TEAM,
+      }),
+    ).toHaveLength(1);
+  });
+
+  test("updateConnectionMeta moves the indexed id, and leaves it alone when not sent", async () => {
+    const { t } = await setup();
+    const connectionId = await addConnection(t, { externalId: TEAM });
+
+    // "Refresh models" on an unrelated connector sends no external id; the column must survive it.
+    await t.mutation(api.engine.updateConnectionMeta, {
+      secret: SECRET,
+      connectionId,
+      orgId: ORG,
+      meta: { fetchedAt: 7 },
+    });
+    await t.run(async (ctx) => {
+      const row = await ctx.db.get(connectionId);
+      expect(row?.externalId).toBe(TEAM);
+      // Merged, not replaced.
+      expect(row?.meta).toMatchObject({ team_id: TEAM, fetchedAt: 7 });
+    });
+
+    // A re-test that finds the token now belongs to another workspace has to move the index with
+    // it, or deliveries would keep matching the old one.
+    await t.mutation(api.engine.updateConnectionMeta, {
+      secret: SECRET,
+      connectionId,
+      orgId: ORG,
+      meta: { team_id: "T77777777" },
+      externalId: "T77777777",
+    });
+
+    expect(
+      (
+        await t.query(api.engine.listConnectionsByExternalId, {
+          secret: SECRET,
+          provider: "slack",
+          externalId: TEAM,
+        })
+      ).length,
+    ).toBe(0);
+    expect(
+      (
+        await t.query(api.engine.listConnectionsByExternalId, {
+          secret: SECRET,
+          provider: "slack",
+          externalId: "T77777777",
+        })
+      ).map((row) => row.id),
+    ).toEqual([connectionId]);
+  });
+
+  test("both lookups refuse a wrong secret", async () => {
+    const { t } = await setup();
+    await addConnection(t, { externalId: TEAM });
+    const unauthorized = { code: "unauthorized" };
+
+    expect(
+      await convexErrorData(
+        t.query(api.engine.listConnectionsByExternalId, {
+          secret: "not-the-secret",
+          provider: "slack",
+          externalId: TEAM,
+        }),
+      ),
+    ).toEqual(unauthorized);
+
+    expect(
+      await convexErrorData(
+        t.query(api.engine.listConnectionIdsByMeta, {
+          secret: "",
+          provider: "slack",
+          key: "team_id",
+          value: TEAM,
+        }),
+      ),
+    ).toEqual(unauthorized);
+  });
+});
+
 describe("api.steps / api.executions (org-gated reads)", () => {
   test("byExecution returns the run's steps to its own org and throws for anyone else", async () => {
     const { t, orgA, orgB, workflowId } = await setup();

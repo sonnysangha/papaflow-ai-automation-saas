@@ -1,11 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { ConnectorTestResult } from "@/connectors/define";
+import {
+  APP_ORIGIN_TOKEN,
+  substituteAppOrigin,
+  type ConnectorTestResult,
+} from "@/connectors/define";
 import { discordBotConnector, discordInviteUrl } from "@/connectors/discord-bot";
 import { discordWebhookConnector, parseDiscordWebhookUrl } from "@/connectors/discord-webhook";
 import {
   SLACK_BOT_SCOPES,
-  SLACK_INTERACTIVITY_PLACEHOLDER,
+  SLACK_EVENTS_PATH,
+  SLACK_INTERACTIVITY_URL,
   slackAppManifest,
   slackConnector,
 } from "@/connectors/slack";
@@ -438,16 +443,27 @@ describe("slack app manifest", () => {
     expect(manifest().oauth_config.scopes.bot).toEqual([...SLACK_BOT_SCOPES]);
   });
 
-  it("switches interactivity on and points it at a documented placeholder", () => {
+  it("switches interactivity on and points it at this deployment's own Slack endpoint", () => {
     const { interactivity } = manifest().settings;
     expect(interactivity.is_enabled).toBe(true);
 
-    // The real URL ends in the connection's own id, which does not exist yet — so the manifest
-    // ships a valid HTTPS URL the user replaces, and the steps say where to find the real one.
-    expect(interactivity.request_url).toBe(SLACK_INTERACTIVITY_PLACEHOLDER);
-    expect(() => new URL(interactivity.request_url)).not.toThrow();
-    expect(new URL(interactivity.request_url).protocol).toBe("https:");
-    expect(interactivity.request_url).toMatch(/\/api\/events\/slack\//);
+    // The URL a user pastes into Slack has to be the real one, and it can be: `/api/events/slack`
+    // needs no connection id, because a delivery names its own workspace. Only the origin is
+    // unknowable here — the catalogue is built without a request — so it is a token the connections
+    // UI swaps out (`components/connections/ConnectorSetup.tsx`).
+    expect(interactivity.request_url).toBe(SLACK_INTERACTIVITY_URL);
+    expect(interactivity.request_url).toBe(`${APP_ORIGIN_TOKEN}${SLACK_EVENTS_PATH}`);
+    expect(interactivity.request_url).toBe("{{APP_ORIGIN}}/api/events/slack");
+    // Not a connection id in sight: this URL is the same for every organisation.
+    expect(interactivity.request_url).not.toMatch(/CONNECTION_ID/);
+
+    // Substituted, it is the `https` URL Slack demands — and nothing but the origin changed.
+    const substituted = substituteAppOrigin(
+      interactivity.request_url,
+      "https://papaflow.vercel.app",
+    );
+    expect(substituted).toBe("https://papaflow.vercel.app/api/events/slack");
+    expect(new URL(substituted).protocol).toBe("https:");
   });
 
   it("never enables token rotation, which cannot be turned off again", () => {
@@ -489,6 +505,19 @@ describe("slack app manifest", () => {
     expect(setup?.steps.every((step) => step.trim().length > 0)).toBe(true);
     expect(setup?.steps.join(" ")).toMatch(/Signing Secret/);
     expect(setup?.steps.join(" ")).toMatch(/Interactivity/);
+    // The step about interactivity quotes the same URL the manifest sets, token and all, so the
+    // substitution the UI does covers the instructions too.
+    expect(setup?.steps.join(" ")).toContain(SLACK_INTERACTIVITY_URL);
+    // Nobody is sent back to paste a per-connection URL any more.
+    expect(setup?.steps.join(" ")).not.toMatch(/connection's own id/);
+  });
+
+  it("names the workspace key inbound deliveries are matched by", () => {
+    // `test()` reports `meta.team_id`; `externalIdFrom` is what lifts it into the indexed column
+    // that `POST /api/events/slack` looks a delivery's `team.id` up in.
+    expect(slackConnector.externalIdFrom).toBe("team_id");
+    expect(discordBotConnector.externalIdFrom).toBeUndefined();
+    expect(telegramConnector.externalIdFrom).toBeUndefined();
   });
 
   it("is the only connector that needs a provider-side app", () => {

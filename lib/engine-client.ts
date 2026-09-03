@@ -241,6 +241,8 @@ export async function updateConnectionMeta(args: {
   connectionId: string;
   orgId: string;
   meta: Record<string, unknown>;
+  /** The indexed copy of one of them (Slack's `team_id`). Omitted leaves the column untouched. */
+  externalId?: string;
 }): Promise<void> {
   const { client, secret } = engineClient();
   await client.mutation(api.engine.updateConnectionMeta, {
@@ -248,7 +250,42 @@ export async function updateConnectionMeta(args: {
     connectionId: connectionRef(args.connectionId),
     orgId: args.orgId,
     meta: args.meta,
+    externalId: args.externalId,
   });
+}
+
+/** One connection found by the provider's own id for it: an id to open, its org, and a label. */
+export type ConnectionMatch = FunctionReturnType<
+  typeof api.engine.listConnectionsByExternalId
+>[number];
+
+/**
+ * The connections a provider-side account maps to — `POST /api/events/slack` asking "which rows
+ * could this workspace's delivery belong to?".
+ *
+ * Several rows is normal (two organisations, one Slack workspace), and none is the common case for
+ * a stranger's POST. Nothing here is proof of anything: the caller verifies the delivery against
+ * each candidate's own signing secret before it acts on one.
+ */
+export async function listConnectionsByExternalId(args: {
+  provider: string;
+  externalId: string;
+}): Promise<ConnectionMatch[]> {
+  const { client, secret } = engineClient();
+  return await client.query(api.engine.listConnectionsByExternalId, { secret, ...args });
+}
+
+/**
+ * The same lookup against `meta`, for connections created before `externalId` was a column — an
+ * indexed scan of one provider's rows, so it is the fallback and never the first question.
+ */
+export async function listConnectionIdsByMeta(args: {
+  provider: string;
+  key: string;
+  value: string;
+}): Promise<string[]> {
+  const { client, secret } = engineClient();
+  return await client.query(api.engine.listConnectionIdsByMeta, { secret, ...args });
 }
 
 /** Records the verdict of a credential test, or a provider's 401. */

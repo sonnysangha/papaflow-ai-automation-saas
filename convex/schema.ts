@@ -99,6 +99,13 @@ export default defineSchema({
     label: v.string(),
     secret: sealed,
     hint: v.string(),
+    // The provider's own id for the account behind this credential — Slack's `team_id`, later a
+    // Discord `application_id`. It is a copy of one key of `meta` (the connector says which, via
+    // `ConnectorDef.externalIdFrom`) promoted to a column, because `meta` is `v.any()` and Convex
+    // cannot index inside it: `POST /api/events/slack` holds nothing but a workspace id and has to
+    // find the connections it could belong to. Optional because most providers have no such id,
+    // and because rows created before this column existed simply do not have one.
+    externalId: v.optional(v.string()),
     expiresAt: v.optional(v.number()),
     scopes: v.array(v.string()),
     meta: v.any(),
@@ -107,7 +114,11 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_org", ["orgId"])
-    .index("by_org_provider", ["orgId", "provider"]),
+    .index("by_org_provider", ["orgId", "provider"])
+    // Deliberately not org-scoped: an inbound delivery names a workspace, never an organisation.
+    // The `provider` prefix also makes the legacy `meta.team_id` scan an indexed range rather than
+    // a table scan (`connections.idsByMetaValue`).
+    .index("by_provider_external", ["provider", "externalId"]),
 
   schedules: defineTable({
     orgId: v.string(),

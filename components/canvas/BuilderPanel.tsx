@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Show, useAuth } from "@clerk/nextjs";
+import { Client, ClientError, type MessageStreamEvent } from "eve/client";
 import { useEveAgent, type EveMessage, type EveMessagePart } from "eve/react";
 import {
   ArrowDownIcon,
@@ -31,6 +32,7 @@ import { cn } from "@/lib/utils";
 import { CredentialWidget } from "./CredentialWidget";
 import { MessageMarkdown } from "./MessageMarkdown";
 import { isNearBottom, transcriptSignature } from "./scroll-follow";
+import { hasOpenTurn } from "./session-catchup";
 
 /**
  * "Build with AI": a chat beside the canvas whose tool calls draw on it.
@@ -46,11 +48,33 @@ import { isNearBottom, transcriptSignature } from "./scroll-follow";
  *   eve's `clientContext` reaches the model, not the tools (see `lib/builder-protocol.ts`), so this
  *   is how a tool knows which canvas it is drawing on.
  *
+ * Reopening a chat that already exists reads its transcript here, with one bounded non-following
+ * stream, rather than handing the job to `useEveAgent({ resume: true })` — see `BuilderSession`.
+ *
  * Nothing here writes to Convex. The canvas is redrawn by the agent's own writes arriving on the
  * `workflows.get` subscription the editor already holds.
  */
 
 const PANEL = "flex w-96 shrink-0 flex-col border-l border-border bg-background";
+
+/** The eve agent this panel talks to; `useEveAgent({ agent })` resolves the same `/eve/agents/…`. */
+const BUILDER_AGENT = "builder";
+const BUILDER_HOST = `/eve/agents/${BUILDER_AGENT}`;
+
+/**
+ * How long the panel will spend reading an existing transcript before handing the rest to the
+ * store. Generous on purpose: this is one bounded read against a service that may be cold (0.8s
+ * warm against production), not a poll, and the fallback below is only slower, never wrong.
+ */
+const CATCHUP_TIMEOUT_MS = 20_000;
+
+/**
+ * A session eve no longer has answers 404, and eve's default policy reads that as the propagation
+ * window of a just-created one: twelve attempts with backoff, measured at 46s before it gives up.
+ * A stale `builderSessions` row is not worth 46s, so 404 comes out of the retryable set and every
+ * genuinely transient status keeps the default ladder.
+ */
+const CATCHUP_RETRYABLE_STATUSES = [409, 425, 500, 502, 503, 504];
 
 /** What `POST /api/builder/session` answers before a chat may start. */
 type OpenedSession = {
@@ -58,6 +82,57 @@ type OpenedSession = {
   eveSessionId: string;
   workflow: { name: string; version: number; status: string };
 };
+
+/**
+ * The chat that already exists, as the panel knows it before the store is created: the prefix of
+ * the durable stream to draw immediately, and whether anything is still moving.
+ */
+type Transcript = {
+  /** The eve session to attach to, or `""` to open a fresh one with the next message. */
+  readonly sessionId: string;
+  readonly events: readonly MessageStreamEvent[];
+  /** Follow the live stream on mount: a turn is in flight, or this read was cut short. */
+  readonly follow: boolean;
+};
+
+/** No chat yet — or the row pointed at one eve has forgotten. */
+const NEW_CHAT: Transcript = { sessionId: "", events: [], follow: false };
+
+/**
+ * Reads an existing chat's transcript: `follow: false` bounds the read at the durable tail, so it
+ * returns as soon as it has everything instead of waiting on a stream that will never speak.
+ *
+ * A 404 means the row outlived its eve session — a redeploy that dropped it, a retired session —
+ * so the panel forgets the id and lets the next message open a new one; `onSessionChange` writes
+ * the new id back over the dead one through the PATCH that was already there.
+ */
+async function readTranscript(
+  sessionId: string,
+  client: Client,
+  signal: AbortSignal,
+): Promise<Transcript> {
+  const deadline = AbortSignal.timeout(CATCHUP_TIMEOUT_MS);
+  const events: MessageStreamEvent[] = [];
+
+  try {
+    const session = client.sessions.attach(sessionId, { streamIndex: 0 });
+    for await (const event of session.stream({
+      follow: false,
+      startIndex: 0,
+      signal: AbortSignal.any([signal, deadline]),
+      streamReconnectPolicy: { retryableErrorStatuses: CATCHUP_RETRYABLE_STATUSES },
+    })) {
+      events.push(event);
+    }
+  } catch (cause) {
+    if (cause instanceof ClientError && cause.status === 404) return NEW_CHAT;
+    throw cause;
+  }
+
+  // A read the deadline cut short still leaves an ordered prefix from index 0, which is exactly
+  // what the store's own catch-up knows how to finish — so hand it the rest rather than guessing.
+  return { sessionId, events, follow: deadline.aborted || hasOpenTurn(events) };
+}
 
 type PanelProps = { workflowId: Id<"workflows">; onClose: () => void };
 
@@ -104,42 +179,85 @@ export function BuilderPanel({ workflowId, onClose }: PanelProps) {
 }
 
 /**
- * Opens the app-side session before any chat exists, so the plan and the workflow's ownership are
- * proved once, on the server, rather than discovered when the first tool call fails.
+ * Opens the app-side session before any chat exists — so the plan and the workflow's ownership are
+ * proved once, on the server, rather than discovered when the first tool call fails — and then
+ * reads the transcript of the chat that is already there.
  *
- * The chat is keyed by the row it belongs to: `agent`, `initialSession` and `resume` are read when
- * the hook creates its store, so switching sessions means remounting.
+ * Reading it here is what makes reopening an old chat instant. `useEveAgent({ resume: true })`
+ * replays the durable session and then *follows* it, and eve keeps following a session whose tail
+ * is `session.waiting` — where every finished chat parks. Nothing arrives, so the follow ends only
+ * at the client's 15s read-idle timeout, and `status` stays `resuming` ("Catching up…", composer
+ * disabled) for all of it. Measured against production: a 0.46s bounded read of a nine-event chat,
+ * then 15.3s of silence; against the dev server, 0.05s then 15.0s. The same transcript read with
+ * `follow: false` costs 0.78s and returns everything, so the panel takes that and resumes only
+ * when `hasOpenTurn` says a turn is genuinely in flight.
+ *
+ * The chat is keyed by the row it belongs to: `agent`, `initialEvents`, `initialSession` and
+ * `resume` are read when the hook creates its store, so switching sessions means remounting — and
+ * the transcript has to be in hand before `BuilderChat` mounts at all.
  */
 function BuilderSession({ workflowId, onClose }: PanelProps) {
-  const [session, setSession] = useState<OpenedSession | null>(null);
+  const { getToken } = useAuth();
+  const [opened, setOpened] = useState<{ session: OpenedSession; transcript: Transcript } | null>(
+    null,
+  );
   const [error, setError] = useState<string | null>(null);
 
+  // Read through a ref so a refreshed Clerk identity cannot re-run the effect and reopen the chat.
+  const getTokenRef = useRef(getToken);
   useEffect(() => {
-    let live = true;
+    getTokenRef.current = getToken;
+  }, [getToken]);
+
+  useEffect(() => {
+    const abort = new AbortController();
     void (async () => {
       try {
         const response = await fetch("/api/builder/session", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ workflowId }),
+          signal: abort.signal,
         });
         const body: unknown = await response.json().catch(() => null);
-        if (!live) return;
+        if (abort.signal.aborted) return;
 
         if (!response.ok) {
           const { error: message } = (body ?? {}) as { error?: string };
           setError(message ?? "Could not open the builder.");
           return;
         }
-        setSession(body as OpenedSession);
+
+        const session = body as OpenedSession;
+        let transcript = NEW_CHAT;
+
+        if (session.eveSessionId.length > 0) {
+          // The same target the hook resolves, with the same bearer and the same workflow header:
+          // `agents/builder/channels/eve.ts` authenticates this read exactly as it does the chat.
+          const client = new Client({
+            host: BUILDER_HOST,
+            auth: { bearer: async () => (await getTokenRef.current()) ?? "" },
+            headers: { [BUILDER_WORKFLOW_HEADER]: workflowId },
+          });
+          try {
+            transcript = await readTranscript(session.eveSessionId, client, abort.signal);
+          } catch (cause) {
+            // Not fatal, and not a reason to lose the conversation: the store's own catch-up
+            // recovers the same transcript from index 0. It is only slower.
+            console.error("builder: could not read the transcript", cause);
+            transcript = { sessionId: session.eveSessionId, events: [], follow: true };
+          }
+        }
+
+        if (abort.signal.aborted) return;
+        setOpened({ session, transcript });
       } catch (cause) {
+        if (abort.signal.aborted) return;
         console.error(cause);
-        if (live) setError("Could not reach the builder.");
+        setError("Could not reach the builder.");
       }
     })();
-    return () => {
-      live = false;
-    };
+    return () => abort.abort();
   }, [workflowId]);
 
   if (error) {
@@ -150,7 +268,7 @@ function BuilderSession({ workflowId, onClose }: PanelProps) {
     );
   }
 
-  if (!session) {
+  if (!opened) {
     return (
       <PanelShell onClose={onClose}>
         <div className="space-y-2 p-3">
@@ -163,9 +281,10 @@ function BuilderSession({ workflowId, onClose }: PanelProps) {
 
   return (
     <BuilderChat
-      key={session.builderSessionId}
+      key={opened.session.builderSessionId}
       workflowId={workflowId}
-      session={session}
+      session={opened.session}
+      transcript={opened.transcript}
       onClose={onClose}
     />
   );
@@ -293,8 +412,9 @@ function MessageBubble({ message }: { message: EveMessage }) {
 function BuilderChat({
   workflowId,
   session,
+  transcript,
   onClose,
-}: PanelProps & { session: OpenedSession }) {
+}: PanelProps & { session: OpenedSession; transcript: Transcript }) {
   const { getToken } = useAuth();
   // Options are read once, when the hook creates its store, so the token resolver reaches the
   // latest `getToken` through a ref rather than through a closure captured on the first render.
@@ -303,15 +423,24 @@ function BuilderChat({
     getTokenRef.current = getToken;
   }, [getToken]);
 
-  const reportedRef = useRef(session.eveSessionId);
+  // The id the row already holds. Empty after a stale session, so the first message's new id is
+  // reported and the row is repaired.
+  const reportedRef = useRef(transcript.sessionId);
   const [draft, setDraft] = useState("");
 
   const agent = useEveAgent({
-    agent: "builder",
+    agent: BUILDER_AGENT,
     auth: { bearer: async () => (await getTokenRef.current()) ?? "" },
     headers: { [BUILDER_WORKFLOW_HEADER]: workflowId },
-    initialSession: session.eveSessionId ? { sessionId: session.eveSessionId, streamIndex: 0 } : undefined,
-    resume: session.eveSessionId.length > 0,
+    // The transcript is already read, so the store starts with it drawn and its cursor at the
+    // tail: a later `send`/`respond` streams only the new turn, with no replay.
+    initialEvents: transcript.events,
+    initialSession: transcript.sessionId
+      ? { sessionId: transcript.sessionId, streamIndex: transcript.events.length }
+      : undefined,
+    // Only when something is actually moving. `resuming` is this panel's "Catching up…", and on an
+    // idle chat eve's own resume would hold it there for 15s (see `BuilderSession`).
+    resume: transcript.sessionId.length > 0 && transcript.follow,
     onSessionChange: (cursor) => {
       // Recorded once per session id: a reload reopens the same durable conversation.
       if (!cursor?.sessionId || cursor.sessionId === reportedRef.current) return;
@@ -520,8 +649,8 @@ function BuilderChat({
               type="button"
               size="sm"
               variant="ghost"
-              // Also the way out of a failed resume: an eve session id that no longer exists leaves
-              // an error and no messages, and `reset()` starts a fresh durable session.
+              // Also the way out of a resume that failed on something `readTranscript` could not
+              // rule out (a 404 is already handled there): `reset()` starts a fresh durable session.
               disabled={resuming || (messages.length === 0 && agent.error === undefined)}
               onClick={() => agent.reset()}
             >

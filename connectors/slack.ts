@@ -6,7 +6,7 @@
 // label users recognise. The signing secret is optional and unused here — it only matters once
 // Slack posts *to* us (Approval buttons in Phase 8, the mention trigger in Phase 7), and asking for
 // it now saves a second trip to the app's settings page.
-import { defineConnector, TARGETS_PICKER } from "./define";
+import { APP_ORIGIN_TOKEN, defineConnector, TARGETS_PICKER } from "./define";
 
 /**
  * Every bot scope this app's Slack calls need, and nothing else.
@@ -18,8 +18,8 @@ import { defineConnector, TARGETS_PICKER } from "./define";
  * half and `groups:read` for the private half, and a token missing the second answers
  * `missing_scope` for the whole call rather than a shorter list.
  *
- * Interactivity needs no scope at all: `POST /api/events/slack/:connectionId` is verified with the
- * signing secret, not with a token.
+ * Interactivity needs no scope at all: `POST /api/events/slack` is verified with the signing
+ * secret, not with a token.
  */
 export const SLACK_BOT_SCOPES: readonly string[] = [
   "chat:write",
@@ -36,17 +36,28 @@ const MAX_BOT_NAME = 80;
 const DEFAULT_APP_NAME = "PapaFlow";
 
 /**
- * What `settings.interactivity.request_url` says until the connection exists.
+ * Where Slack sends button presses and events, for every connection in every organisation.
  *
- * It cannot say anything truer: the real URL ends in the connection's own id
- * (`/api/events/slack/:connectionId`, one signing secret per connection), and there is no
- * connection until this manifest has produced a token to paste. So the manifest ships a valid
- * HTTPS URL — Slack refuses a malformed one, and `example.com` is reserved for exactly this
- * (RFC 2606) — and `setup.steps` tells the user to replace it with the URL their connection row
- * shows once it is saved.
+ * It used to be per connection (`/api/events/slack/:connectionId`, one signing secret per row),
+ * which produced a manifest that could not name its own Request URL: the id it needs does not
+ * exist until the app the manifest creates has produced a token to paste. The route now works the
+ * other way round — it reads the workspace id Slack puts in every delivery (`team.id` on an
+ * interactivity payload, `team_id` on an Events API envelope) and looks the connections up by it —
+ * so the manifest can carry the real URL and nobody has to come back and paste one.
+ *
+ * The per-connection route still answers, for anyone who pasted one before this existed.
  */
-export const SLACK_INTERACTIVITY_PLACEHOLDER =
-  "https://papaflow.example.com/api/events/slack/CONNECTION_ID";
+export const SLACK_EVENTS_PATH = "/api/events/slack";
+
+/**
+ * That path as it goes into the manifest: `{{APP_ORIGIN}}` is swapped for this deployment's origin
+ * when the connections UI renders it (`connectors/define.ts#substituteAppOrigin`), because the
+ * catalogue is built once, in a module with no request and no `window`.
+ *
+ * Slack accepts only public `https` URLs here, so a laptop needs a tunnel — the setup section says
+ * so whenever the origin it substituted is not one.
+ */
+export const SLACK_INTERACTIVITY_URL = `${APP_ORIGIN_TOKEN}${SLACK_EVENTS_PATH}`;
 
 /** `display_name` allows letters, digits, `-`, `_` and `.` — a space in an app name is not one. */
 function botDisplayName(appName: string): string {
@@ -84,7 +95,7 @@ export function slackAppManifest(appName: string = DEFAULT_APP_NAME): Record<str
     settings: {
       interactivity: {
         is_enabled: true,
-        request_url: SLACK_INTERACTIVITY_PLACEHOLDER,
+        request_url: SLACK_INTERACTIVITY_URL,
       },
       org_deploy_enabled: false,
       socket_mode_enabled: false,
@@ -204,11 +215,18 @@ export const slackConnector = defineConnector({
       "Pick the workspace this app should belong to, paste the JSON below, then create the app.",
       "On Install App, install it to the workspace and copy the Bot User OAuth Token (xoxb-…) into the field above.",
       "On Basic Information, copy the Signing Secret into the optional field — Approval buttons and Slack triggers are verified with it.",
-      "Save the connection, then copy the interactivity URL from its row on the Connections page into Interactivity & Shortcuts → Request URL, replacing the placeholder from the manifest. That URL contains the connection's own id, so it only exists once the connection does.",
+      `The manifest already switches Interactivity on and points it at ${SLACK_INTERACTIVITY_URL}, so there is nothing to paste back: presses are matched to this connection by your workspace id.`,
       "Invite the bot to any private channel you want to post in (/invite @PapaFlow). Public channels work without an invite.",
     ],
     manifest: slackAppManifest(),
   },
+
+  /**
+   * `test()` reports the workspace as `meta.team_id`; this promotes it to the indexed
+   * `connections.externalId` column, which is how `POST /api/events/slack` — one URL for every
+   * organisation — finds this row from the `team.id` inside a button press.
+   */
+  externalIdFrom: "team_id",
 
   /** `auth.test` is the cheapest call that proves the token and names the workspace. */
   async test(secret) {

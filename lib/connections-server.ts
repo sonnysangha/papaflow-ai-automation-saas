@@ -5,6 +5,7 @@
 import { FatalError } from "workflow";
 
 import {
+  externalIdOf,
   MODELS_PICKER,
   normalizeSecretInput,
   type ConnectorDef,
@@ -316,6 +317,9 @@ export async function createConnectionFromInput(
     label,
     hint: result.hint,
     meta: result.meta,
+    // The one `meta` key a fixed inbound URL has to find this row by (Slack's `team_id`), lifted
+    // into an indexed column — `meta` itself is `v.any()` and Convex cannot index inside it.
+    externalId: externalIdOf(def, result.meta),
     requiresFeature: def.requiresFeature ?? undefined,
   });
 
@@ -334,7 +338,12 @@ export async function createConnectionFromInput(
       if (extra.secret) secret = { ...secret, ...extra.secret };
       if (extra.meta) {
         meta = { ...meta, ...extra.meta };
-        await engine.updateConnectionMeta({ connectionId: id, orgId: input.orgId, meta });
+        await engine.updateConnectionMeta({
+          connectionId: id,
+          orgId: input.orgId,
+          meta,
+          externalId: externalIdOf(def, meta),
+        });
       }
     }
 
@@ -388,7 +397,15 @@ async function testStoredConnection(
     return { ok: false, status: "needs_reconnect", error: result.error };
   }
 
-  await engine.updateConnectionMeta({ connectionId, orgId, meta: result.meta });
+  // A re-test is also where a credential can turn out to belong to a *different* account than the
+  // one it was added for (a token swapped in place), so the indexed id moves with the meta it
+  // was copied from — otherwise inbound deliveries would keep matching the old workspace.
+  await engine.updateConnectionMeta({
+    connectionId,
+    orgId,
+    meta: result.meta,
+    externalId: externalIdOf(def, result.meta),
+  });
   await engine.setConnectionStatus({ connectionId, orgId, status: "active" });
   return {
     ok: true,

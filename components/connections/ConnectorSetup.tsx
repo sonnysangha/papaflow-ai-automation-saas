@@ -4,7 +4,8 @@ import { useEffect, useId, useRef, useState } from "react";
 import { CheckIcon, ChevronDownIcon, ChevronRightIcon, CopyIcon, ExternalLinkIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import type { ConnectorSetup } from "@/connectors/define";
+import { APP_ORIGIN_TOKEN, substituteAppOrigin, type ConnectorSetup } from "@/connectors/define";
+import { appOrigin } from "@/lib/app-origin";
 
 /**
  * The half of "Add connection" that comes *before* there is anything to paste.
@@ -24,6 +25,18 @@ const NEW_APP_URL = "https://api.slack.com/apps?new_app=1";
 /** Exactly what goes on the clipboard, and exactly what the `<pre>` shows — one source for both. */
 export function manifestJson(manifest: Record<string, unknown>): string {
   return JSON.stringify(manifest, null, 2);
+}
+
+/**
+ * Whether an origin is one a provider can actually call back.
+ *
+ * Slack takes `https` URLs only and has no localhost exception, so a manifest pasted from a laptop
+ * carries a Request URL that will never be reached. That is not an error worth blocking on — the
+ * rest of the manifest is exactly right, and the app has to exist before a token can be pasted —
+ * but it is worth saying out loud, once, next to the JSON.
+ */
+function isPublicHttpsOrigin(origin: string): boolean {
+  return origin.startsWith("https://");
 }
 
 type CopyState = "idle" | "copied" | "selected";
@@ -46,7 +59,22 @@ export function ConnectorSetupSection({ name, setup, defaultOpen }: ConnectorSet
   const [copied, setCopied] = useState<CopyState>("idle");
   const manifestRef = useRef<HTMLPreElement>(null);
 
-  const json = manifestJson(setup.manifest);
+  /**
+   * The manifest names this deployment's own inbound URL, which a catalogue built at module load
+   * cannot know — so the connector writes `{{APP_ORIGIN}}` and it is swapped for the real origin
+   * here, in the one place that has one. Steps get the same treatment: they quote the URL.
+   *
+   * Read during render rather than in an effect: this section only exists inside a dialog the user
+   * has opened, so there is no server render of it to disagree with (`lib/app-origin.ts`).
+   */
+  const origin = appOrigin();
+  const json = substituteAppOrigin(manifestJson(setup.manifest), origin);
+  const steps = setup.steps.map((step) => substituteAppOrigin(step, origin));
+
+  // Only worth saying for a manifest that actually carries a callback URL.
+  const needsPublicOrigin =
+    !isPublicHttpsOrigin(origin) &&
+    (manifestJson(setup.manifest) + setup.steps.join(" ")).includes(APP_ORIGIN_TOKEN);
 
   // "Copied" is a confirmation, not a mode: it says the click worked and then gets out of the way.
   useEffect(() => {
@@ -102,10 +130,18 @@ export function ConnectorSetupSection({ name, setup, defaultOpen }: ConnectorSet
         <p className="text-xs text-muted-foreground">{setup.title}</p>
 
         <ol className="ml-4 grid list-decimal gap-1 text-xs break-words text-muted-foreground marker:text-muted-foreground/70">
-          {setup.steps.map((step) => (
+          {steps.map((step) => (
             <li key={step}>{step}</li>
           ))}
         </ol>
+
+        {/* One expression, not interpolated text: React SSR would otherwise split the sentence
+            into separate text nodes with `<!-- -->` between them. */}
+        {needsPublicOrigin ? (
+          <p className="text-xs text-amber-600 dark:text-amber-500">
+            {`${name} only accepts public HTTPS URLs — use your deployed origin (e.g. https://papaflow.vercel.app) or a tunnel while developing.`}
+          </p>
+        ) : null}
 
         <div className="flex items-center justify-between gap-2">
           <a

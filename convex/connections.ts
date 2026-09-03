@@ -88,6 +88,22 @@ export const orgConnection = v.object({
   requiresFeature: v.optional(v.string()),
 });
 
+/**
+ * A connection found by *the provider's* id for it rather than by an organisation — what an
+ * inbound delivery has to work with (`POST /api/events/slack` knows a Slack workspace id and
+ * nothing else).
+ *
+ * Even narrower than `orgConnection`: the route has proved nothing at the point it asks, so it
+ * gets an id to open, the org that id belongs to, and enough to say which connection answered in a
+ * log line. No `meta`, no `hint`, and certainly no secret (CLAUDE.md rule 1).
+ */
+export const connectionMatch = v.object({
+  id: v.id("connections"),
+  orgId: v.string(),
+  label: v.string(),
+  status: connectionStatusValidator,
+});
+
 /** Builds the summary field by field. Spreading the document would ship the ciphertext. */
 function project(connection: Doc<"connections">): ConnectionSummary {
   return {
@@ -224,11 +240,21 @@ export const setStatus = internalMutation({
 /**
  * Merges into `meta` rather than replacing it: "refresh models" re-runs `test()` and should not
  * drop whatever another call (a channel list, a workspace name) captured earlier.
+ *
+ * `externalId` rides along because it is a *copy* of one `meta` key (Slack's `team_id`): a re-test
+ * that discovers the token now belongs to a different workspace has to move the indexed column
+ * with it, or inbound deliveries would keep matching the old one. Omitting it leaves the column
+ * exactly as it was — a connector without an `externalIdFrom` never sends one.
  */
 export const updateMeta = internalMutation({
-  args: { connectionId: v.id("connections"), orgId: v.string(), meta: v.any() },
+  args: {
+    connectionId: v.id("connections"),
+    orgId: v.string(),
+    meta: v.any(),
+    externalId: v.optional(v.string()),
+  },
   returns: v.null(),
-  handler: async (ctx, { connectionId, orgId, meta }) => {
+  handler: async (ctx, { connectionId, orgId, meta, externalId }) => {
     const connection = await connectionInOrg(ctx, connectionId, orgId);
 
     const existing =
@@ -240,7 +266,11 @@ export const updateMeta = internalMutation({
         ? (meta as Record<string, unknown>)
         : {};
 
-    await ctx.db.patch(connectionId, { meta: { ...existing, ...incoming }, updatedAt: Date.now() });
+    await ctx.db.patch(connectionId, {
+      meta: { ...existing, ...incoming },
+      ...(externalId === undefined ? {} : { externalId }),
+      updatedAt: Date.now(),
+    });
     return null;
   },
 });
@@ -299,5 +329,78 @@ export const listForOrg = internalQuery({
       status: connection.status,
       requiresFeature: connection.requiresFeature,
     }));
+  },
+});
+
+/**
+ * The connections one provider-side account maps to — the lookup behind the single Slack endpoint.
+ *
+ * `POST /api/events/slack` is the same URL for every organisation (it goes in an app manifest that
+ * is generated long before any connection exists), so the only thing distinguishing one delivery
+ * from another is the workspace id inside it. This answers "which rows could have sent this", and
+ * the route then proves it with each candidate's own signing secret.
+ *
+ * More than one row is normal and not an error: two organisations can install the same Slack app
+ * into the same workspace, and one organisation can add the same workspace twice. Revoked rows are
+ * returned too — the route's `loadConnection` is what refuses them, and it does so identically for
+ * both endpoints.
+ *
+ * `internalQuery`: the caller has no Clerk session, so it arrives through the secret-guarded
+ * `api.engine.listConnectionsByExternalId`.
+ */
+export const byExternalId = internalQuery({
+  args: { provider: v.string(), externalId: v.string() },
+  returns: v.array(connectionMatch),
+  handler: async (ctx, { provider, externalId }) => {
+    const connections = await ctx.db
+      .query("connections")
+      .withIndex("by_provider_external", (q) =>
+        q.eq("provider", provider).eq("externalId", externalId),
+      )
+      .collect();
+
+    return connections.map((connection) => ({
+      id: connection._id,
+      orgId: connection.orgId,
+      label: connection.label,
+      status: connection.status,
+    }));
+  },
+});
+
+/**
+ * How far back the legacy lookup below will read. Reached only by a deployment with thousands of
+ * connections for one provider, and the consequence of hitting it is that a *pre-`externalId`* row
+ * stops matching — which is exactly the state it was in before this column existed.
+ */
+const META_SCAN_LIMIT = 1000;
+
+/**
+ * The same question asked of `meta`, for rows written before `externalId` existed.
+ *
+ * `meta` is `v.any()` and cannot be indexed, so this is a scan — but a scan of one provider's rows,
+ * because `by_provider_external` is prefixed with `provider`. It is the fallback path only: the
+ * route asks `byExternalId` first and comes here when that finds nothing.
+ *
+ * Ids only, on purpose. A caller that gets this far is about to open each candidate's sealed secret
+ * anyway (`lib/inbound.ts#loadConnection` re-reads the row, checks the provider and the status, and
+ * returns the org), so handing back anything else would be a second projection to keep honest.
+ */
+export const idsByMetaValue = internalQuery({
+  args: { provider: v.string(), key: v.string(), value: v.string() },
+  returns: v.array(v.id("connections")),
+  handler: async (ctx, { provider, key, value }) => {
+    const connections = await ctx.db
+      .query("connections")
+      .withIndex("by_provider_external", (q) => q.eq("provider", provider))
+      .take(META_SCAN_LIMIT);
+
+    return connections
+      .filter((connection) => {
+        const meta = connection.meta;
+        if (typeof meta !== "object" || meta === null || Array.isArray(meta)) return false;
+        return (meta as Record<string, unknown>)[key] === value;
+      })
+      .map((connection) => connection._id);
   },
 });

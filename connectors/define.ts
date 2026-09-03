@@ -49,12 +49,53 @@ export type ConnectorSetup = {
   manifest: Record<string, unknown>;
 };
 
+/**
+ * The stand-in for this deployment's own origin inside a `ConnectorSetup`.
+ *
+ * A manifest is generated once for the connector catalogue — the same JSON for every organisation,
+ * built in a module that has no request and no `window` — but the URL a provider must call back
+ * belongs to *this* deployment. So the connector writes the token and the UI swaps it in
+ * (`substituteAppOrigin`, called by `components/connections/ConnectorSetup.tsx` with
+ * `lib/app-origin.ts#appOrigin`), which keeps one manifest in the catalogue and still puts a real
+ * `https://…` URL on the user's clipboard.
+ */
+export const APP_ORIGIN_TOKEN = "{{APP_ORIGIN}}";
+
+/** Every `{{APP_ORIGIN}}` in `text` replaced with `origin`. Plain text in, plain text out. */
+export function substituteAppOrigin(text: string, origin: string): string {
+  return text.replaceAll(APP_ORIGIN_TOKEN, origin);
+}
+
+/**
+ * The provider's own id for the account a credential belongs to, out of what `test()` captured.
+ *
+ * `meta` is `v.any()` in Convex and so cannot be indexed, which is a problem for exactly one kind
+ * of route: the ones a provider calls at a *fixed* URL, carrying an account id and nothing else
+ * (`POST /api/events/slack` and its `team.id`). Naming the key here lifts that one value into the
+ * indexed `connections.externalId` column at create and re-test time, for Slack today and for a
+ * Discord `application_id` next, without any of them growing a bespoke lookup.
+ */
+export function externalIdOf(
+  def: ConnectorDef,
+  meta: Record<string, unknown> | undefined,
+): string | undefined {
+  if (!def.externalIdFrom || !meta) return undefined;
+  const value = meta[def.externalIdFrom];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
 export type ConnectorDef = {
   provider: string; name: string; category: "ai" | "chat" | "data" | "email" | "payments";
   kind: "apiKey" | "botToken" | "webhookUrl" | "signingSecret" | "oauth2";
   requiresFeature: string | null; fields: FieldSpec[]; docsUrl: string; icon: string; // lucide icon name
   /** Validates the pasted credential and captures what the pickers need (`meta.models`, …). */
   test: (secret: Record<string, string>) => Promise<ConnectorTestResult>;
+  /**
+   * The `meta` key holding the provider's id for the account this credential belongs to
+   * (`team_id` for Slack), copied into the indexed `connections.externalId` column. Only providers
+   * that call a *fixed* inbound URL need one — see `externalIdOf`.
+   */
+  externalIdFrom?: string;
   /** Lists remote objects for a config field (channels, bases, voices) — never secrets. */
   pick?: (kind: string, secret: Record<string, string>, meta: Record<string, unknown>) => Promise<PickerOption[]>;
   /** How to create the provider-side app this connector needs, if it needs one (Slack). */

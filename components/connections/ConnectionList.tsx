@@ -52,6 +52,7 @@ import {
 import { formatAbsoluteTime, formatRelativeTime } from "@/components/workflows/relative-time";
 import { CONNECTORS } from "@/connectors/registry";
 import { RESEND_SANDBOX_NOTE, resendDomains, verifiedDomains } from "@/connectors/resend";
+import { SLACK_EVENTS_PATH } from "@/connectors/slack";
 import { api } from "@/convex/_generated/api";
 import { appOrigin } from "@/lib/app-origin";
 import { cn } from "@/lib/utils";
@@ -113,10 +114,16 @@ function inboundFor(connection: Connection): { url: string; hint: string } | nul
 
   // Interactivity URLs: where an Approval node's buttons come back to. Nothing registers these, so
   // the connection is only half-wired until the user pastes the URL where the hint says.
+  //
+  // Slack's is the same URL for every connection — presses are matched to a row by the workspace id
+  // Slack puts in them (`connections.externalId`), which is what lets the app manifest carry it —
+  // so this is the URL the setup dialog already put in the manifest, restated for a connection made
+  // before that existed. The per-connection URL still answers and is deliberately not shown: two
+  // URLs for one field is the confusion, not the fix.
   if (connection.provider === "slack") {
     return {
-      url: `${appOrigin()}/api/events/slack/${connection._id}`,
-      hint: "Paste into your Slack app → Interactivity & Shortcuts → Request URL (needs the signing secret on this connection)",
+      url: `${appOrigin()}${SLACK_EVENTS_PATH}`,
+      hint: "Already in the manifest — Slack app → Interactivity & Shortcuts → Request URL (needs the signing secret on this connection)",
     };
   }
   if (connection.provider === "discord-bot") {

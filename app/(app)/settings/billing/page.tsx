@@ -1,27 +1,30 @@
+import { Suspense } from "react";
 import type { Metadata } from "next";
 import Link from "next/link";
-import { PricingTable } from "@clerk/nextjs";
 import { ArrowLeftIcon } from "lucide-react";
 
+import { CurrentPlanCard } from "@/components/billing/CurrentPlanCard";
+import { PlanCards } from "@/components/billing/PlanCards";
+import { UpgradedNotice } from "@/components/billing/UpgradedNotice";
 import { buttonVariants } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
 
 export const metadata: Metadata = {
   title: "Billing",
 };
 
 /**
- * Plans and checkout, rendered entirely by Clerk.
+ * Plans and checkout, in the app's own cards.
  *
- * `<PricingTable for="organization" />` lists the plans configured on the Clerk instance
- * (`free_org` / `pro` / `team`) and opens Clerk's own checkout drawer — in development that is
- * Clerk's shared test gateway, so no Stripe account is involved. `highlightedPlan` puts the
- * "Popular" badge on Pro and `newSubscriptionRedirectUrl` brings the org back here afterwards.
+ * Clerk's stock `<PricingTable>` used to render this whole page. It works, but it is a second
+ * design in the middle of the product, and the public pricing page had already grown its own cards
+ * — so both now render `components/billing/PlanCards`, and Clerk owns only the checkout drawer
+ * behind `CheckoutButton` (in development that is Clerk's shared test gateway, so no Stripe
+ * account is involved).
  *
  * Nothing on this page is a gate, and PapaFlow stores nothing about the subscription: the new plan
  * arrives on the *next* session token (`pla`/`fea`, ≤ 60 s), which is what Convex, `<Show>` and
  * `has()` all read. Until it refreshes, the walls elsewhere in the app still stand — which is the
- * honest behaviour, because the engine would refuse the run too.
+ * honest behaviour, because the engine would refuse the run too. `CurrentPlanCard` says so.
  */
 export default function BillingPage() {
   return (
@@ -30,8 +33,7 @@ export default function BillingPage() {
         <div className="flex flex-col gap-1">
           <h1 className="text-xl font-semibold tracking-tight">Plans</h1>
           <p className="text-sm text-muted-foreground">
-            Plans apply to the whole organisation, and everyone in it gets the features. Changes
-            take up to a minute to reach the app while your session token refreshes.
+            Plans apply to the whole organisation, and everyone in it gets the features.
           </p>
         </div>
         <Link href="/settings" className={buttonVariants({ variant: "outline", size: "sm" })}>
@@ -40,12 +42,14 @@ export default function BillingPage() {
         </Link>
       </div>
 
-      <PricingTable
-        for="organization"
-        highlightedPlan="pro"
-        newSubscriptionRedirectUrl="/settings/billing"
-        fallback={<Skeleton className="h-96 w-full rounded-xl" />}
-      />
+      {/* `?upgraded=1` comes back from a checkout that started on the public pricing page. */}
+      <Suspense fallback={null}>
+        <UpgradedNotice />
+      </Suspense>
+
+      <CurrentPlanCard />
+
+      <PlanCards variant="settings" redirectUrl="/settings/billing" />
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
-import { PlanCards } from "@/components/marketing/PlanCards";
+import { PlanCards } from "@/components/billing/PlanCards";
 import { Eyebrow, ctaPrimary, ctaSecondary } from "@/components/marketing/primitives";
 import { PRICING } from "@/lib/plans";
 
@@ -69,8 +69,14 @@ export default function PricingPage() {
         </p>
       </section>
 
+      {/*
+        The same cards as Settings → Plans, in marketing dress. They read Clerk's plans and the
+        org's subscription from the client, so this page stays a static prerender: a visitor with
+        no session gets the list prices from `lib/plans.ts` in the HTML and never waits on billing.
+        A checkout started here lands back inside the app, which is where the plan takes effect.
+      */}
       <section className={`${SECTION} pb-20`}>
-        <PlanCards />
+        <PlanCards variant="marketing" redirectUrl="/settings/billing?upgraded=1" />
       </section>
 
       <section className="scroll-mt-20 border-t border-border bg-muted/25 py-20" id="faq">

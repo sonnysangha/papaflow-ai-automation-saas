@@ -15,8 +15,12 @@ import { NODES } from "@/nodes/registry";
 import { BuilderPanel } from "./BuilderPanel";
 import { Canvas } from "./Canvas";
 import { fromStoredGraph, type RunNodeState, type SaveState } from "./graph-io";
+import { latestStepByNode, type RunStepRow } from "./last-run";
 import { NodeSidebar } from "./NodeSidebar";
 import { RunBar, type RunWorkflowAction } from "./RunBar";
+
+/** Stable identity for "no run yet", so the config panel does not re-memo on every render. */
+const EMPTY_STEPS: RunStepRow[] = [];
 
 /** The editor fills what is left of the viewport under the 3.5rem app header. */
 const SHELL = "flex h-[calc(100vh-3.5rem)] flex-col";
@@ -138,16 +142,12 @@ export function Editor({
   // canvas dims the other edges from, and the output the variable picker reads real paths off.
   //
   // A node on a Loop body has one row per pass, so the canvas paints the latest of them: the ring
-  // follows the item being worked on rather than freezing on the first one. Rows arrive in creation
-  // order, and `iteration` breaks the tie explicitly.
+  // follows the item being worked on rather than freezing on the first one. `latestStepByNode` is
+  // the same "last row wins" rule the config panel's Last run section reads by.
   const runByNode = useMemo(() => {
     const byNode: Record<string, RunNodeState> = {};
-    const passes: Record<string, number> = {};
-    for (const step of steps ?? []) {
-      const pass = step.iteration ?? 0;
-      if (byNode[step.nodeId] && pass < passes[step.nodeId]) continue;
-      passes[step.nodeId] = pass;
-      byNode[step.nodeId] = {
+    for (const [nodeId, step] of Object.entries(latestStepByNode(steps ?? []))) {
+      byNode[nodeId] = {
         status: step.status,
         handle: step.handle,
         output: step.output,
@@ -208,6 +208,7 @@ export function Editor({
                 key={workflow._id}
                 workflow={workflow}
                 runByNode={runByNode}
+                steps={steps ?? EMPTY_STEPS}
                 onSaveStateChange={setSaveState}
               />
             </div>

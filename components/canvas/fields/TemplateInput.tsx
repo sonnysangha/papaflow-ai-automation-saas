@@ -6,7 +6,8 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
-import { VariablePicker, type VariableGroup } from "../VariablePicker";
+import { VariablePicker } from "../VariablePicker";
+import type { VariableGroup } from "../variables";
 
 export type TemplateInputProps = {
   id: string;

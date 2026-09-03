@@ -49,6 +49,7 @@ import {
   type StoredGraph,
   type WorkflowNodeType,
 } from "./graph-io";
+import type { RunStepRow } from "./last-run";
 import { isTypingTarget } from "./shortcuts";
 import { WorkflowNode } from "./WorkflowNode";
 
@@ -69,6 +70,8 @@ type CanvasProps = {
   workflow: WorkflowDoc;
   /** Live state per node id from the latest run; anything missing is idle. */
   runByNode: Record<string, RunNodeState>;
+  /** The latest run's step rows, which the config panel reads real input and output data off. */
+  steps: readonly RunStepRow[];
   onSaveStateChange: (state: SaveState) => void;
 };
 
@@ -85,7 +88,7 @@ function convexErrorData(error: unknown): Record<string, unknown> | null {
  * `workflows.saveGraph` with the version we last saw, so a Builder agent or a second tab
  * writing at the same time is detected instead of silently overwritten.
  */
-export function Canvas({ workflow, runByNode, onSaveStateChange }: CanvasProps) {
+export function Canvas({ workflow, runByNode, steps, onSaveStateChange }: CanvasProps) {
   const saveGraph = useMutation(api.workflows.saveGraph);
   const { screenToFlowPosition, setViewport } = useReactFlow<WorkflowNodeType, Edge>();
 
@@ -293,12 +296,6 @@ export function Canvas({ workflow, runByNode, onSaveStateChange }: CanvasProps) 
     );
   }, [setNodes]);
 
-  const runOutputs = useMemo(() => {
-    const outputs: Record<string, unknown> = {};
-    for (const [nodeId, state] of Object.entries(runByNode)) outputs[nodeId] = state.output;
-    return outputs;
-  }, [runByNode]);
-
   /**
    * Branch feedback: once a node has finished, the edge leaving the handle its step recorded is
    * drawn in the primary colour and the rest are dimmed, which is what makes an untaken Condition
@@ -435,7 +432,7 @@ export function Canvas({ workflow, runByNode, onSaveStateChange }: CanvasProps) 
             // Read straight off the live document, not the seeded snapshot: rotating the secret in
             // another tab has to change the URL this panel shows.
             webhookSecret={workflow.webhookSecret}
-            runOutputs={runOutputs}
+            steps={steps}
             setNodes={setNodes}
             onClose={deselect}
           />

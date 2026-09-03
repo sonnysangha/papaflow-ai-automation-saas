@@ -35,10 +35,12 @@ import {
   type WorkflowNodeData,
   type WorkflowNodeType,
 } from "./graph-io";
+import { lastRunFor, type RunStepRow } from "./last-run";
+import { LastRunSection } from "./LastRunSection";
 import { NodeIcon } from "./node-icon";
 import { resolvePickerKind } from "./picker-kind";
 import { ScheduleConfig } from "./ScheduleConfig";
-import { buildVariableGroups, type VariableGroup } from "./VariablePicker";
+import { buildVariableGroups, type VariableGroup } from "./variables";
 
 /** Property names that are prose rather than a value, and get a textarea. */
 const MULTILINE_NAMES = new Set(["text", "body", "prompt", "instructions", "sample"]);
@@ -356,8 +358,8 @@ export type ConfigPanelProps = {
   /** The workflow being edited: the Webhook trigger's URL is built from these two. */
   workflowId: Id<"workflows">;
   webhookSecret: string;
-  /** Latest run output per node id, for the observed half of the variable picker. */
-  runOutputs: Record<string, unknown>;
+  /** The latest run's step rows: the Last run section, and the observed half of the picker. */
+  steps: readonly RunStepRow[];
   setNodes: (updater: (nodes: WorkflowNodeType[]) => WorkflowNodeType[]) => void;
   onClose: () => void;
 };
@@ -374,7 +376,7 @@ export function ConfigPanel({
   edges,
   workflowId,
   webhookSecret,
-  runOutputs,
+  steps,
   setNodes,
   onClose,
 }: ConfigPanelProps) {
@@ -382,9 +384,15 @@ export function ConfigPanel({
   const [keyDraft, setKeyDraft] = useState(node.data.key);
 
   const schema = useMemo(() => inputsSchema(definition), [definition]);
+  // The last run, twice over: the roots this node can reference (with the values they held) and
+  // this node's own step, which the Last run section shows at the top of the panel.
+  const lastRun = useMemo(
+    () => lastRunFor({ nodeId: node.id, nodes, edges, steps }),
+    [edges, node.id, nodes, steps],
+  );
   const groups = useMemo(
-    () => buildVariableGroups({ nodeId: node.id, nodes, edges, runOutputs }),
-    [edges, node.id, nodes, runOutputs],
+    () => buildVariableGroups({ nodeId: node.id, nodes, edges, sources: lastRun.sources }),
+    [edges, lastRun.sources, node.id, nodes],
   );
   const takenKeys = useMemo(
     () => new Set(nodes.filter((entry) => entry.id !== node.id).map((entry) => entry.data.key)),
@@ -501,6 +509,15 @@ export function ConfigPanel({
 
       <ScrollArea className="min-h-0 flex-1">
         <div className="space-y-4 p-3">
+          {/* What this node last ran with, before the form that changes what it runs with next. */}
+          <LastRunSection
+            nodeId={node.id}
+            run={lastRun.self}
+            // A trigger's only "source" is itself, and its own payload does not exist yet when it
+            // runs — so it gets no hint about inserting variables.
+            hasSources={lastRun.sources.some((source) => source.nodeId !== node.id)}
+          />
+
           <div className="space-y-1.5">
             <Label htmlFor={`${node.id}-label`}>Name</Label>
             <Input

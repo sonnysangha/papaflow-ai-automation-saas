@@ -1,7 +1,6 @@
 "use client";
 
 import { useRef, useState } from "react";
-import type { Edge } from "@xyflow/react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -11,125 +10,51 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
+  CommandShortcut,
 } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
-import { outputPaths, type OutputPath } from "@/nodes/paths";
-import { NODES } from "@/nodes/registry";
-import { loopFor } from "@/workflows/graph";
 
-import { upstreamNodeIds, type WorkflowNodeType } from "./graph-io";
-import { pathsFromValue } from "./paths-from-value";
-
-/** One insertable template path, already prefixed with its root (`http_request_1.body`). */
-export type VariableEntry = {
-  path: string;
-  type: string;
-  /** True when the path came from the last run's output rather than the node's output schema. */
-  observed: boolean;
-};
-
-export type VariableGroup = {
-  /** Root of every entry in the group — a node key, or `trigger`. */
-  key: string;
-  label: string;
-  entries: VariableEntry[];
-};
-
-/** Schema paths first, then anything the last run showed that the schema did not describe. */
-function mergePaths(schema: OutputPath[], observed: OutputPath[]): VariableEntry[] {
-  const entries: VariableEntry[] = schema.map((path) => ({ ...path, observed: false }));
-  const seen = new Set(entries.map((entry) => entry.path));
-  for (const path of observed) {
-    if (seen.has(path.path)) continue;
-    seen.add(path.path);
-    entries.push({ ...path, observed: true });
-  }
-  return entries;
-}
-
-/** A definition's `outputs` may be any zod schema; a conversion failure must not blank the list. */
-function schemaPaths(nodeType: string): OutputPath[] {
-  const definition = NODES[nodeType];
-  if (!definition) return [];
-  try {
-    return outputPaths(definition.outputs);
-  } catch {
-    return [];
-  }
-}
-
-function prefixed(root: string, paths: VariableEntry[]): VariableEntry[] {
-  return paths.map((entry) => ({ ...entry, path: `${root}.${entry.path}` }));
-}
+import { variableEntryLabel, type VariableEntry, type VariableGroup } from "./variables";
 
 /**
- * What the picker offers for one node: every ancestor's output, nearest first, plus the reserved
- * roots — `trigger` always, and `$item` when this node sits on a Loop body. Each group leads with
- * the node itself (`{{ key }}` is the whole output) and then its paths — the ones its `outputs`
- * schema declares, followed by the ones the latest run showed.
+ * One offered path: what to type, what type it is, and — once the workflow has run — what was
+ * actually sitting there. The preview is the point of the row: `body.items[0].id` means nothing
+ * until you can see `ord_18f2` next to it.
  */
-export function buildVariableGroups({
-  nodeId,
-  nodes,
-  edges,
-  runOutputs,
-}: {
-  nodeId: string;
-  nodes: readonly WorkflowNodeType[];
-  edges: readonly Edge[];
-  /** Latest run output per node id. */
-  runOutputs: Record<string, unknown>;
-}): VariableGroup[] {
-  const byId = new Map(nodes.map((entry) => [entry.id, entry]));
-  const groups: VariableGroup[] = [];
-
-  for (const id of upstreamNodeIds(edges, nodeId)) {
-    const upstream = byId.get(id);
-    if (!upstream || !upstream.data.key) continue;
-    const paths = mergePaths(schemaPaths(upstream.data.nodeType), pathsFromValue(runOutputs[id]));
-    groups.push({
-      key: upstream.data.key,
-      label: `${upstream.data.label} · ${upstream.data.key}`,
-      entries: [
-        { path: upstream.data.key, type: "object", observed: false },
-        ...prefixed(upstream.data.key, paths),
-      ],
-    });
-  }
-
-  // `$item` is the other reserved root, and unlike `trigger` it only exists somewhere: on the body
-  // of a Loop, where every node runs once per element. `loopFor` is the same pure helper the
-  // orchestrator uses to decide what a body is, so the picker offers `{{ $item }}` exactly where
-  // the run will resolve it.
-  // No sub-paths: the item is whatever the loop's list holds, and no step row records it — the
-  // author knows its shape, and `{{ $item.name }}` can be typed on from here.
-  if (loopFor({ nodes: Object.fromEntries(byId), edges }, nodeId)) {
-    groups.push({
-      key: "$item",
-      label: "Loop item",
-      entries: [{ path: "$item", type: "any", observed: false }],
-    });
-  }
-
-  // `trigger` resolves to the trigger's payload in every node's context, whether or not the
-  // trigger is an ancestor of this node, so the group is listed even on a disconnected node.
-  const trigger = nodes.find((entry) => NODES[entry.data.nodeType]?.category === "trigger");
-  if (trigger) {
-    groups.push({
-      key: "trigger",
-      label: "Trigger payload",
-      entries: [
-        { path: "trigger", type: "object", observed: false },
-        ...prefixed(
-          "trigger",
-          pathsFromValue(runOutputs[trigger.id]).map((path) => ({ ...path, observed: true })),
-        ),
-      ],
-    });
-  }
-
-  return groups;
+function VariableRow({ entry, onSelect }: { entry: VariableEntry; onSelect: () => void }) {
+  return (
+    <CommandItem
+      value={entry.path}
+      // Searching for a value you can see in the list has to find its path.
+      keywords={entry.preview ? [entry.preview] : undefined}
+      aria-label={variableEntryLabel(entry)}
+      className="flex-col items-start gap-0.5 py-1.5"
+      onSelect={onSelect}
+    >
+      <div className="flex w-full items-center gap-1.5">
+        <span className="truncate font-mono text-xs">{entry.path}</span>
+        {entry.observed ? (
+          <span
+            className="shrink-0 rounded-sm border border-border px-1 text-[10px] leading-4 text-muted-foreground"
+            title="Only in the last run's data — the node's schema does not declare it"
+          >
+            from last run
+          </span>
+        ) : null}
+        {/* A `command-shortcut` slot is also what tells the item's tick to stay out of the way:
+            nothing here is ever "checked", and in a two-line row it would leave a gap. */}
+        <CommandShortcut className="shrink-0 text-[10px] tracking-normal">
+          {entry.type}
+        </CommandShortcut>
+      </div>
+      {entry.preview ? (
+        <span className="w-full truncate font-mono text-[11px] text-muted-foreground">
+          {entry.preview}
+        </span>
+      ) : null}
+    </CommandItem>
+  );
 }
 
 /**
@@ -180,27 +105,29 @@ export function VariablePicker({
               No variables here yet — connect this node to one above it.
             </CommandEmpty>
             {groups.map((group) => (
-              <CommandGroup key={group.key} heading={group.label}>
+              <CommandGroup
+                key={group.key}
+                value={group.key}
+                heading={
+                  <span className="flex items-center gap-1.5">
+                    <span className="truncate">{group.label}</span>
+                    {group.ran ? (
+                      <span className="shrink-0 font-normal text-muted-foreground/70">
+                        · last run
+                      </span>
+                    ) : null}
+                  </span>
+                }
+              >
                 {group.entries.map((entry) => (
-                  <CommandItem
+                  <VariableRow
                     key={entry.path}
-                    value={entry.path}
+                    entry={entry}
                     onSelect={() => {
                       onInsert(`{{ ${entry.path} }}`);
                       setOpen(false);
                     }}
-                  >
-                    <span className="truncate font-mono text-xs">{entry.path}</span>
-                    <span
-                      className={cn(
-                        "ml-auto shrink-0 text-[10px]",
-                        entry.observed ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground",
-                      )}
-                      title={entry.observed ? "Seen in the last run" : "From the node's output schema"}
-                    >
-                      {entry.type}
-                    </span>
-                  </CommandItem>
+                  />
                 ))}
               </CommandGroup>
             ))}

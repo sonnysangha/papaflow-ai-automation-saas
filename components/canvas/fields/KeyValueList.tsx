@@ -5,7 +5,7 @@ import { PlusIcon, XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
-import type { VariableGroup } from "../VariablePicker";
+import type { VariableGroup } from "../variables";
 import { TemplateInput } from "./TemplateInput";
 
 export type KeyValuePair = { key: string; value: string };

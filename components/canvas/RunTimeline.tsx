@@ -277,6 +277,9 @@ export type RunTimelineProps = {
   onSelectNode: (nodeId: string) => void;
   /** The node the canvas has selected, so the matching rows read as "this one". */
   selectedNodeId?: string;
+  /** The newest run's id and status — the panel opens by itself when there is one to show. */
+  latestRunId?: string | null;
+  latestStatus?: string | null;
 };
 
 export function RunTimeline({
@@ -284,8 +287,19 @@ export function RunTimeline({
   graph,
   onSelectNode,
   selectedNodeId,
+  latestRunId,
+  latestStatus,
 }: RunTimelineProps) {
-  const [open, setOpen] = useState(false);
+  // Open whenever there is a run to show, and again the moment a new run starts; collapsing it by
+  // hand sticks until the next run. Deriving `open` keeps this out of an effect: `collapsedFor`
+  // remembers which run the user closed the panel on, so a newer id simply stops matching.
+  const [collapsedFor, setCollapsedFor] = useState<string | null | undefined>(undefined);
+  const [openedByUser, setOpenedByUser] = useState(false);
+  const open = openedByUser || (Boolean(latestRunId) && collapsedFor !== latestRunId);
+  const setOpen = (next: boolean) => {
+    setOpenedByUser(next);
+    if (!next) setCollapsedFor(latestRunId ?? null);
+  };
   const [height, setHeight] = useState(DEFAULT_HEIGHT);
   // Null means "whatever is newest", which is what keeps the panel following a run you just started.
   const [pickedId, setPickedId] = useState<Id<"executions"> | null>(null);
@@ -355,6 +369,7 @@ export function RunTimeline({
         >
           <GanttChartIcon className="size-3.5" />
           Runs
+          {latestStatus ? <span className="text-muted-foreground/70">· latest {latestStatus}</span> : null}
           <ChevronUpIcon className="size-3.5" />
         </Button>
       </div>

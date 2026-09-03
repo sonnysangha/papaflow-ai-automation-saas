@@ -358,6 +358,8 @@ export function Editor({
               graph={workflow.graph}
               selectedNodeId={selectedNodeId ?? undefined}
               onSelectNode={focusOnNode}
+              latestRunId={latest?._id ?? null}
+              latestStatus={latest?.status ?? null}
             />
           </div>
 

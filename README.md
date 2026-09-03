@@ -98,6 +98,26 @@ Telegram, Stripe, Slack and Discord are the other way round — *they* call *you
 origin they can reach: the Vercel deployment, or a tunnel (`ngrok http 3000`, `cloudflared tunnel`)
 with `APP_ORIGIN` set to it. Telegram additionally refuses to register a webhook that is not `https`.
 
+## Templates
+
+`lib/templates.ts` ships 13 starting points. Pick one from **New workflow → Templates** (or the gallery on an empty canvas); anything that needs a connection is listed on the card and greyed out on the canvas until you choose one on the Connections page.
+
+| Template | What it shows off |
+|---|---|
+| Support inbox autopilot | Webhook → Classify → Route by value: bugs become GitHub issues, billing goes to a human by email, feature requests land in Notion, everything else gets an AI-drafted reply. |
+| Morning tech digest | Weekday cron → Hacker News front page → For each story an LLM one-liner → one digest email. |
+| Stripe payment → welcome sequence | Stripe `checkout.session.completed` → AI welcome email → Airtable ledger row → **sleeps three days** → check-in email. |
+| Blog post with editorial approval | Form brief → outline → draft → Ask for approval in chat → Notion page, or an email back to the writer. |
+| Website watchdog with escalation | Every 5 minutes: HTTP check → Telegram alert → pause 5 minutes → re-check → email escalation only if it is still down. |
+| Telegram AI concierge | Telegram message → AI Agent (every connection in the workspace is a tool) → reply in the same chat. |
+| Meeting notes → action items | Form → Extract a list of actions → For each one a GitHub issue → summary email. |
+| Invoice intake with sign-off | Form → Extract vendor/amount/currency/due date → over 1,000 needs an approval → Airtable either way. |
+| Lead intake triage | Form → Classify urgency → Telegram ping or a polite email. |
+| Webhook to API call | Webhook → HTTP Request → Set values. |
+| Hourly endpoint check | Hourly schedule → HTTP → email. |
+| Approval before action | Manual → Ask for approval → both outcomes handled. |
+| Loop over a list | Manual → For each item → collect results. |
+
 ## Runtime agent
 
 The **AI Agent** node (`ai.agent`) does not call a model itself. It opens a session on the eve agent

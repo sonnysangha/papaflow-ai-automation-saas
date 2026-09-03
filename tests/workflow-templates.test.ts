@@ -22,9 +22,24 @@ import { NODES } from "@/nodes/registry";
  * problem may belong to.
  */
 describe("workflow templates", () => {
-  it("ships five starter workflows with unique ids", () => {
-    expect(WORKFLOW_TEMPLATES).toHaveLength(5);
-    expect(new Set(WORKFLOW_TEMPLATES.map((entry) => entry.id)).size).toBe(5);
+  it("ships thirteen starter workflows with unique ids, showcases first", () => {
+    expect(WORKFLOW_TEMPLATES).toHaveLength(13);
+    expect(new Set(WORKFLOW_TEMPLATES.map((entry) => entry.id)).size).toBe(13);
+    expect(WORKFLOW_TEMPLATES.map((entry) => entry.id)).toEqual([
+      "support-autopilot",
+      "morning-digest",
+      "stripe-welcome",
+      "content-pipeline",
+      "site-watchdog",
+      "telegram-concierge",
+      "meeting-actions",
+      "invoice-approval",
+      "lead-intake",
+      "webhook-relay",
+      "hourly-check",
+      "approval-gate",
+      "loop-list",
+    ]);
   });
 
   it.each(WORKFLOW_TEMPLATES.map((entry) => [entry.id, entry] as const))(
@@ -99,6 +114,75 @@ describe("workflow templates", () => {
   });
 });
 
+/**
+ * The eight showcase templates are the ones the gallery leads with, so the parts of them that make
+ * the demo — the four-way Switch, the Loop's two handles, the three-day sleep, the agent's feature
+ * gate — are asserted by name rather than left to the generic checks above.
+ */
+describe("showcase templates", () => {
+  /** One template's graph by id, or a failure that names the missing template rather than a null. */
+  function graphOf(id: string): TemplateGraph {
+    const entry = templateById(id);
+    expect(entry, id).toBeDefined();
+    return entry!.graph;
+  }
+
+  function nodeOf(graph: TemplateGraph, nodeId: string) {
+    const found = graph.nodes.find((entry) => entry.id === nodeId);
+    expect(found, nodeId).toBeDefined();
+    return found!;
+  }
+
+  function handlesOut(graph: TemplateGraph, source: string): string[] {
+    return graph.edges
+      .filter((entry) => entry.source === source)
+      .map((entry) => entry.sourceHandle ?? "out");
+  }
+
+  it("routes support-autopilot down one arm per label, plus a default", () => {
+    const support = graphOf("support-autopilot");
+    expect(nodeOf(support, "route").data.nodeType).toBe("logic.switch");
+    // Every case is wired, and nothing is wired to a handle the Switch does not offer — the
+    // handle ids are the case strings verbatim, space included.
+    expect(handlesOut(support, "route").sort()).toEqual(
+      ["billing", "bug", "default", "feature request"],
+    );
+  });
+
+  it("hangs one chain off the morning digest's loop and reads the results after it", () => {
+    const digest = graphOf("morning-digest");
+    expect(nodeOf(digest, "stories").data.nodeType).toBe("logic.loop");
+
+    // v1 of the Loop follows a single linear chain out of `each`, so a second edge there would be
+    // a body that silently never runs.
+    const each = digest.edges.filter(
+      (entry) => entry.source === "stories" && entry.sourceHandle === "each",
+    );
+    expect(each).toHaveLength(1);
+    expect(digest.edges.filter((entry) => entry.source === each[0].target)).toEqual([]);
+
+    const done = digest.edges.filter(
+      (entry) => entry.source === "stories" && entry.sourceHandle === "done",
+    );
+    expect(done).toHaveLength(1);
+    // Everything after `done` reads the collected answers, not `{{ $item }}`, which is out of scope.
+    expect(JSON.stringify(nodeOf(digest, done[0].target).data.inputs)).toContain(
+      "{{ stories.results }}",
+    );
+  });
+
+  it("sleeps three days in the middle of the Stripe welcome sequence", () => {
+    const welcome = graphOf("stripe-welcome");
+    const waits = welcome.nodes.filter((entry) => entry.data.nodeType === "logic.wait");
+    expect(waits).toHaveLength(1);
+    expect(waits[0].data.inputs).toMatchObject({ mode: "duration", seconds: 259200 });
+  });
+
+  it("reports the Telegram concierge as the one template that needs the agent feature", () => {
+    expect(templateById("telegram-concierge")!.requiresFeature).toBe("ai_agent");
+  });
+});
+
 describe("templateSetup", () => {
   it("names the AI and Telegram connections the lead template needs", () => {
     const lead = templateById("lead-intake");
@@ -115,12 +199,40 @@ describe("templateSetup", () => {
     const hourly = templateById("hourly-check");
     expect(templateSetup(hourly!.graph)).toEqual([]);
   });
+
+  it("names only the Telegram nodes in the watchdog", () => {
+    // The watchdog also calls an endpoint twice and can email the on-call, and neither of those
+    // needs connecting: HTTP Request works without a connection and Send email falls back to the
+    // platform key. Only the two chat messages are the reader's to finish.
+    const watchdog = templateById("site-watchdog");
+    expect(templateSetup(watchdog!.graph)).toEqual([
+      { nodeId: "alert", label: "Warn the team", credential: "telegram" },
+      { nodeId: "recovered", label: "Say it recovered", credential: "telegram" },
+    ]);
+  });
 });
 
 describe("templateFeature", () => {
-  it("finds no plan-gated node in the starter templates", () => {
+  it("derives each template's feature from the nodes it actually uses", () => {
+    // Written down here so a node becoming plan-gated shows up as a failing test rather than as a
+    // free template that quietly stops running.
+    const gated = Object.fromEntries(
+      WORKFLOW_TEMPLATES.filter((entry) => entry.requiresFeature).map((entry) => [
+        entry.id,
+        entry.requiresFeature,
+      ]),
+    );
+    expect(gated).toEqual({
+      "support-autopilot": "pro_connectors",
+      "stripe-welcome": "pro_connectors",
+      "content-pipeline": "pro_connectors",
+      "telegram-concierge": "ai_agent",
+      "invoice-approval": "pro_connectors",
+    });
+
+    // …and the field is never written by hand: it is whatever the registry says about the graph.
     for (const entry of WORKFLOW_TEMPLATES) {
-      expect(entry.requiresFeature, entry.id).toBeUndefined();
+      expect(entry.requiresFeature, entry.id).toBe(templateFeature(entry.graph));
     }
   });
 

@@ -53,6 +53,16 @@ export const CHAT_PROVIDERS: readonly string[] = ["slack", "discord-bot", "teleg
 export const TARGETS_PICKER = "targets";
 
 /**
+ * The picker kind an AI node's `model` field asks for.
+ *
+ * Unlike every other kind, no connector implements it: each AI connector's `test()` already writes
+ * the provider's own list into `meta.models` at connect time (CLAUDE.md rule 11), so
+ * `pickConnectionOptions` answers this one from the stored row — no provider round-trip, and the
+ * sealed credential is never opened to fill a dropdown.
+ */
+export const MODELS_PICKER = "models";
+
+/**
  * The kinds that hold exactly one bearer-style token — the only ones a node can authenticate with
  * generically. A `webhookUrl` is an address, a `signingSecret` verifies what arrives; neither is
  * something to send in a header.

@@ -4,7 +4,7 @@
 // Client Component or any browser bundle.
 import { FatalError } from "workflow";
 
-import type { ConnectorDef } from "@/connectors/define";
+import { MODELS_PICKER, type ConnectorDef } from "@/connectors/define";
 import { CONNECTORS } from "@/connectors/registry";
 import * as engine from "@/lib/engine-client";
 import { featureLabel } from "@/lib/plans";
@@ -159,10 +159,41 @@ export async function withConnectionSecret<T>(
 }
 
 /**
+ * The models a connection captured at connect time, as picker options.
+ *
+ * Only the strings in `meta.models` are read. A connection's `meta` is written by its connector's
+ * `test()` and holds other bookkeeping beside the list (`fetchedAt`, OpenRouter's `limitRemaining`,
+ * Telegram's known chats), none of which belongs in a dropdown — and no part of `meta` is ever the
+ * credential, which lives sealed in a column of its own (CLAUDE.md rule 1).
+ *
+ * The id *is* the label: a provider's list endpoint has no display name worth preferring, and what
+ * the user picks has to be exactly what the node sends back to the provider.
+ */
+export function modelOptions(meta: Record<string, unknown>): { id: string; label: string }[] {
+  if (!Array.isArray(meta.models)) return [];
+
+  const seen = new Set<string>();
+  const options: { id: string; label: string }[] = [];
+  for (const entry of meta.models) {
+    if (typeof entry !== "string") continue;
+    const id = entry.trim();
+    if (id.length === 0 || seen.has(id)) continue;
+    seen.add(id);
+    options.push({ id, label: id });
+  }
+  return options;
+}
+
+/**
  * What `POST /api/connections/:id/pick` answers with: the remote objects a config field can offer
  * (Slack channels, Discord guilds, Telegram chats). The credential does the call; only ids and
  * labels come back, which is the whole reason the picker is a server round-trip rather than a
  * client fetch with a token.
+ *
+ * `models` is the exception that needs no call at all: every AI connector's `test()` already wrote
+ * the provider's list into `meta.models` (CLAUDE.md rule 11), so the AI nodes' model dropdown is
+ * answered from the stored row. That is why an AI connector implements no `pick` — and why one
+ * that grows a list of its own (voices, say) still gets a model dropdown for free.
  */
 export async function pickConnectionOptions(args: {
   connectionId: string;
@@ -170,7 +201,10 @@ export async function pickConnectionOptions(args: {
   kind: string;
 }): Promise<{ id: string; label: string }[]> {
   return await withConnectionSecret(args, async ({ def, secret, meta }) => {
+    const models = args.kind === MODELS_PICKER;
+
     if (!def.pick) {
+      if (models) return modelOptions(meta);
       throw new ConnectionRequestError(
         400,
         "no_picker",
@@ -179,7 +213,10 @@ export async function pickConnectionOptions(args: {
     }
 
     try {
-      return await def.pick(args.kind, secret, meta);
+      const options = await def.pick(args.kind, secret, meta);
+      // A connector answers `[]` for a kind it does not know, which for `models` means "ask the
+      // row" rather than "there are none".
+      return models && options.length === 0 ? modelOptions(meta) : options;
     } catch (cause) {
       // A connector's picker throws with the provider's own words; they are safe (`invalid_auth`,
       // `missing_scope`) but they are not the user's language, so only the log gets them.

@@ -42,7 +42,7 @@ export const llmNode = defineNode({
   async run({ inputs, credential }) {
     const { provider, apiKey } = aiCredential(credential);
 
-    const { generateText, Output } = await import("ai"); // lazy: keeps the ai package out of the client bundle
+    const { generateText } = await import("ai"); // lazy: keeps the ai package out of the client bundle
     const result = await generateText({
       model: await modelFor(provider, apiKey, inputs.model),
       instructions: inputs.instructions,

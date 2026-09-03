@@ -93,7 +93,7 @@ export function NodeCardBody({
   const needsSetup = setup.state !== "ready";
 
   return (
-    <div className="flex min-w-0 flex-1 flex-col justify-center gap-1.5 p-3">
+    <div className="flex min-w-0 flex-1 flex-col justify-center gap-1.5 p-3 text-card-foreground">
       <div className="flex min-w-0 items-center gap-2">
         <span
           aria-hidden
@@ -175,7 +175,7 @@ export function WorkflowNode({ id, data, selected }: NodeProps<WorkflowNodeType>
               className={cn(
                 // `h-full` so a resized node's card fills the box React Flow sized for it rather
                 // than sitting content-height inside its own resize controls.
-                "relative flex h-full items-stretch rounded-xl border border-border bg-card text-left shadow-sm transition-shadow hover:shadow-md",
+                "relative flex h-full items-stretch rounded-xl border border-border bg-card text-left text-card-foreground shadow-sm transition-shadow hover:shadow-md",
                 "focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
                 branching ? "min-w-[280px]" : "min-w-[240px]",
                 // Not finished yet, and you can see it from across the canvas.

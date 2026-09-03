@@ -20,6 +20,7 @@ import {
   type Viewport,
 } from "@xyflow/react";
 import { useMutation, useQuery } from "convex/react";
+import { useTheme } from "next-themes";
 import type { FunctionReturnType } from "convex/server";
 import { ConvexError } from "convex/values";
 import { LayoutTemplateIcon, SparklesIcon, WorkflowIcon } from "lucide-react";
@@ -177,6 +178,22 @@ export function Canvas({
 }: CanvasProps) {
   const saveGraph = useMutation(api.workflows.saveGraph);
   const { fitView, screenToFlowPosition, setViewport } = useReactFlow<WorkflowNodeType, Edge>();
+
+  /**
+   * React Flow's colour mode, taken from the app's theme rather than from the operating system.
+   *
+   * A `colorMode` of “system” reads `prefers-color-scheme` and puts `class="dark"` on the wrapper —
+   * a different question from the one the user answered with the header's Light/Dark/System toggle.
+   * Worse, `dark` is exactly the class the app's tokens are redefined under (`.dark { --background
+   * … }`) and the selector Tailwind's `dark:` variant matches, so a dark OS with the app set to
+   * Light turned the whole flow subtree dark from the inside: a black pane, a dark minimap, and
+   * near-white node text on white cards.
+   *
+   * `resolvedTheme` is undefined until next-themes has mounted; light is the safe first paint, and
+   * the rules in `app/globals.css` keep every surface on app tokens either way.
+   */
+  const { resolvedTheme } = useTheme();
+  const colorMode = resolvedTheme === "dark" ? "dark" : "light";
 
   // Seeded once. `key` is the normalised form of what the server holds, so the first render never
   // counts as an edit and selection or drag noise never marks the canvas dirty.
@@ -784,7 +801,7 @@ export function Canvas({
               defaultViewport={initial.graph.viewport}
               fitView={!initial.graph.viewport}
               deleteKeyCode={["Backspace", "Delete"]}
-              colorMode="system"
+              colorMode={colorMode}
               minZoom={0.2}
               className="bg-background"
               aria-label="Workflow canvas"

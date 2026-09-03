@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildConnectorTools,
+  connectorToolCalls,
   type ToolConnection,
 } from "@/agents/runtime/lib/connector-tools";
 
@@ -144,6 +145,45 @@ describe("buildConnectorTools", () => {
     expect(descriptors).not.toMatch(/token|apiKey|secret/i);
     // Ids and labels are the only connection facts a description may carry.
     expect(descriptors).toContain("Acme");
+  });
+
+  it("captures only JSON-serialisable values, so eve can persist every descriptor", () => {
+    // eve's bundler snapshots each `execute` closure into a durable descriptor and rejects the
+    // *whole* resolver result — every tool, not just the offending one — if any captured value is a
+    // function, a class instance, a Date, a Map or cyclic. A `ToolSpec` is all three of the first
+    // kinds (a zod schema, a `run`, a `describe`), which is why `execute` closes over nothing but the
+    // flat call payload and looks the spec up from module scope. A round trip that comes back
+    // strictly equal is the closest static check there is that the payload stayed flat.
+    const connections = [
+      connection({ provider: "slack" }),
+      connection({ provider: "telegram" }),
+      connection({ provider: "notion" }),
+      connection({ provider: "discord-webhook" }),
+    ];
+    const input = { orgId: "org_1", plan: "pro", executionId: "exec_1", connections };
+    const calls = connectorToolCalls(input);
+
+    // Every offered tool has a payload, or the guard is checking an empty list.
+    expect(calls.map((call) => call.toolName).sort()).toEqual(
+      Object.keys(buildConnectorTools(input)).sort(),
+    );
+
+    for (const call of calls) {
+      // `toStrictEqual`, not `toEqual`: it also fails on a dropped `undefined` property and on a
+      // value whose prototype changed, which is exactly how a non-plain capture would show up.
+      expect(JSON.parse(JSON.stringify(call))).toStrictEqual(call);
+    }
+
+    // `http_request` is the credential-less one; `null` rather than `undefined` so it survives.
+    const http = calls.find((call) => call.toolName === "http_request");
+    expect(http).toStrictEqual({
+      toolName: "http_request",
+      orgId: "org_1",
+      executionId: "exec_1",
+      plan: "pro",
+      connectionId: null,
+      connectionLabel: "",
+    });
   });
 });
 

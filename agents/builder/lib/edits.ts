@@ -9,10 +9,12 @@ import {
   type BuilderWorkflow,
   type EditIdentity,
 } from "../../../lib/builder-engine";
+import { isEngineUnavailable } from "../../../lib/engine-env";
 import { inputIssues, sourceHandlesFor, validateWorkflow } from "../../../lib/validate-workflow";
 import { NODES, nodeCatalogue } from "../../../nodes/registry";
 
 import type { BuilderSession } from "./session";
+import { viaEngine } from "./tool-result";
 
 /**
  * What the Builder's tools actually do, minus the tool boilerplate.
@@ -38,11 +40,16 @@ function identityOf(session: BuilderSession): EditIdentity {
   return { workflowId: session.workflowId, orgId: session.orgId, userId: session.userId };
 }
 
-/** Every Convex refusal becomes a sentence; anything else is passed through unchanged. */
+/**
+ * Every Convex refusal becomes a sentence the model can act on; an unreachable backend keeps its
+ * `EngineUnavailableError` class all the way up to the tool, which returns it as a terminal result
+ * instead of throwing something the model will retry (`./tool-result.ts`).
+ */
 async function convex<T>(operation: () => Promise<T>): Promise<T> {
   try {
-    return await operation();
+    return await viaEngine(operation);
   } catch (error) {
+    if (isEngineUnavailable(error)) throw error;
     throw new Error(builderErrorMessage(error));
   }
 }

@@ -1,6 +1,7 @@
 // Server only. Reads Clerk Billing from a process that has no Next.js request context.
 import { createClerkClient } from "@clerk/backend";
 
+import { EngineUnavailableError } from "@/lib/engine-env";
 import { DEFAULT_PLAN, isPlanSlug, type PlanSlug } from "@/lib/plans";
 
 /**
@@ -58,8 +59,10 @@ export async function orgPlanFromClerk(orgId: string): Promise<PlanSlug> {
 
   let plan: PlanSlug = DEFAULT_PLAN;
   try {
+    // The same class the Convex helpers throw for a missing variable: a plan lookup that fails for
+    // want of configuration is not a billing answer, and the log line below has to say which.
     const secretKey = process.env.CLERK_SECRET_KEY;
-    if (!secretKey) throw new Error("CLERK_SECRET_KEY is not set");
+    if (!secretKey) throw new EngineUnavailableError("billing-engine: CLERK_SECRET_KEY is not set");
     const client = createClerkClient({ secretKey });
     plan = planFromSubscription(await client.billing.getOrganizationBillingSubscription(orgId));
   } catch (cause) {

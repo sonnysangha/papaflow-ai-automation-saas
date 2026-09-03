@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { addNode } from "../lib/edits";
 import { requireBuilder } from "../lib/session";
+import { toolResult } from "../lib/tool-result";
 
 /**
  * Places one node on the canvas the user is looking at.
@@ -27,7 +28,9 @@ export default defineTool({
       .describe("Initial configuration, as in the node's input schema. May be filled in later."),
   }),
   async execute(args, ctx) {
-    const session = await requireBuilder(ctx);
-    return await addNode(session, args);
+    return await toolResult(async () => {
+      const session = await requireBuilder(ctx);
+      return await addNode(session, args);
+    });
   },
 });

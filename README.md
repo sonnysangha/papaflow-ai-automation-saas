@@ -101,13 +101,15 @@ save rather than raising a version conflict.
 
 Every push to `main` builds Production on Vercel (project `papaflow`, team `sonnysanghas-projects`): the build command in `vercel.ts` runs `npx convex deploy --cmd 'pnpm build' --cmd-url-env-var-name NEXT_PUBLIC_CONVEX_URL`, which pushes the Convex functions to the production deployment, compiles the Workflow SDK functions (`runGraph`, `scheduler`) and builds both eve services (`/eve/agents/runtime`, `/eve/agents/builder`). Live at https://papaflow.vercel.app.
 
-Vercel env (Production): `CONVEX_DEPLOY_KEY`, `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`, `NEXT_PUBLIC_CLERK_SIGN_IN_URL`, `NEXT_PUBLIC_CLERK_SIGN_UP_URL`, `ENGINE_SECRET`, `CREDENTIALS_KEK`, `APP_ORIGIN`. Convex production env: `CLERK_FRONTEND_API_URL`, `ENGINE_SECRET`. Never set `NEXT_PUBLIC_CONVEX_URL` or `CONVEX_DEPLOYMENT` on Vercel.
+Vercel env (Production): `CONVEX_DEPLOY_KEY`, `CONVEX_URL`, `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`, `NEXT_PUBLIC_CLERK_SIGN_IN_URL`, `NEXT_PUBLIC_CLERK_SIGN_UP_URL`, `ENGINE_SECRET`, `CREDENTIALS_KEK`, `APP_ORIGIN`. Convex production env: `CLERK_FRONTEND_API_URL`, `ENGINE_SECRET`. Never set `NEXT_PUBLIC_CONVEX_URL` or `CONVEX_DEPLOYMENT` on Vercel.
+
+`CONVEX_URL` is the production Convex deployment URL (`https://content-albatross-126.convex.cloud`), and it is what makes the two agents work in production. `convex deploy --cmd-url-env-var-name NEXT_PUBLIC_CONVEX_URL` injects that name into the **Next build process**, where Next inlines it into the Next bundle; the eve services (`/eve/agents/runtime`, `/eve/agents/builder`) are separate Vercel services that only see the project's environment variables, so without `CONVEX_URL` every Builder tool answers "service unavailable" and the Runtime agent resolves no connector tools. `lib/engine-env.ts` reads `CONVEX_URL` first and falls back to `NEXT_PUBLIC_CONVEX_URL`, which is why local development needs nothing extra.
 
 ## Stop points (things only you can do)
 
 - **Your own AI key** — add an OpenAI / Anthropic / Gemini / Groq connection on the Connections page; the LLM, Extract, Classify, AI Agent and Builder features need it (or `AI_GATEWAY_API_KEY` locally for the house model).
 - **Chat credentials** for a live Approval check — a Telegram bot token is the quickest; Slack needs its signing secret and the interactivity URL shown on the connection; Discord needs the public key and the interactions URL.
-- **Preview deployments** — generate a *preview* Convex deploy key in the Convex dashboard and add it as `CONVEX_DEPLOY_KEY` scoped to Preview, plus `APP_ORIGIN` and `NEXT_PUBLIC_CLERK_SIGN_UP_URL` on Preview.
+- **Preview deployments** — generate a *preview* Convex deploy key in the Convex dashboard and add it as `CONVEX_DEPLOY_KEY` scoped to Preview, plus `APP_ORIGIN` and `NEXT_PUBLIC_CLERK_SIGN_UP_URL` on Preview. A preview key creates a Convex deployment **per branch**, so the agents on a preview also need `CONVEX_URL` set to that branch's deployment URL (see `docs/PROVISIONING.md`).
 - **Team plan seats** — Clerk dashboard → Subscription plans → Plans for Organizations → Team → Seat-based.
 - **Going to a real domain** — `clerk deploy` (owned domain + DNS + your Stripe account), then repeat the Convex integration for the production Clerk instance.
 

@@ -5,6 +5,7 @@ import { start } from "workflow/api";
 
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { engineEnv } from "@/lib/engine-env";
 import type { Sealed } from "@/lib/vault";
 import { toRunGraph } from "@/workflows/graph";
 import { runGraph } from "@/workflows/run-graph";
@@ -49,14 +50,14 @@ export type CreateExecutionInput = CreateExecutionArgs;
 /**
  * A fresh HTTP client plus the shared secret. Built per call rather than at module load: the
  * Workflow SDK bundles step modules for the Vercel runtime, and a client captured at import time
- * would freeze whatever `NEXT_PUBLIC_CONVEX_URL` happened to be at build time.
+ * would freeze whatever the URL happened to be at build time.
+ *
+ * `engineEnv` reads `CONVEX_URL` first and `NEXT_PUBLIC_CONVEX_URL` second, and refuses with an
+ * `EngineUnavailableError` naming the variable that is missing (`lib/engine-env.ts` explains why
+ * the two spellings exist).
  */
 export function engineClient(): { client: ConvexHttpClient; secret: string } {
-  const url = process.env.NEXT_PUBLIC_CONVEX_URL;
-  const secret = process.env.ENGINE_SECRET;
-  if (!url || !secret) {
-    throw new Error("engine client: NEXT_PUBLIC_CONVEX_URL and ENGINE_SECRET are required");
-  }
+  const { url, secret } = engineEnv("engine client");
   return { client: new ConvexHttpClient(url), secret };
 }
 

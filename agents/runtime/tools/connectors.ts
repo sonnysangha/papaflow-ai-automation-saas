@@ -1,9 +1,9 @@
 import { defineDynamic } from "eve/tools";
 
-import { listOrgConnections } from "../../../lib/connections-engine";
 import { DEFAULT_PLAN } from "../../../lib/plans";
 
-import { buildConnectorTools, type ConnectorToolSet } from "../lib/connector-tools";
+import { attribute, resolveConnectorTools } from "../lib/connector-session";
+import type { ConnectorToolSet } from "../lib/connector-tools";
 
 /**
  * The org's connectors, resolved once per session.
@@ -16,43 +16,21 @@ import { buildConnectorTools, type ConnectorToolSet } from "../lib/connector-too
  * Everything durable-tool-shaped is deliberately absent: `ask()`, `sleep` and `createHook` belong in
  * static files under `tools/`, never in a tool a resolver returns (CLAUDE.md rule 8).
  *
- * `orgId` comes from the authenticated principal, never from the model or the message. A session
- * that authenticated with no org — `localDev()` during `eve dev`, which yields
- * `principalType: "local-dev"` and no attributes at all — gets `http_request` and nothing else,
- * because there is no organisation whose connections it could be allowed to use.
+ * `orgId` comes from the authenticated principal, never from the model or the message. Both the
+ * "no organisation" case (`localDev()` during `eve dev`, which yields `principalType: "local-dev"`
+ * and no attributes) and a Convex read that fails degrade to `http_request` alone, with a line in
+ * the log saying which — `../lib/connector-session.ts` holds that decision, and its unit tests.
  */
-
-/** Auth attributes are `string | readonly string[]`; every claim this agent reads is a string. */
-function attribute(
-  attributes: Readonly<Record<string, string | readonly string[]>> | undefined,
-  name: string,
-): string {
-  const value = attributes?.[name];
-  return typeof value === "string" ? value : "";
-}
-
 export default defineDynamic({
   events: {
     "session.started": async (_event, ctx): Promise<ConnectorToolSet> => {
       const attributes = ctx.session.auth.current?.attributes;
-      const orgId = attribute(attributes, "orgId");
-      const plan = attribute(attributes, "plan") || DEFAULT_PLAN;
-      const executionId = attribute(attributes, "executionId");
 
-      if (!orgId) {
-        console.log("runtime/connectors: session has no orgId; offering http_request only");
-        return buildConnectorTools({ orgId: "", plan, executionId, connections: [] });
-      }
-
-      const connections = await listOrgConnections(orgId);
-      const tools = buildConnectorTools({ orgId, plan, executionId, connections });
-      console.log("runtime/connectors: resolved", {
-        orgId,
-        plan,
-        tools: Object.keys(tools).join(","),
+      return await resolveConnectorTools({
+        orgId: attribute(attributes, "orgId"),
+        plan: attribute(attributes, "plan") || DEFAULT_PLAN,
+        executionId: attribute(attributes, "executionId"),
       });
-
-      return tools;
     },
   },
 });

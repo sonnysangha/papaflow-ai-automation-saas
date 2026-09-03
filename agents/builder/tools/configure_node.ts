@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { configureNode } from "../lib/edits";
 import { requireBuilder } from "../lib/session";
+import { toolResult } from "../lib/tool-result";
 
 /**
  * Fills in one node's configuration. A merge, not a replacement: fields the call does not mention
@@ -22,7 +23,9 @@ export default defineTool({
     label: z.string().optional().describe("Rename the node on the canvas."),
   }),
   async execute(args, ctx) {
-    const session = await requireBuilder(ctx);
-    return await configureNode(session, args);
+    return await toolResult(async () => {
+      const session = await requireBuilder(ctx);
+      return await configureNode(session, args);
+    });
   },
 });

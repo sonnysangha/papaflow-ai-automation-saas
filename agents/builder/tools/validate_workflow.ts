@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { validate } from "../lib/edits";
 import { requireBuilder } from "../lib/session";
+import { toolResult } from "../lib/tool-result";
 
 /**
  * The same questions the engine would ask at run time — one trigger, known node types, inputs that
@@ -16,7 +17,9 @@ export default defineTool({
     "Always call this before finish, and fix what it reports.",
   inputSchema: z.object({}),
   async execute(_input, ctx) {
-    const session = await requireBuilder(ctx);
-    return await validate(session);
+    return await toolResult(async () => {
+      const session = await requireBuilder(ctx);
+      return await validate(session);
+    });
   },
 });

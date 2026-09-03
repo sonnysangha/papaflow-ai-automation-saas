@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { connectNodes } from "../lib/edits";
 import { requireBuilder } from "../lib/session";
+import { toolResult } from "../lib/tool-result";
 
 /**
  * Draws one edge. `sourceHandle` is what makes a Condition a fork: the handles a node offers are in
@@ -22,7 +23,9 @@ export default defineTool({
       .describe('The branch to leave by, e.g. "true", "false", "each", "done", or a Switch case.'),
   }),
   async execute(args, ctx) {
-    const session = await requireBuilder(ctx);
-    return await connectNodes(session, args);
+    return await toolResult(async () => {
+      const session = await requireBuilder(ctx);
+      return await connectNodes(session, args);
+    });
   },
 });

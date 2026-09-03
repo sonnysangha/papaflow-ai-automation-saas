@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { removeNode } from "../lib/edits";
 import { requireBuilder } from "../lib/session";
+import { toolResult } from "../lib/tool-result";
 
 /**
  * Deletes a node and every edge touching it.
@@ -21,7 +22,9 @@ export default defineTool({
   }),
   approval: always(),
   async execute({ node }, ctx) {
-    const session = await requireBuilder(ctx);
-    return await removeNode(session, node);
+    return await toolResult(async () => {
+      const session = await requireBuilder(ctx);
+      return await removeNode(session, node);
+    });
   },
 });

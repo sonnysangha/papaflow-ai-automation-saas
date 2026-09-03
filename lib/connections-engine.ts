@@ -6,6 +6,7 @@ import { ConvexHttpClient } from "convex/browser";
 
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { engineEnv } from "@/lib/engine-env";
 import { aadFor, open } from "@/lib/envelope";
 
 /**
@@ -44,14 +45,14 @@ export type OpenedOrgConnection = {
 /**
  * A fresh client plus the shared secret, per call. Built here rather than at module load for the
  * same reason `lib/engine-client.ts` does it: a client captured at import time would freeze whatever
- * `NEXT_PUBLIC_CONVEX_URL` happened to be when the bundle was built.
+ * the URL happened to be when the bundle was built.
+ *
+ * The Runtime agent is its own Vercel service, so the URL comes from `CONVEX_URL` first and the
+ * Next-inlined `NEXT_PUBLIC_CONVEX_URL` second (`lib/engine-env.ts`). A missing variable throws
+ * `EngineUnavailableError`, which the dynamic tool resolver logs rather than swallows.
  */
 function engineConvex(): { client: ConvexHttpClient; secret: string } {
-  const url = process.env.NEXT_PUBLIC_CONVEX_URL;
-  const secret = process.env.ENGINE_SECRET;
-  if (!url || !secret) {
-    throw new Error("connections-engine: NEXT_PUBLIC_CONVEX_URL and ENGINE_SECRET are required");
-  }
+  const { url, secret } = engineEnv("connections-engine");
   return { client: new ConvexHttpClient(url), secret };
 }
 

@@ -7,6 +7,7 @@ import { CANCEL_OPTION_ID } from "../../../lib/builder-protocol";
 
 import { confirmConnection, prepareConnectionRequest } from "../lib/connection-steps";
 import { requireIdentity } from "../lib/session";
+import { isToolFailure } from "../lib/tool-result";
 
 /*
  * How the Builder gets a credential it does not have: it asks, and waits.
@@ -53,7 +54,12 @@ export default defineTool({
     // Pure: reads the attributes the channel projected from the caller's Clerk token. Everything
     // that touches Clerk, Convex or the vault happens in the two steps below.
     const identity = requireIdentity(ctx);
+
+    // Both steps answer with a terminal failure object rather than throwing when the backend is
+    // unreachable, so an unconfigured deployment ends the turn here instead of parking a 24-hour
+    // ask nobody can answer. See ../lib/tool-result.ts.
     const context = await prepareConnectionRequest(identity, provider);
+    if (isToolFailure(context)) return context;
 
     const usable = context.existing.filter((connection) => connection.status === "active");
     const pending = ask(ctx, {
@@ -93,6 +99,9 @@ export default defineTool({
       return { connected: false, reason: "The user answered with nothing usable." };
     }
 
-    return { connected: true, ...(await confirmConnection(identity, connectionId, provider)) };
+    const confirmed = await confirmConnection(identity, connectionId, provider);
+    if (isToolFailure(confirmed)) return confirmed;
+
+    return { connected: true, ...confirmed };
   },
 });

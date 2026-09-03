@@ -5,6 +5,7 @@ import { ConvexError } from "convex/values";
 
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { engineEnv } from "@/lib/engine-env";
 
 /**
  * The Builder agent's Convex conversation.
@@ -38,14 +39,15 @@ export type BuilderWorkflow = {
 
 /**
  * A fresh client plus the shared secret, per call — a client captured at import time would freeze
- * whatever `NEXT_PUBLIC_CONVEX_URL` happened to be when the bundle was built.
+ * whatever the URL happened to be when the bundle was built.
+ *
+ * The Builder runs as its own Vercel service, which is exactly why the URL cannot come from
+ * `NEXT_PUBLIC_CONVEX_URL` alone: that one exists only inside the Next build (`lib/engine-env.ts`).
+ * A missing variable throws `EngineUnavailableError`, which the tools turn into a terminal result
+ * rather than something the model retries.
  */
 function engineConvex(): { client: ConvexHttpClient; secret: string } {
-  const url = process.env.NEXT_PUBLIC_CONVEX_URL;
-  const secret = process.env.ENGINE_SECRET;
-  if (!url || !secret) {
-    throw new Error("builder-engine: NEXT_PUBLIC_CONVEX_URL and ENGINE_SECRET are required");
-  }
+  const { url, secret } = engineEnv("builder-engine");
   return { client: new ConvexHttpClient(url), secret };
 }
 

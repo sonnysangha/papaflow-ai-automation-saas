@@ -4,6 +4,7 @@ import { z } from "zod";
 import { listOrgConnections } from "../../../lib/connections-engine";
 
 import { requireBuilder } from "../lib/session";
+import { toolResult, viaEngine } from "../lib/tool-result";
 
 /**
  * The credentials this workspace already has, so the Builder configures a node with a connection
@@ -21,18 +22,20 @@ export default defineTool({
     provider: z.string().optional().describe("Only list connections for this provider slug."),
   }),
   async execute({ provider }, ctx) {
-    const session = await requireBuilder(ctx);
-    const connections = await listOrgConnections(session.orgId);
+    return await toolResult(async () => {
+      const session = await requireBuilder(ctx);
+      const connections = await viaEngine(() => listOrgConnections(session.orgId));
 
-    return {
-      connections: connections
-        .filter((connection) => !provider || connection.provider === provider)
-        .map((connection) => ({
-          connectionId: connection.id,
-          provider: connection.provider,
-          label: connection.label,
-          status: connection.status,
-        })),
-    };
+      return {
+        connections: connections
+          .filter((connection) => !provider || connection.provider === provider)
+          .map((connection) => ({
+            connectionId: connection.id,
+            provider: connection.provider,
+            label: connection.label,
+            status: connection.status,
+          })),
+      };
+    });
   },
 });

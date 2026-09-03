@@ -1,7 +1,9 @@
 import { CONNECTORS } from "../../../connectors/registry";
 import { listOrgConnections, openOrgConnection } from "../../../lib/connections-engine";
+import { isEngineUnavailable } from "../../../lib/engine-env";
 
 import { requireBuilderPlan, type BuilderIdentity } from "./session";
+import { serviceUnavailable, viaEngine, type ToolFailure } from "./tool-result";
 
 /**
  * The two `"use step"` halves of `tools/request_connection.ts`.
@@ -41,34 +43,43 @@ export type ConnectionRequestContext = {
 export async function prepareConnectionRequest(
   identity: BuilderIdentity,
   provider: string,
-): Promise<ConnectionRequestContext> {
+): Promise<ConnectionRequestContext | ToolFailure> {
   "use step";
 
-  const session = await requireBuilderPlan(identity);
-  const connector = CONNECTORS[provider];
-  if (!connector) {
-    throw new Error(
-      `PapaFlow has no connector called "${provider}". The providers it supports are: ${Object.keys(CONNECTORS).join(", ")}.`,
-    );
-  }
-  if (connector.requiresFeature && !session.features.includes(connector.requiresFeature)) {
-    throw new Error(
-      `${connector.name} needs the "${connector.requiresFeature}" feature, which this organisation's plan does not include.`,
-    );
-  }
+  try {
+    const session = await requireBuilderPlan(identity);
+    const connector = CONNECTORS[provider];
+    if (!connector) {
+      throw new Error(
+        `PapaFlow has no connector called "${provider}". The providers it supports are: ${Object.keys(CONNECTORS).join(", ")}.`,
+      );
+    }
+    if (connector.requiresFeature && !session.features.includes(connector.requiresFeature)) {
+      throw new Error(
+        `${connector.name} needs the "${connector.requiresFeature}" feature, which this organisation's plan does not include.`,
+      );
+    }
 
-  const connections = await listOrgConnections(session.orgId);
-  return {
-    providerName: connector.name,
-    docsUrl: connector.docsUrl,
-    existing: connections
-      .filter((connection) => connection.provider === provider)
-      .map((connection) => ({
-        id: connection.id,
-        label: connection.label,
-        status: connection.status,
-      })),
-  };
+    const connections = await viaEngine(() => listOrgConnections(session.orgId));
+    return {
+      providerName: connector.name,
+      docsUrl: connector.docsUrl,
+      existing: connections
+        .filter((connection) => connection.provider === provider)
+        .map((connection) => ({
+          id: connection.id,
+          label: connection.label,
+          status: connection.status,
+        })),
+    };
+  } catch (error) {
+    // Returned rather than thrown, for two reasons: a thrown error would burn the step's three
+    // default retries against a deployment that is missing a variable (CLAUDE.md rule 7), and an
+    // error crossing the step boundary arrives in the workflow body hydrated, without its class.
+    // A plain serializable object survives both.
+    if (isEngineUnavailable(error)) return serviceUnavailable(error);
+    throw error;
+  }
 }
 
 /**
@@ -83,26 +94,33 @@ export async function confirmConnection(
   identity: BuilderIdentity,
   connectionId: string,
   provider: string,
-): Promise<{ connectionId: string; provider: string; label: string }> {
+): Promise<{ connectionId: string; provider: string; label: string } | ToolFailure> {
   "use step";
 
-  const session = await requireBuilderPlan(identity);
-  const connections = await listOrgConnections(session.orgId);
-  const connection = connections.find((entry) => entry.id === connectionId);
+  try {
+    const session = await requireBuilderPlan(identity);
+    const connections = await viaEngine(() => listOrgConnections(session.orgId));
+    const connection = connections.find((entry) => entry.id === connectionId);
 
-  if (!connection) {
-    throw new Error(
-      "That connection id does not belong to this workspace. Ask again, or call list_connections.",
-    );
+    if (!connection) {
+      throw new Error(
+        "That connection id does not belong to this workspace. Ask again, or call list_connections.",
+      );
+    }
+    if (connection.provider !== provider) {
+      throw new Error(
+        `That connection is a ${connection.provider} connection, not a ${provider} one.`,
+      );
+    }
+
+    // Proves the credential is readable and active without keeping any of it. Deliberately not
+    // wrapped: its refusals ("that connection was revoked") are sentences the user must act on,
+    // and only a missing variable inside it raises EngineUnavailableError.
+    await openOrgConnection(connection.id, session.orgId);
+
+    return { connectionId: connection.id, provider: connection.provider, label: connection.label };
+  } catch (error) {
+    if (isEngineUnavailable(error)) return serviceUnavailable(error);
+    throw error;
   }
-  if (connection.provider !== provider) {
-    throw new Error(
-      `That connection is a ${connection.provider} connection, not a ${provider} one.`,
-    );
-  }
-
-  // Proves the credential is readable and active without keeping any of it.
-  await openOrgConnection(connection.id, session.orgId);
-
-  return { connectionId: connection.id, provider: connection.provider, label: connection.label };
 }

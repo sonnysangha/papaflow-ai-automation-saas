@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { catalogue } from "../lib/edits";
 import { requireBuilder } from "../lib/session";
+import { toolResult } from "../lib/tool-result";
 
 /**
  * What PapaFlow can do, from the node registry itself — so a node added to `nodes/registry.ts`
@@ -27,7 +28,11 @@ export default defineTool({
       .describe("Return the full input/output JSON Schema for these node types."),
   }),
   async execute({ category, types }, ctx) {
-    const session = await requireBuilder(ctx);
-    return catalogue(session.features, { category, types });
+    // The catalogue itself is local, but the plan gate behind `requireBuilder` is not: this tool is
+    // usually the Builder's first call, so an unreachable backend should stop the turn here.
+    return await toolResult(async () => {
+      const session = await requireBuilder(ctx);
+      return catalogue(session.features, { category, types });
+    });
   },
 });

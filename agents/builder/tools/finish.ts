@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { finish } from "../lib/edits";
 import { requireBuilder } from "../lib/session";
+import { toolResult } from "../lib/tool-result";
 
 /**
  * The last call of a build: the workflow becomes `active` and the user is told how to set it off.
@@ -18,7 +19,9 @@ export default defineTool({
     summary: z.string().describe("Two or three sentences: what the workflow does, in plain words."),
   }),
   async execute({ summary }, ctx) {
-    const session = await requireBuilder(ctx);
-    return await finish(session, summary);
+    return await toolResult(async () => {
+      const session = await requireBuilder(ctx);
+      return await finish(session, summary);
+    });
   },
 });

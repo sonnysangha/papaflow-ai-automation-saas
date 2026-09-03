@@ -87,14 +87,17 @@ export function requireIdentity(ctx: AuthedContext): BuilderIdentity {
  *
  * The plan comes from Clerk rather than from the session token's `pla` claim: Clerk is the source
  * of truth for billing (CLAUDE.md rule 10), a token is minted for about a minute, and a Builder
- * chat outlives that easily. `orgPlanFromClerk` caches for 60 s per org and never throws — a
- * billing outage answers `free_org`, which closes the Builder rather than opening it.
+ * chat outlives that easily. `orgPlanFromClerk` caches for 60 s per org; a billing outage answers
+ * `free_org`, which closes the Builder rather than opening it, while a missing `CLERK_SECRET_KEY`
+ * on the service raises `EngineUnavailableError` rather than pretending the org is on the free
+ * plan — the tool turns that into a terminal result naming the variable (`./tool-result.ts`).
  *
  * Takes a plain identity rather than the context so a `"use step"` function can call it: step
  * arguments are recorded by the Workflow SDK and must be serializable, which a `ToolContext` is
  * not.
  *
- * @throws Error with a message the model may show the user.
+ * @throws Error with a message the model may show the user, or `EngineUnavailableError` when the
+ * service cannot read billing at all.
  */
 export async function requireBuilderPlan(identity: BuilderIdentity): Promise<BuilderSession> {
   const plan = await orgPlanFromClerk(identity.orgId);

@@ -1,9 +1,8 @@
 import { CONNECTORS } from "../../../connectors/registry";
 import { listOrgConnections, openOrgConnection } from "../../../lib/connections-engine";
-import { isEngineUnavailable } from "../../../lib/engine-env";
 
 import { requireBuilderPlan, type BuilderIdentity } from "./session";
-import { serviceUnavailable, viaEngine, type ToolFailure } from "./tool-result";
+import { asServiceFailure, viaEngine, type ToolFailure } from "./tool-result";
 
 /**
  * The two `"use step"` halves of `tools/request_connection.ts`.
@@ -77,7 +76,8 @@ export async function prepareConnectionRequest(
     // default retries against a deployment that is missing a variable (CLAUDE.md rule 7), and an
     // error crossing the step boundary arrives in the workflow body hydrated, without its class.
     // A plain serializable object survives both.
-    if (isEngineUnavailable(error)) return serviceUnavailable(error);
+    const failure = asServiceFailure(error);
+    if (failure) return failure;
     throw error;
   }
 }
@@ -114,13 +114,16 @@ export async function confirmConnection(
     }
 
     // Proves the credential is readable and active without keeping any of it. Deliberately not
-    // wrapped: its refusals ("that connection was revoked") are sentences the user must act on,
-    // and only a missing variable inside it raises EngineUnavailableError.
+    // wrapped in viaEngine: its refusals ("that connection was revoked") are plain Errors the user
+    // must act on, and viaEngine would read a plain Error as infrastructure. The catch below still
+    // classifies the two failures that are infrastructure — a missing variable, and Convex refusing
+    // the shared secret.
     await openOrgConnection(connection.id, session.orgId);
 
     return { connectionId: connection.id, provider: connection.provider, label: connection.label };
   } catch (error) {
-    if (isEngineUnavailable(error)) return serviceUnavailable(error);
+    const failure = asServiceFailure(error);
+    if (failure) return failure;
     throw error;
   }
 }

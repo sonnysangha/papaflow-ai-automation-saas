@@ -16,10 +16,12 @@ import type { ConnectorToolSet } from "../lib/connector-tools";
  * Everything durable-tool-shaped is deliberately absent: `ask()`, `sleep` and `createHook` belong in
  * static files under `tools/`, never in a tool a resolver returns (CLAUDE.md rule 8).
  *
- * `orgId` comes from the authenticated principal, never from the model or the message. Both the
- * "no organisation" case (`localDev()` during `eve dev`, which yields `principalType: "local-dev"`
- * and no attributes) and a Convex read that fails degrade to `http_request` alone, with a line in
- * the log saying which — `../lib/connector-session.ts` holds that decision, and its unit tests.
+ * `orgId` comes from the authenticated principal, never from the model or the message. The "no
+ * organisation" case (`localDev()` during `eve dev`, which yields `principalType: "local-dev"` and
+ * no attributes) and a failed Convex read in an interactive session degrade to `http_request`
+ * alone, with a line in the log saying which; a failed read in a session started for an execution
+ * fails instead, so the run is not recorded as a success with the wrong tools —
+ * `../lib/connector-session.ts` holds that decision, and its unit tests.
  */
 export default defineDynamic({
   events: {

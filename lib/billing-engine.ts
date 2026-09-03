@@ -49,20 +49,31 @@ export function planFromSubscription(subscription: SubscriptionLike): PlanSlug {
 /**
  * The org's Clerk plan slug, cached for 60 s per org.
  *
- * Never throws. A billing outage answers `free_org`, which closes the Builder rather than opening
- * it — the safe direction for a paid feature — and the fallback is cached too, so an outage costs
- * one API call a minute per org instead of one per tool call.
+ * A billing *outage* answers `free_org`, which closes the Builder rather than opening it — the safe
+ * direction for a paid feature — and the fallback is cached too, so an outage costs one API call a
+ * minute per org instead of one per tool call.
+ *
+ * A *misconfiguration* is different and throws `EngineUnavailableError` instead. With no
+ * `CLERK_SECRET_KEY` on the eve service (the same trap `lib/engine-env.ts` exists for: these are
+ * separate Vercel services with their own environment) there is no billing answer to fall back to,
+ * and falling back anyway would tell a paying organisation that its plan does not include the
+ * Builder — a wrong sentence, shown to the wrong person, for something only an operator can fix.
+ * The Builder's tools turn this into `{ error: "service_unavailable", retryable: false }` naming
+ * the variable. Deliberately not cached: adding the variable should not have to wait out a TTL.
+ *
+ * @throws EngineUnavailableError when `CLERK_SECRET_KEY` is missing.
  */
 export async function orgPlanFromClerk(orgId: string): Promise<PlanSlug> {
   const hit = cache.get(orgId);
   if (hit && hit.expiresAt > Date.now()) return hit.plan;
 
+  const secretKey = process.env.CLERK_SECRET_KEY;
+  if (!secretKey) {
+    throw new EngineUnavailableError("billing-engine: CLERK_SECRET_KEY is not set");
+  }
+
   let plan: PlanSlug = DEFAULT_PLAN;
   try {
-    // The same class the Convex helpers throw for a missing variable: a plan lookup that fails for
-    // want of configuration is not a billing answer, and the log line below has to say which.
-    const secretKey = process.env.CLERK_SECRET_KEY;
-    if (!secretKey) throw new EngineUnavailableError("billing-engine: CLERK_SECRET_KEY is not set");
     const client = createClerkClient({ secretKey });
     plan = planFromSubscription(await client.billing.getOrganizationBillingSubscription(orgId));
   } catch (cause) {

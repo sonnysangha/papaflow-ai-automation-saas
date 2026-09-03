@@ -251,6 +251,26 @@
   @apply bg-primary;
 }
 
+/*
+ * …and on a touch screen it has to be big enough to hit. The dot itself stays 10px — growing it
+ * would move every wire's endpoint and change how a node reads — so the *target* is grown instead:
+ * a transparent square, at least 12 × 12, centred on the handle. A pseudo-element takes no part in
+ * layout, so React Flow still measures the handle it always did and nothing on the card moves.
+ */
+@media (pointer: coarse) {
+  .react-flow__handle::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 100%;
+    height: 100%;
+    min-width: 12px;
+    min-height: 12px;
+    transform: translate(-50%, -50%);
+  }
+}
+
 .react-flow__attribution {
   @apply bg-transparent text-muted-foreground/60;
 }

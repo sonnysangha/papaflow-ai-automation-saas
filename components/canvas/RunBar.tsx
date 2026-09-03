@@ -151,10 +151,13 @@ function PublishControl({
   workflowId,
   status,
   publishWorkflow,
+  compact,
 }: {
   workflowId: Id<"workflows">;
   status: WorkflowStatus;
   publishWorkflow: PublishWorkflowAction;
+  /** Icon-only below `lg`, which is right in a crowded row and wrong in the mobile toolbar's own. */
+  compact: boolean;
 }) {
   const [pending, startTransition] = useTransition();
   // Kept on screen rather than only toasted: "your plan will not run this schedule" is something to
@@ -198,12 +201,12 @@ function PublishControl({
               variant={published ? "outline" : "secondary"}
               disabled={pending}
               onClick={toggle}
-              className={COMPACT_BUTTON}
+              className={compact ? COMPACT_BUTTON : undefined}
             />
           }
         >
           {published ? <PowerOffIcon /> : <PowerIcon />}
-          <span className="max-lg:hidden">
+          <span className={compact ? "max-lg:hidden" : undefined}>
             {pending ? "Working…" : published ? "Unpublish" : "Publish"}
           </span>
         </TooltipTrigger>
@@ -284,6 +287,16 @@ type RunBarProps = {
   /** Opens the Builder chat. The editor owns whether the panel is showing. */
   onOpenBuilder: () => void;
   builderOpen: boolean;
+  /**
+   * Which toolbar this is sitting in.
+   *
+   * `"mobile"` is the second of two rows on a phone and carries only the two controls worth a
+   * button there — Run and Publish, both with their labels, because there is room for them once
+   * everything else has moved into the overflow menu. Everything this drops (Build with AI, the
+   * last-run pill, the run history link, the shortcuts card) is offered by `Editor` from that menu
+   * instead; nothing is lost and no handler changes.
+   */
+  layout?: "desktop" | "mobile";
 };
 
 /**
@@ -309,7 +322,9 @@ export function RunBar({
   builderOpen,
   triggerSample,
   triggerForm,
+  layout = "desktop",
 }: RunBarProps) {
+  const mobile = layout === "mobile";
   // What the user typed wins; until then the box mirrors the trigger node's own sample.
   const [typed, setTyped] = useState<string | null>(null);
   const sample = typed ?? triggerSample ?? "{}";
@@ -420,12 +435,14 @@ export function RunBar({
               // A disabled button gets no pointer events, so the one state whose explanation
               // matters most — "there is no trigger yet" — falls back to a native title.
               title={canRun ? undefined : runHint}
-              className={COMPACT_BUTTON}
+              className={mobile ? undefined : COMPACT_BUTTON}
             />
           }
         >
           <PlayIcon />
-          <span className="max-lg:hidden">{pending ? "Starting…" : "Run"}</span>
+          <span className={mobile ? undefined : "max-lg:hidden"}>
+            {pending ? "Starting…" : "Run"}
+          </span>
         </TooltipTrigger>
         <TooltipContent>{runHint}</TooltipContent>
       </Tooltip>
@@ -479,52 +496,64 @@ export function RunBar({
         </Popover>
       ) : null}
 
-      <PublishControl workflowId={workflowId} status={status} publishWorkflow={publishWorkflow} />
+      <PublishControl
+        workflowId={workflowId}
+        status={status}
+        publishWorkflow={publishWorkflow}
+        compact={!mobile}
+      />
 
-      {/*
-        Shown to everyone, on purpose: the panel itself is what puts up the plan wall
-        (`<Show>` → `<UpgradeCard>`), so a free organisation discovers the feature by pressing
-        the button rather than by never seeing it. The refusals that matter are `has()` in
-        `POST /api/builder/session` and the plan check inside every Builder tool.
-      */}
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Button
-              size="sm"
-              variant={builderOpen ? "secondary" : "ghost"}
-              onClick={onOpenBuilder}
-              aria-pressed={builderOpen}
-              className={COMPACT_BUTTON}
-            />
-          }
-        >
-          <SparklesIcon />
-          <span className="max-lg:hidden">Build with AI</span>
-        </TooltipTrigger>
-        <TooltipContent>Describe the workflow and let the Builder draw it</TooltipContent>
-      </Tooltip>
+      {/* Everything below is desktop only. On a phone these live in the toolbar's overflow menu
+          (`EditorMenu`) instead, where there is room to name them — nothing is dropped, and the
+          handlers they call are the ones `Editor` passes to that menu. */}
+      {mobile ? null : (
+        <>
+        {/*
+          Shown to everyone, on purpose: the panel itself is what puts up the plan wall
+          (`<Show>` → `<UpgradeCard>`), so a free organisation discovers the feature by pressing
+          the button rather than by never seeing it. The refusals that matter are `has()` in
+          `POST /api/builder/session` and the plan check inside every Builder tool.
+        */}
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                size="sm"
+                variant={builderOpen ? "secondary" : "ghost"}
+                onClick={onOpenBuilder}
+                aria-pressed={builderOpen}
+                className={COMPACT_BUTTON}
+              />
+            }
+          >
+            <SparklesIcon />
+            <span className="max-lg:hidden">Build with AI</span>
+          </TooltipTrigger>
+          <TooltipContent>Describe the workflow and let the Builder draw it</TooltipContent>
+        </Tooltip>
 
-      <Separator orientation="vertical" className="mx-0.5 h-5" />
+        <Separator orientation="vertical" className="mx-0.5 h-5" />
 
-      <LastRun latest={latest} />
+        <LastRun latest={latest} />
 
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Link
-              href={`/w/${workflowId}/runs`}
-              aria-label="Run history"
-              className={buttonVariants({ variant: "ghost", size: "icon-sm" })}
-            />
-          }
-        >
-          <HistoryIcon />
-        </TooltipTrigger>
-        <TooltipContent>Run history</TooltipContent>
-      </Tooltip>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Link
+                href={`/w/${workflowId}/runs`}
+                aria-label="Run history"
+                className={buttonVariants({ variant: "ghost", size: "icon-sm" })}
+              />
+            }
+          >
+            <HistoryIcon />
+          </TooltipTrigger>
+          <TooltipContent>Run history</TooltipContent>
+        </Tooltip>
 
-      <ShortcutsPopover />
+        <ShortcutsPopover />
+        </>
+      )}
 
       {runLimit ? (
         <div className="absolute inset-x-0 top-full z-30">

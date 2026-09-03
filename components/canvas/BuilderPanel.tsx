@@ -57,7 +57,16 @@ import { hasOpenTurn } from "./session-catchup";
  * `workflows.get` subscription the editor already holds.
  */
 
-const PANEL = "flex w-96 shrink-0 flex-col border-l border-border bg-background";
+/**
+ * A column beside the canvas where there is room for one, and the whole screen where there is not.
+ *
+ * Below `md` a 384px column would leave about six pixels of canvas, and the point of the panel —
+ * watching the graph grow while the agent talks — is already gone at that width. So on a phone it
+ * covers the editor instead, above the settings sheet (z-30) it can open behind it, and its own
+ * close button (already in the header) is the way back to the canvas.
+ */
+const PANEL =
+  "flex w-96 shrink-0 flex-col border-l border-border bg-background max-md:fixed max-md:inset-0 max-md:z-40 max-md:w-full max-md:border-l-0";
 
 /** The eve agent this panel talks to; `useEveAgent({ agent })` resolves the same `/eve/agents/…`. */
 const BUILDER_AGENT = "builder";
@@ -692,7 +701,9 @@ function BuilderChat({
       </div>
 
       <form
-        className="shrink-0 border-t border-border p-3"
+        // Clear of the home indicator on a phone, where this really is the bottom edge of the
+        // screen: `env()` is 0 everywhere else, so the desktop panel is untouched.
+        className="shrink-0 border-t border-border p-3 max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]"
         onSubmit={(event) => {
           event.preventDefault();
           send();

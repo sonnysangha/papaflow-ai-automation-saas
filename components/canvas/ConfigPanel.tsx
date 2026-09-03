@@ -46,6 +46,7 @@ import { NodeIcon } from "./node-icon";
 import { categoryTint } from "./node-summary";
 import { missingHint, resolvePickerKind } from "./picker-kind";
 import { ScheduleConfig } from "./ScheduleConfig";
+import { useIsMobile } from "./use-media-query";
 import { buildVariableGroups, type VariableGroup } from "./variables";
 
 /** Property names that are prose rather than a value, and get a textarea. */
@@ -474,6 +475,10 @@ export function ConfigPanel({
   onClose,
 }: ConfigPanelProps) {
   const definition = NODES[node.data.nodeType];
+  // Below `md` there is no right-hand side to slide in from, so the panel becomes a sheet over the
+  // bottom of the canvas — the node it is editing stays visible above it, which is the whole reason
+  // it is not a full-screen dialog.
+  const isMobile = useIsMobile();
   const [keyDraft, setKeyDraft] = useState(node.data.key);
   // React Flow's own removal, so deleting from here behaves exactly like pressing Delete on the
   // canvas: the node's edges go too, and the change reaches the graph through `onNodesChange`.
@@ -592,10 +597,25 @@ export function ConfigPanel({
   return (
     <aside
       aria-label="Node settings"
-      // Its own column while there is room for one. Under 900px it stops taking width from a canvas
-      // that has none to give and slides over it instead, which is what the close button is for.
-      className="flex w-[360px] shrink-0 flex-col border-l border-border bg-card max-[899px]:absolute max-[899px]:inset-y-0 max-[899px]:right-0 max-[899px]:z-20 max-[899px]:w-[min(360px,100%)] max-[899px]:shadow-lg"
+      // Three shapes, one panel. Its own column while there is room for one; between 768 and 900px
+      // it stops taking width from a canvas that has none to give and slides over it from the
+      // right; below that it comes up from the bottom instead, because a 360px drawer on a 390px
+      // screen is a full-screen dialog wearing a costume. The close button is what gets out of the
+      // last two.
+      className={cn(
+        isMobile
+          ? "fixed inset-x-0 bottom-0 z-30 flex h-[85dvh] flex-col rounded-t-2xl border-t border-border bg-card shadow-2xl"
+          : "flex w-[360px] shrink-0 flex-col border-l border-border bg-card max-[899px]:absolute max-[899px]:inset-y-0 max-[899px]:right-0 max-[899px]:z-20 max-[899px]:w-[min(360px,100%)] max-[899px]:shadow-lg",
+      )}
     >
+      {/* The grab bar every bottom sheet on a phone has. Decorative — the sheet is a fixed 85dvh
+          and the close button is the way out — but its absence is what makes a panel look stuck. */}
+      {isMobile ? (
+        <div aria-hidden className="flex shrink-0 justify-center pt-2 pb-1">
+          <span className="h-1 w-10 rounded-full bg-border" />
+        </div>
+      ) : null}
+
       <div className="flex items-start gap-2.5 border-b border-border p-3">
         <span
           aria-hidden
@@ -793,7 +813,12 @@ export function ConfigPanel({
       {/* The one destructive thing this panel can do, kept away from everything that only edits.
           `deleteElements` is React Flow's own removal, so the node's edges go with it and the
           canvas records one undo step — the same as pressing Delete with the node selected. */}
-      <div className="flex shrink-0 items-center justify-between gap-2 border-t border-border p-3">
+      <div
+        className="flex shrink-0 items-center justify-between gap-2 border-t border-border p-3"
+        // Clear of the home indicator on a phone, where this footer really is the bottom edge of
+        // the screen rather than the bottom of a column.
+        style={isMobile ? { paddingBottom: "calc(0.75rem + env(safe-area-inset-bottom))" } : undefined}
+      >
         <p className="min-w-0 truncate text-xs text-muted-foreground">
           Deleting removes its wires too.
         </p>

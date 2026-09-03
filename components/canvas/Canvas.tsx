@@ -23,7 +23,7 @@ import { useMutation, useQuery } from "convex/react";
 import { useTheme } from "next-themes";
 import type { FunctionReturnType } from "convex/server";
 import { ConvexError } from "convex/values";
-import { LayoutTemplateIcon, SparklesIcon, WorkflowIcon } from "lucide-react";
+import { LayoutTemplateIcon, PlusIcon, SparklesIcon, WorkflowIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import {
@@ -42,9 +42,9 @@ import { TemplateDialog } from "@/components/workflows/TemplateDialog";
 import { api } from "@/convex/_generated/api";
 import type { WorkflowTemplate } from "@/lib/templates";
 import { cn } from "@/lib/utils";
-import { NODES } from "@/nodes/registry";
 
 import { ConfigPanel } from "./ConfigPanel";
+import { centredNodePosition, createNodeFromPalette } from "./create-node";
 import { edgeRunState, type EdgeRunTone } from "./edge-run-state";
 import { EdgeWithLabel, LABELLED_EDGE_TYPE, type LabelledEdgeData } from "./EdgeWithLabel";
 import {
@@ -52,7 +52,6 @@ import {
   fromStoredGraph,
   graphKey,
   handleLabel,
-  nextKey,
   NODE_DRAG_MIME,
   PAPAFLOW_NODE_TYPE,
   sourceHandles,
@@ -72,8 +71,10 @@ import {
 } from "./history";
 import { autoLayout, canAutoLayout } from "./auto-layout";
 import type { RunStepRow } from "./last-run";
+import { NodePaletteSheet } from "./NodeSidebar";
 import { nodeSetup, type NodeSetup, type SetupConnection } from "./node-setup";
 import { hasModifier, isTypingTarget } from "./shortcuts";
+import { useIsMobile } from "./use-media-query";
 import { NodeSetupContext, WorkflowNode } from "./WorkflowNode";
 
 // Module scope on purpose: a fresh object here remounts every node on every render.
@@ -122,6 +123,11 @@ export type EditorControls = {
   redo: () => void;
   /** Spaces every node out along its wires, and fits the result in the viewport. */
   tidy: () => void;
+  /**
+   * Drops a palette entry in the middle of the viewport and selects it — the tap-to-add path the
+   * node list uses, reported up because the graph lives in here and the palette does not.
+   */
+  addNode: (nodeType: string) => void;
 };
 
 /** One graph as the undo stack holds it, with the string the sameness of two graphs is decided by. */
@@ -547,6 +553,35 @@ export function Canvas({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [redo, save, undo]);
 
+  /**
+   * The other way a palette entry becomes a node: tapped rather than dragged.
+   *
+   * A finger cannot drag a card out of a list that scrolls under it, so on a phone this is the only
+   * way to add a node at all — and it is the faster way with a mouse too. The node lands in the
+   * middle of whatever the user is looking at (the flow container's centre, put through the same
+   * `screenToFlowPosition` the drop uses) and is selected, which opens its settings: adding a node
+   * you then have to hunt for would be half a gesture.
+   */
+  const flowRef = useRef<HTMLDivElement | null>(null);
+  const addNode = useCallback(
+    (nodeType: string) => {
+      const box = flowRef.current?.getBoundingClientRect();
+      const centre = screenToFlowPosition(
+        box
+          ? { x: box.left + box.width / 2, y: box.top + box.height / 2 }
+          : { x: window.innerWidth / 2, y: window.innerHeight / 2 },
+      );
+      setNodes((current) => {
+        const node = createNodeFromPalette(current, nodeType, centredNodePosition(centre));
+        if (!node) return current;
+        return current
+          .map((existing) => (existing.selected ? { ...existing, selected: false } : existing))
+          .concat({ ...node, selected: true });
+      });
+    },
+    [screenToFlowPosition, setNodes],
+  );
+
   // The toolbar's controls, reported up whenever one of them changes. Keyed on the node *count*
   // rather than on the nodes, so moving one does not rebuild this on every animation frame.
   const nodeCount = nodes.length;
@@ -561,8 +596,20 @@ export function Canvas({
       undo,
       redo,
       tidy,
+      addNode,
     }),
-    [dirty, nodeCount, redo, save, saveState, tidy, undo, undoable.canRedo, undoable.canUndo],
+    [
+      addNode,
+      dirty,
+      nodeCount,
+      redo,
+      save,
+      saveState,
+      tidy,
+      undo,
+      undoable.canRedo,
+      undoable.canUndo,
+    ],
   );
 
   useEffect(() => {
@@ -603,29 +650,15 @@ export function Canvas({
     (event: DragEvent<HTMLDivElement>) => {
       event.preventDefault();
       const nodeType = event.dataTransfer.getData(NODE_DRAG_MIME);
-      const definition = NODES[nodeType];
-      if (!definition) return;
-
       const position = screenToFlowPosition({ x: event.clientX, y: event.clientY });
-      setNodes((current) =>
-        current.concat({
-          id: crypto.randomUUID(),
-          type: PAPAFLOW_NODE_TYPE,
-          position,
-          data: {
-            nodeType,
-            // Assigned against the nodes as they are right now, so two quick drops of the same
-            // node type get `http_request_1` and `http_request_2` rather than the same key twice.
-            key: nextKey(current, nodeType),
-            label: definition.name,
-            inputs: {},
-            status: "idle",
-          },
-        }),
-      );
+      setNodes((current) => {
+        const node = createNodeFromPalette(current, nodeType, position);
+        return node ? current.concat(node) : current;
+      });
     },
     [screenToFlowPosition, setNodes],
   );
+
 
   // Exactly one node selected opens the config panel; a marquee over three does not.
   const selected = useMemo(() => {
@@ -734,6 +767,11 @@ export function Canvas({
    */
   const connections = useQuery(api.connections.list);
   const plan = useQuery(api.plan.current, {});
+  // Below `md` the palette has no column of its own: it comes up from the bottom when the floating
+  // button asks for it. The flag also moves the zoom controls out from under that button and
+  // rewrites the empty canvas's instruction, both of which are markup rather than styling.
+  const isMobile = useIsMobile();
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const planFeatures = plan?.features;
   const setupByNode = useMemo(() => {
     const byNode: Record<string, NodeSetup> = {};
@@ -785,7 +823,7 @@ export function Canvas({
         {/* Only the flow needs to know what each node is missing; the panel reads the node it is
             editing directly. */}
         <NodeSetupContext.Provider value={setupByNode}>
-          <div className="min-w-0 flex-1">
+          <div ref={flowRef} className="min-w-0 flex-1">
             <ReactFlow<WorkflowNodeType, Edge>
               nodes={nodes}
               edges={styledEdges}
@@ -800,6 +838,14 @@ export function Canvas({
               onDragOver={onDragOver}
               defaultViewport={initial.graph.viewport}
               fitView={!initial.graph.viewport}
+              // A phone's whole gesture vocabulary here: one finger pans, two pinch to zoom, and a
+              // two-finger scroll is *not* a pan — `panOnScroll` would fight the pinch and make the
+              // canvas lurch. `padding` keeps a fitted graph off the toolbar and the floating
+              // button; `minZoom` lets a wide workflow be seen whole on a 390px screen.
+              zoomOnPinch
+              panOnDrag
+              panOnScroll={false}
+              fitViewOptions={{ padding: 0.15 }}
               deleteKeyCode={["Backspace", "Delete"]}
               colorMode={colorMode}
               minZoom={0.2}
@@ -815,6 +861,9 @@ export function Canvas({
                 showInteractive={false}
                 aria-label="Canvas zoom controls"
                 fitViewOptions={{ padding: 0.2, duration: 200 }}
+                // Bottom-left is where the "Add node" button is on a phone, and the minimap that
+                // normally owns the other corner is gone below 900px — so they swap.
+                position={isMobile ? "bottom-right" : "bottom-left"}
               />
               {/* Bottom-right of the canvas column, and gone below 900px, where the settings panel
                   overlays that corner (`.pf-canvas-minimap` in `app/globals.css`). */}
@@ -862,10 +911,14 @@ export function Canvas({
                     <div className="space-y-1">
                       <p className="text-sm font-medium">Start with a trigger</p>
                       <p className="text-sm text-muted-foreground">
-                        Drag one in from the left, or start from something that already works.
+                        {isMobile
+                          ? "Tap + to add a trigger, or start from something that already works."
+                          : "Drag one in from the left, or start from something that already works."}
                       </p>
                     </div>
-                    <div className="pointer-events-auto flex flex-wrap items-center justify-center gap-2">
+                    {/* Side by side where there is width for it; a stack on a phone, where two
+                        buttons on one line would each be too narrow to read. */}
+                    <div className="pointer-events-auto flex w-full flex-col items-center justify-center gap-2 md:w-auto md:flex-row md:flex-wrap">
                       <TemplateDialog
                         onPick={applyTemplate}
                         title="Start from a template"
@@ -890,6 +943,33 @@ export function Canvas({
             </ReactFlow>
           </div>
         </NodeSetupContext.Provider>
+
+        {/*
+          The way to add a node when there is no palette beside the canvas. Bottom-left, where the
+          zoom controls sit on a desktop and where a thumb reaches, clear of the home indicator; the
+          settings sheet (z-30) comes over it, because while you are configuring a node "add another
+          one" is not the next thing.
+        */}
+        {isMobile ? (
+          <>
+            <div
+              className="absolute bottom-0 left-0 z-20 p-3"
+              style={{ paddingBottom: "calc(0.75rem + env(safe-area-inset-bottom))" }}
+            >
+              <Button
+                type="button"
+                size="icon"
+                aria-label="Add node"
+                className="size-11 rounded-full shadow"
+                onClick={() => setPaletteOpen(true)}
+              >
+                <PlusIcon className="size-5" />
+                <span className="sr-only">Add node</span>
+              </Button>
+            </div>
+            <NodePaletteSheet open={paletteOpen} onOpenChange={setPaletteOpen} onPick={addNode} />
+          </>
+        ) : null}
 
         {selected ? (
           <ConfigPanel

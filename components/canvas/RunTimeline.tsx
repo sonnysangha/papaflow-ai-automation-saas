@@ -2,6 +2,7 @@
 
 import {
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -37,6 +38,7 @@ import {
   type TimelineRow,
 } from "./run-timeline";
 import { statusLabel } from "./StatusRing";
+import { useIsMobile } from "./use-media-query";
 
 /**
  * One run of this workflow, as a Gantt under the canvas.
@@ -269,6 +271,18 @@ function Row({
   );
 }
 
+/**
+ * The drawer's state, handed up so something else can open it.
+ *
+ * On a phone the timeline is folded away and its own bar is one line at the very bottom of the
+ * screen, so the toolbar's overflow menu offers "Runs" as well — and both have to drive the same
+ * piece of state. Reported the same way the canvas reports Save and Undo.
+ */
+export type RunTimelineControls = {
+  open: boolean;
+  setOpen: (next: boolean) => void;
+};
+
 export type RunTimelineProps = {
   workflowId: Id<"workflows">;
   /** The saved graph, for the node labels a run does not record. */
@@ -280,6 +294,8 @@ export type RunTimelineProps = {
   /** The newest run's id and status — the panel opens by itself when there is one to show. */
   latestRunId?: string | null;
   latestStatus?: string | null;
+  /** Reports open/closed and the way to change it. Must be a stable callback. */
+  onControlsChange?: (controls: RunTimelineControls) => void;
 };
 
 export function RunTimeline({
@@ -289,17 +305,31 @@ export function RunTimeline({
   selectedNodeId,
   latestRunId,
   latestStatus,
+  onControlsChange,
 }: RunTimelineProps) {
   // Open whenever there is a run to show, and again the moment a new run starts; collapsing it by
   // hand sticks until the next run. Deriving `open` keeps this out of an effect: `collapsedFor`
   // remembers which run the user closed the panel on, so a newer id simply stops matching.
   const [collapsedFor, setCollapsedFor] = useState<string | null | undefined>(undefined);
   const [openedByUser, setOpenedByUser] = useState(false);
-  const open = openedByUser || (Boolean(latestRunId) && collapsedFor !== latestRunId);
-  const setOpen = (next: boolean) => {
-    setOpenedByUser(next);
-    if (!next) setCollapsedFor(latestRunId ?? null);
-  };
+  // On a phone it never opens itself. Half the screen is the canvas's whole working area there, and
+  // a chart that takes it away the moment a run starts is the opposite of what pressing Run was
+  // for; the bar stays, and so does the "Runs" item in the toolbar menu, so it is one tap away.
+  const isMobile = useIsMobile();
+  const open =
+    openedByUser || (!isMobile && Boolean(latestRunId) && collapsedFor !== latestRunId);
+  const setOpen = useCallback(
+    (next: boolean) => {
+      setOpenedByUser(next);
+      if (!next) setCollapsedFor(latestRunId ?? null);
+    },
+    [latestRunId],
+  );
+
+  const controls = useMemo<RunTimelineControls>(() => ({ open, setOpen }), [open, setOpen]);
+  useEffect(() => {
+    onControlsChange?.(controls);
+  }, [controls, onControlsChange]);
   const [height, setHeight] = useState(DEFAULT_HEIGHT);
   // Null means "whatever is newest", which is what keeps the panel following a run you just started.
   const [pickedId, setPickedId] = useState<Id<"executions"> | null>(null);
@@ -358,7 +388,10 @@ export function RunTimeline({
 
   if (!open) {
     return (
-      <div className="flex shrink-0 justify-start border-t border-border bg-card px-2 py-1">
+      <div
+        className="flex shrink-0 justify-start border-t border-border bg-card px-2 py-1"
+        style={isMobile ? { paddingBottom: "calc(0.25rem + env(safe-area-inset-bottom))" } : undefined}
+      >
         <Button
           type="button"
           size="sm"
@@ -378,20 +411,32 @@ export function RunTimeline({
 
   return (
     <TooltipProvider delay={200}>
-      <section aria-label="Run timeline" className="flex shrink-0 flex-col border-t border-border bg-card">
-        {/* The grip. `touch-none` so a drag on a trackpad-less device does not scroll the page. */}
-        <div
-          role="separator"
-          aria-orientation="horizontal"
-          aria-label="Resize the run timeline"
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={endDrag}
-          onPointerCancel={endDrag}
-          className="h-1.5 w-full shrink-0 cursor-row-resize touch-none bg-transparent hover:bg-border"
-        />
+      <section
+        aria-label="Run timeline"
+        // Never more than a bit under half the screen on a phone: the canvas is the page, and a
+        // drawer that eats it is worse than one you have to open.
+        className={cn(
+          "flex shrink-0 flex-col border-t border-border bg-card",
+          isMobile && "max-h-[45dvh]",
+        )}
+      >
+        {/* The grip. `touch-none` so a drag on a trackpad-less device does not scroll the page.
+            Gone on a phone: a 6px target you drag is not a gesture a finger can perform, and the
+            height there is fixed at 45dvh anyway. */}
+        {isMobile ? null : (
+          <div
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Resize the run timeline"
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={endDrag}
+            onPointerCancel={endDrag}
+            className="h-1.5 w-full shrink-0 cursor-row-resize touch-none bg-transparent hover:bg-border"
+          />
+        )}
 
-        <div className="flex flex-wrap items-center gap-2 px-3 pb-2">
+        <div className="flex shrink-0 flex-wrap items-center gap-2 px-3 pt-2 pb-2 md:pt-0">
           <Button
             type="button"
             size="sm"
@@ -465,7 +510,17 @@ export function RunTimeline({
           </Link>
         </div>
 
-        <div className="min-h-0 overflow-y-auto" style={{ height }}>
+        {/* Vertical scroll for the rows, horizontal for the chart itself: a 176px label column and
+            a readable axis do not fit in 390px, and squeezing the axis is what would make the bars
+            meaningless. Padded at the bottom on a phone so the last row clears the home indicator. */}
+        <div
+          className="min-h-0 flex-1 overflow-x-auto overflow-y-auto"
+          style={
+            isMobile
+              ? { paddingBottom: "env(safe-area-inset-bottom)" }
+              : { height }
+          }
+        >
           {page === undefined || (timeline !== null && steps === undefined) ? (
             <div className="space-y-2 px-3 pb-3" role="status" aria-label="Loading the run">
               {[0, 1, 2].map((row) => (
@@ -481,7 +536,7 @@ export function RunTimeline({
               This run has not recorded a step yet.
             </p>
           ) : (
-            <div className="relative">
+            <div className="relative max-md:min-w-[520px]">
               {/* Sticky rather than a separate header row: the ruler and the bars then share one
                   scroll container, so they can never drift apart by a scrollbar's width. */}
               <div

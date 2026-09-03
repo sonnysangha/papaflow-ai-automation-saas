@@ -5,6 +5,7 @@
 // The key is only ever sent to the provider it belongs to, and only the last four characters
 // of it ever come back out (`hint`).
 import type { ConnectorTestResult } from "@/connectors/define";
+import { keyShapeProblem } from "./key-shape";
 import { textGenerationModels } from "./model-list";
 
 const USER_AGENT = "papaflow/0.1";
@@ -135,7 +136,16 @@ function ids(entries: Json[], key = "id"): string[] {
 
 type Discovery = { models: string[]; meta?: Json };
 
-const DISCOVERERS: Record<string, (apiKey: string) => Promise<Discovery>> = {
+/**
+ * The non-secret extras a provider needs alongside the key.
+ *
+ * Only Anthropic has one: a key that is not scoped to a single workspace is "identity-linked" and
+ * every request with it must name the workspace it acts in, or the API answers 400 (verified
+ * against platform.claude.com → Authentication → Select a workspace, 2026-09-03).
+ */
+export type DiscoverOptions = { workspaceId?: string };
+
+const DISCOVERERS: Record<string, (apiKey: string, options: DiscoverOptions) => Promise<Discovery>> = {
   async openai(apiKey) {
     // `/v1/models` is everything this key may reach — embeddings, TTS, image, transcription and
     // moderation models included — and every one of them 400s on `generateText`.
@@ -143,11 +153,19 @@ const DISCOVERERS: Record<string, (apiKey: string) => Promise<Discovery>> = {
     return { models: textGenerationModels(ids(rows(body.data))) };
   },
 
-  async anthropic(apiKey) {
+  async anthropic(apiKey, { workspaceId }) {
     const body = (await request("https://api.anthropic.com/v1/models?limit=1000", {
-      headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+      headers: {
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        // Sent only when the user supplied one: a workspace-scoped key must NOT carry this header
+        // for a workspace it is not bound to, and an empty value is itself a 400.
+        ...(workspaceId ? { "anthropic-workspace-id": workspaceId } : {}),
+      },
     })) as Json;
-    return { models: ids(rows(body.data)) };
+    // Kept on the connection so every later call — the model picker, the LLM node, the agent —
+    // sends the same workspace this key was proved against.
+    return { models: ids(rows(body.data)), ...(workspaceId ? { meta: { workspaceId } } : {}) };
   },
 
   async google(apiKey) {
@@ -234,7 +252,11 @@ function supportsGenerateContent(model: Json): boolean {
  * Tests an AI provider key and captures its model list. Returns the connector test shape —
  * `meta.models` is what the model picker reads, `meta.fetchedAt` is when it was captured.
  */
-export async function validateAndDiscover(provider: string, apiKey: string): Promise<ConnectorTestResult> {
+export async function validateAndDiscover(
+  provider: string,
+  apiKey: string,
+  options: DiscoverOptions = {},
+): Promise<ConnectorTestResult> {
   const name = AI_PROVIDER_NAMES[provider];
   const discover = DISCOVERERS[provider];
   if (!name || !discover) return { ok: false, error: `Unknown AI provider: ${provider}` };
@@ -244,9 +266,15 @@ export async function validateAndDiscover(provider: string, apiKey: string): Pro
   const key = apiKey?.trim() ?? "";
   if (!key) return { ok: false, error: `${name} needs an API key` };
 
+  // A key of the wrong *kind* is answered here rather than by the provider, whose reply for all of
+  // them is the same unhelpful "invalid x-api-key".
+  const shape = keyShapeProblem(provider, key);
+  if (shape) return { ok: false, error: shape };
+
+  const workspaceId = options.workspaceId?.trim() || undefined;
   const hint = key.slice(-4);
   try {
-    const { models, meta } = await discover(key);
+    const { models, meta } = await discover(key, { workspaceId });
     return {
       ok: true,
       label: `${name} (…${hint})`,
@@ -254,7 +282,17 @@ export async function validateAndDiscover(provider: string, apiKey: string): Pro
       meta: { models, fetchedAt: Date.now(), ...meta },
     };
   } catch (error) {
-    if (error instanceof HttpError) return { ok: false, error: rejectionMessage(name, error, key) };
+    if (error instanceof HttpError) {
+      // Nothing identifying, and never the key: enough to tell a 401 from a 429 or an outage in a
+      // dev server's log, where the browser only ever showed the sentence below.
+      console.warn("ai/validate: the provider refused a key", {
+        provider,
+        status: error.status,
+        keyLength: key.length,
+        workspaceId: workspaceId ? "sent" : "absent",
+      });
+      return { ok: false, error: rejectionMessage(name, error, key) };
+    }
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
 }
@@ -272,5 +310,19 @@ function rejectionMessage(name: string, error: HttpError, apiKey: string): strin
   if (!error.detail) return `${name} rejected the key (HTTP ${error.status})`;
 
   const detail = apiKey.length >= 8 ? error.detail.split(apiKey).join("••••") : error.detail;
-  return `${name} rejected the key (${error.status}: ${detail})`;
+  const advice = refusalAdvice(error);
+  return `${name} rejected the key (${error.status}: ${detail})${advice ? ` ${advice}` : ""}`;
+}
+
+/**
+ * What to do about a refusal, where the provider's own words stop short of saying.
+ *
+ * Anthropic's 400 for an identity-linked key names the missing header but not where to find its
+ * value, and the field that supplies it is one the user has probably left blank.
+ */
+function refusalAdvice(error: HttpError): string | null {
+  if (error.status === 400 && /anthropic-workspace-id/i.test(error.detail ?? "")) {
+    return "This key is not tied to one workspace, so Anthropic needs the workspace it should act in: paste the id from Settings → Workspaces (it starts wrkspc_) into Workspace ID above, or create a key scoped to a single workspace.";
+  }
+  return null;
 }

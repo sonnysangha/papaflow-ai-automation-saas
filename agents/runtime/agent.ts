@@ -80,7 +80,10 @@ export default defineAgent({
           const apiKey = connection.secret.apiKey;
           if (typeof apiKey !== "string" || !apiKey) return HOUSE_MODEL;
 
-          return (await providerFor(connection.provider, apiKey))(modelId);
+          const workspaceId = connection.secret.workspaceId;
+          return (await providerFor(connection.provider, apiKey, {
+            ...(typeof workspaceId === "string" && workspaceId ? { workspaceId } : {}),
+          }))(modelId);
         } catch (error) {
           // A revoked key, a deleted connection, a provider we have no factory for. Falling back
           // keeps the run alive on the house model rather than failing the turn before it starts;

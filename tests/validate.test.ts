@@ -336,21 +336,23 @@ describe("validateAndDiscover", () => {
     expect(result.meta.models).toEqual([]);
   });
 
+  // Each key is shaped like the provider's own, because a key of the wrong *kind* is refused before
+  // the request is made (`lib/ai/key-shape.ts`) and would never reach the message under test.
   it.each([
-    ["openai", "https://api.openai.com/v1/models", "OpenAI"],
-    ["anthropic", "https://api.anthropic.com/v1/models?limit=1000", "Anthropic"],
-    ["google", "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000", "Google Gemini"],
-    ["xai", "https://api.x.ai/v1/api-key", "xAI"],
-    ["mistral", "https://api.mistral.ai/v1/models", "Mistral"],
-    ["groq", "https://api.groq.com/openai/v1/models", "Groq"],
-    ["deepseek", "https://api.deepseek.com/models", "DeepSeek"],
-    ["openrouter", "https://openrouter.ai/api/v1/key", "OpenRouter"],
-    ["elevenlabs", "https://api.elevenlabs.io/v1/user", "ElevenLabs"],
-    ["fal", "https://fal.run/fal-ai/flux/schnell", "fal.ai"],
-  ])("reports a rejected %s key in the provider's own words", async (provider, url, name) => {
+    ["openai", "https://api.openai.com/v1/models", "OpenAI", "sk-bad-key-0000"],
+    ["anthropic", "https://api.anthropic.com/v1/models?limit=1000", "Anthropic", "sk-ant-bad-0000"],
+    ["google", "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000", "Google Gemini", "AIzaBad0000"],
+    ["xai", "https://api.x.ai/v1/api-key", "xAI", "xai-bad-0000"],
+    ["mistral", "https://api.mistral.ai/v1/models", "Mistral", "bad-key-0000"],
+    ["groq", "https://api.groq.com/openai/v1/models", "Groq", "gsk_bad0000"],
+    ["deepseek", "https://api.deepseek.com/models", "DeepSeek", "sk-bad-key-0000"],
+    ["openrouter", "https://openrouter.ai/api/v1/key", "OpenRouter", "sk-or-v1-bad0000"],
+    ["elevenlabs", "https://api.elevenlabs.io/v1/user", "ElevenLabs", "bad-key-0000"],
+    ["fal", "https://fal.run/fal-ai/flux/schnell", "fal.ai", "fal-bad-0000"],
+  ])("reports a rejected %s key in the provider's own words", async (provider, url, name, key) => {
     stubFetch({ [url]: { status: 401, body: { error: "invalid api key" } } });
 
-    const result = expectFailed(await validateAndDiscover(provider, "bad-key-0000"));
+    const result = expectFailed(await validateAndDiscover(provider, key));
 
     // A bare `HTTP 401` cannot tell a typo from an expired key from a key for the wrong product,
     // and the field is rendered as dots, so the provider's sentence is the only clue there is.
@@ -405,5 +407,87 @@ describe("validateAndDiscover", () => {
 
     expect(calls).toHaveLength(0);
     expect(result.error).toMatch(/OpenAI/);
+  });
+});
+
+/**
+ * Anthropic's identity-linked keys — a personal or service-account key that is not bound to one
+ * workspace — must name the workspace they act in on every request, or the API answers 400. This
+ * is the whole reason the connector has a Workspace ID field.
+ */
+describe("validateAndDiscover — Anthropic workspaces", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const MODELS = "https://api.anthropic.com/v1/models?limit=1000";
+
+  it("sends anthropic-workspace-id when the connection has one, and remembers it", async () => {
+    const calls = stubFetch({ [MODELS]: { body: { data: [{ id: "claude-opus-5" }] } } });
+
+    const result = expectOk(
+      await validateAndDiscover("anthropic", "sk-ant-wxyz", { workspaceId: "  wrkspc_123  " }),
+    );
+
+    expect(calls[0].headers["anthropic-workspace-id"]).toBe("wrkspc_123");
+    expect(result.meta.workspaceId).toBe("wrkspc_123");
+  });
+
+  it("omits the header entirely for a workspace-scoped key", async () => {
+    const calls = stubFetch({ [MODELS]: { body: { data: [{ id: "claude-opus-5" }] } } });
+
+    const result = expectOk(await validateAndDiscover("anthropic", "sk-ant-wxyz", { workspaceId: "  " }));
+
+    expect(calls[0].headers).not.toHaveProperty("anthropic-workspace-id");
+    expect(result.meta.workspaceId).toBeUndefined();
+  });
+
+  it("says where to find the workspace id when Anthropic asks for one", async () => {
+    stubFetch({
+      [MODELS]: {
+        status: 400,
+        body: {
+          type: "error",
+          error: {
+            type: "invalid_request_error",
+            message:
+              "anthropic-workspace-id is required when authenticating with an identity-linked API key; send the id of the workspace this request acts in.",
+          },
+        },
+      },
+    });
+
+    const result = expectFailed(await validateAndDiscover("anthropic", "sk-ant-wxyz"));
+
+    expect(result.error).toContain("anthropic-workspace-id is required");
+    expect(result.error).toContain("Settings → Workspaces");
+    expect(result.error).toContain("wrkspc_");
+  });
+});
+
+describe("validateAndDiscover — keys of the wrong kind", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("refuses an Anthropic Admin key without asking Anthropic", async () => {
+    const calls = stubFetch({});
+
+    const result = expectFailed(await validateAndDiscover("anthropic", "sk-ant-admin01-aaaa"));
+
+    expect(calls).toHaveLength(0);
+    expect(result.error).toContain("Admin API key");
+  });
+
+  it("refuses a Claude Code token, and an Anthropic key pasted into OpenAI", async () => {
+    const calls = stubFetch({});
+
+    expect(expectFailed(await validateAndDiscover("anthropic", "sk-ant-oat01-aaaa")).error).toContain(
+      "OAuth token",
+    );
+    expect(expectFailed(await validateAndDiscover("openai", "sk-ant-api03-aaaa")).error).toContain(
+      "Anthropic API key",
+    );
+    expect(calls).toHaveLength(0);
   });
 });

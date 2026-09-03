@@ -55,7 +55,7 @@ export const extractNode = defineNode({
   }),
   outputs: z.record(z.string(), z.any()),
   async run({ inputs, credential }) {
-    const { provider, apiKey } = aiCredential(credential);
+    const { provider, apiKey, options } = aiCredential(credential);
 
     const shape: Record<string, z.ZodType> = {};
     for (const field of inputs.fields) {
@@ -66,7 +66,7 @@ export const extractNode = defineNode({
 
     const { generateText, Output } = await import("ai"); // lazy: keeps the ai package out of the client bundle
     const result = await generateText({
-      model: await modelFor(provider, apiKey, inputs.model),
+      model: await modelFor(provider, apiKey, inputs.model, options),
       prompt: inputs.prompt,
       output: Output.object({ schema: z.object(shape) }),
     });

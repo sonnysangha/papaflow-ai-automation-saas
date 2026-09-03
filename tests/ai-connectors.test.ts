@@ -173,20 +173,23 @@ describe("AI connector test()", () => {
   });
 
   it("never echoes the key back, even when the provider does", async () => {
+    // A Google-shaped key: `lib/ai/key-shape.ts` refuses an `sk-…` one for Google before the
+    // request is made, which is a different (and also correct) message.
+    const googleKey = "AIzaSyRealKeyMaterial1234";
     stubFetch({
       [GOOGLE_MODELS]: {
         status: 400,
         text: JSON.stringify({
-          error: { message: `API key not valid: ${KEY}. Please pass a valid API key.` },
+          error: { message: `API key not valid: ${googleKey}. Please pass a valid API key.` },
         }),
       },
     });
 
-    const result = await googleConnector.test({ apiKey: KEY });
+    const result = await googleConnector.test({ apiKey: googleKey });
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.error).not.toContain(KEY);
+    expect(result.error).not.toContain(googleKey);
     expect(result.error).toBe(
       "Google Gemini rejected the key (400: API key not valid: ••••. Please pass a valid API key.)",
     );

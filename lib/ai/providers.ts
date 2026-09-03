@@ -33,6 +33,15 @@ export type TextProvider = (typeof TEXT_PROVIDERS)[number];
  */
 export type ModelFactory = (modelId: string) => LanguageModel;
 
+/**
+ * The non-secret extras a provider needs alongside the key, carried on the connection.
+ *
+ * Anthropic is the only one today: a key that is not scoped to a single workspace must name the
+ * workspace it acts in on every request (`anthropic-workspace-id`), or the API answers 400. The
+ * connector captures it when the key is tested, so a connection that worked then keeps working.
+ */
+export type ProviderOptions = { workspaceId?: string };
+
 export function isTextProvider(provider: string): provider is TextProvider {
   return (TEXT_PROVIDERS as readonly string[]).includes(provider);
 }
@@ -43,12 +52,21 @@ export function isTextProvider(provider: string): provider is TextProvider {
  * A key must never end up in a module-level singleton: this is called per node run, inside the
  * step, with the secret `vault.openFresh()` just opened.
  */
-export async function providerFor(provider: string, apiKey: string): Promise<ModelFactory> {
+export async function providerFor(
+  provider: string,
+  apiKey: string,
+  options: ProviderOptions = {},
+): Promise<ModelFactory> {
   switch (provider) {
     case "openai":
       return (await import("@ai-sdk/openai")).createOpenAI({ apiKey });
     case "anthropic":
-      return (await import("@ai-sdk/anthropic")).createAnthropic({ apiKey });
+      return (await import("@ai-sdk/anthropic")).createAnthropic({
+        apiKey,
+        // Absent unless the connection carries one: sending an empty or wrong workspace is itself
+        // a 400, and a workspace-scoped key must not name a workspace at all.
+        ...(options.workspaceId ? { headers: { "anthropic-workspace-id": options.workspaceId } } : {}),
+      });
     case "google":
       return (await import("@ai-sdk/google")).createGoogle({ apiKey });
     case "xai":
@@ -69,8 +87,13 @@ export async function providerFor(provider: string, apiKey: string): Promise<Mod
 }
 
 /** `providerFor(provider, apiKey)(modelId)` — the only shape the AI nodes need. */
-export async function modelFor(provider: string, apiKey: string, modelId: string): Promise<LanguageModel> {
-  return (await providerFor(provider, apiKey))(modelId);
+export async function modelFor(
+  provider: string,
+  apiKey: string,
+  modelId: string,
+  options: ProviderOptions = {},
+): Promise<LanguageModel> {
+  return (await providerFor(provider, apiKey, options))(modelId);
 }
 
 /**
@@ -81,6 +104,8 @@ export async function modelFor(provider: string, apiKey: string, modelId: string
 export function aiCredential(credential: Record<string, unknown> | undefined): {
   provider: string;
   apiKey: string;
+  /** Pass straight to `modelFor`; empty for every provider that needs nothing extra. */
+  options: ProviderOptions;
 } {
   const provider = credential?.provider;
   const apiKey = credential?.apiKey;
@@ -89,5 +114,23 @@ export function aiCredential(credential: Record<string, unknown> | undefined): {
     throw new ConnectorError("This node needs an AI connection with an API key", 400);
   }
 
-  return { provider, apiKey };
+  return { provider, apiKey, options: providerOptions(credential) };
+}
+
+/**
+ * The provider extras on an opened connection, from either place they can live: a field the user
+ * typed (sealed with the key, so `credential.workspaceId`) or one the connector captured while
+ * testing (`credential.meta.workspaceId`).
+ */
+function providerOptions(credential: Record<string, unknown>): ProviderOptions {
+  const meta = credential.meta;
+  const fromMeta =
+    typeof meta === "object" && meta !== null
+      ? (meta as Record<string, unknown>).workspaceId
+      : undefined;
+  const workspaceId = credential.workspaceId ?? fromMeta;
+
+  return typeof workspaceId === "string" && workspaceId.trim().length > 0
+    ? { workspaceId: workspaceId.trim() }
+    : {};
 }

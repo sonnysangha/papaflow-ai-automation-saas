@@ -29,11 +29,11 @@ export const classifyNode = defineNode({
   }),
   outputs: z.object({ label: z.string() }),
   async run({ inputs, credential }) {
-    const { provider, apiKey } = aiCredential(credential);
+    const { provider, apiKey, options } = aiCredential(credential);
 
     const { generateText, Output } = await import("ai"); // lazy: keeps the ai package out of the client bundle
     const result = await generateText({
-      model: await modelFor(provider, apiKey, inputs.model),
+      model: await modelFor(provider, apiKey, inputs.model, options),
       instructions: inputs.instructions,
       prompt: inputs.text,
       output: Output.choice({ options: inputs.labels }),

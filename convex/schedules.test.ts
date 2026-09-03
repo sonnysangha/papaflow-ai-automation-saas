@@ -83,8 +83,21 @@ describe("api.schedules.getForWorkflow", () => {
     expect(await orgA.query(api.schedules.getForWorkflow, { workflowId })).toEqual({
       plan: "free_org",
       minScheduleMinutes: PLAN_LIMITS.free_org.minScheduleMinutes,
+      // Publishing is the schedule's switch, so the panel needs the workflow's status too — a fresh
+      // workflow is a draft, which is why it reads "publish the workflow to start its schedule".
+      status: "draft",
       schedule: null,
     });
+  });
+
+  test("reports the workflow's publish status, because that is the schedule's switch", async () => {
+    const { t, orgA, workflowId } = await setup();
+
+    await t.run(async (ctx) => {
+      await ctx.db.patch(workflowId, { status: "active" });
+    });
+
+    expect((await orgA.query(api.schedules.getForWorkflow, { workflowId })).status).toBe("active");
   });
 
   test("reads the minimum off the session token's plan claim", async () => {

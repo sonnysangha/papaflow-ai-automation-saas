@@ -41,6 +41,14 @@ function asJson(value: unknown): string {
 }
 
 /**
+ * `"{{ a.b }}: not found"` → `"{{ a.b }}"`. The engine writes the reason into the warning because
+ * the row is read by an agent as well (`get_run`); on screen the heading already says it.
+ */
+function templateOf(warning: string): string {
+  return warning.replace(/:\s*not found\s*$/, "");
+}
+
+/**
  * One half of the last run: what went in, or what came out. Copy is the point of the button — the
  * usual next move is pasting the shape into a prompt or a JSON field.
  *
@@ -156,6 +164,12 @@ export function LastRunSection({ nodeId, run, hasSources }: LastRunSectionProps)
                 {run.iteration === undefined ? "" : ` · loop pass ${run.iteration + 1}`}
               </p>
               <JsonBlock label="Input" value={run.input} />
+              {run.warnings && run.warnings.length > 0 ? (
+                <p className="text-xs break-all text-amber-600 dark:text-amber-500">
+                  Empty templates: {run.warnings.map(templateOf).join(", ")} — these resolved to
+                  nothing, so the node ran with empty values there.
+                </p>
+              ) : null}
               <JsonBlock label="Output" value={run.output} />
               {run.error ? (
                 <p className="max-h-40 overflow-auto font-mono text-xs break-all whitespace-pre-wrap text-destructive">

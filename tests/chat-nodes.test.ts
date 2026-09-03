@@ -207,6 +207,51 @@ describe("discord.postMessage", () => {
     expect(headersOf(init).Authorization).toBe(`Bot ${DISCORD_TOKEN}`);
   });
 
+  /**
+   * A DM. Unlike Slack, Discord will not take a user id where a channel id goes: the conversation
+   * has to be opened first (`POST /users/@me/channels`, docs.discord.com/developers/resources/user)
+   * and the message goes to the channel id that comes back. The `user:` prefix is what tells the
+   * node which of the two a snowflake is.
+   */
+  it("opens a DM channel first when the target names a person", async () => {
+    const fetchMock = mockFetch(async (input) =>
+      String(input).endsWith("/users/@me/channels")
+        ? new Response(JSON.stringify({ id: "DM77", type: 1 }), {
+            headers: { "content-type": "application/json" },
+          })
+        : new Response(JSON.stringify({ id: "M9" }), {
+            headers: { "content-type": "application/json" },
+          }),
+    );
+
+    await expect(
+      discordPostNode.run(ctx({ connectionId: "c1", channelId: "user:U1", content: "hi" }, BOT)),
+    ).resolves.toEqual({ id: "M9" });
+
+    const [openUrl, openInit] = fetchMock.mock.calls[0] as FetchArgs;
+    expect(openUrl).toBe("https://discord.com/api/v10/users/@me/channels");
+    expect(openInit?.method).toBe("POST");
+    expect(headersOf(openInit).Authorization).toBe(`Bot ${DISCORD_TOKEN}`);
+    expect(bodyOf(openInit)).toEqual({ recipient_id: "U1" });
+
+    const [postUrl, postInit] = fetchMock.mock.calls[1] as FetchArgs;
+    expect(postUrl).toBe("https://discord.com/api/v10/channels/DM77/messages");
+    expect(bodyOf(postInit)).toEqual({ content: "hi" });
+  });
+
+  it("reports a DM Discord refuses to open as a configuration error", async () => {
+    const fetchMock = reply({ message: "Cannot send messages to this user", code: 50007 }, { status: 403 });
+
+    const error = await caught(
+      discordPostNode.run(ctx({ connectionId: "c1", channelId: "user:U1", content: "hi" }, BOT)),
+    );
+
+    expect(error.status).toBe(403);
+    expect(error.message).toMatch(/could not open that DM/i);
+    // Nothing was posted: the run failed at the open, not with a message in the wrong place.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("builds a single embed from the embed fields", async () => {
     const fetchMock = reply({ id: "M3" });
 

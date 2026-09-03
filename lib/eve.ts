@@ -1,4 +1,4 @@
-import { Client } from "eve/client";
+import { Client, type ClientSession } from "eve/client";
 
 /**
  * How the engine talks to the eve Runtime agent.
@@ -127,4 +127,36 @@ export function runtimeClient(token: string): Client {
     auth: { bearer: token },
     redirect: "manual",
   });
+}
+
+/**
+ * Retires the session a node opened, so its durable run ends instead of parking.
+ *
+ * An eve session is a `workflowEntry` run plus a sleeping `sessionTimeoutWorkflow` child. Finishing
+ * a turn does not end either of them: the session emits `session.waiting` and stays open for
+ * another message — *"`session.waiting` — The session parked and is ready for the next message"*
+ * (`node_modules/eve/docs/concepts/sessions-runs-and-streaming.md`) — which is right for a chat and
+ * wrong for a workflow node, whose session has exactly one turn in it. Left alone, every Agent node
+ * run showed up as an Active run for the whole session lifetime.
+ *
+ * `reset()` is the only client call that ends it. From the same doc: *"Reset terminally retires the
+ * exact session ID. A reset ID never becomes a new session; create another session explicitly for a
+ * fresh conversation."* Inside eve that is the driver returning a terminal outcome, whose `finally`
+ * disposes the timeout control and cancels the timer run with `"Session ended before its timeout"`
+ * (`node_modules/eve/dist/src/execution/workflow-entry.js`,
+ * `node_modules/eve/dist/src/execution/session-timeout-steps.js`). So one call closes both runs.
+ *
+ * Best effort by design: the node already has its answer, and a session that cannot be retired is a
+ * run that expires on its own at `limits.sessionTimeoutMs` (five minutes for this agent). Failing
+ * the step over the tidying-up would be the worse trade.
+ */
+export async function endRuntimeSession(session: ClientSession, reason: string): Promise<void> {
+  try {
+    await session.reset({ reason });
+  } catch (cause) {
+    console.warn(
+      "eve: could not retire the runtime session",
+      cause instanceof Error ? cause.message : cause,
+    );
+  }
 }

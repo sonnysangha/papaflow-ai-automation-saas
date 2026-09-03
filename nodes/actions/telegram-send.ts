@@ -35,7 +35,7 @@ function botToken(credential: Record<string, unknown> | undefined): string {
 export const telegramSendNode = defineNode({
   type: "telegram.sendMessage",
   name: "Telegram: Send message",
-  description: "Send a message to a Telegram chat as your bot.",
+  description: "Send a message to a Telegram chat — a group, a channel or a DM — as your bot.",
   category: "chat",
   icon: "Send",
   credential: "telegram",
@@ -43,7 +43,13 @@ export const telegramSendNode = defineNode({
   version: "v1",
   inputs: z.object({
     connectionId: z.string(),
-    chatId: z.string().meta({ picker: "chats" }),
+    chatId: z
+      .string()
+      .meta({ picker: "chats" })
+      .describe(
+        "A chat that has already written to the bot — DMs first, then groups and channels. To " +
+          "add one, message the bot from it (or /start) and reload.",
+      ),
     text: z.string().min(1),
     parseMode: z.enum(["HTML", "MarkdownV2", "none"]).default("HTML"),
   }),

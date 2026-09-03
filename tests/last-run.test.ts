@@ -318,6 +318,29 @@ describe("lastRunFor", () => {
     });
   });
 
+  it("carries the templates that resolved to nothing, so the panel can say so", () => {
+    // The failure mode this exists for: the step succeeded, and wrote empty values everywhere the
+    // template missed. Nothing else on the row says that happened.
+    const run = lastRunFor({
+      nodeId: "h",
+      ...CHAIN,
+      steps: [
+        step("h", {
+          status: "success",
+          input: { url: "" },
+          warnings: ["{{ trigger.name }}: not found", "{{ trigger.email }}: not found"],
+        }),
+      ],
+    });
+
+    expect(run.self?.warnings).toEqual([
+      "{{ trigger.name }}: not found",
+      "{{ trigger.email }}: not found",
+    ]);
+    // A clean step carries none, so the panel has nothing to draw.
+    expect(lastRunFor({ nodeId: "h", ...CHAIN, steps: [step("h")] }).self?.warnings).toBeUndefined();
+  });
+
   it("leaves the duration open while the step is still going", () => {
     const run = lastRunFor({
       nodeId: "h",

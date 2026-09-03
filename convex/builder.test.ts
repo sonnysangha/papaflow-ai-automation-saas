@@ -386,6 +386,211 @@ describe("api.builder", () => {
     }
   });
 
+  test("updateNode moves and renames one node without touching its configuration", async () => {
+    const harness = await setup();
+    const { t, workflowId } = harness;
+    const { key } = await add(harness, "http.request", { inputs: { url: "https://x.test" } });
+
+    const moved = await t.mutation(api.builder.updateNode, {
+      secret: SECRET,
+      workflowId,
+      orgId: ORG,
+      userId: USER,
+      node: key,
+      label: "Fetch the lead",
+      position: { x: 640, y: 320 },
+    });
+    expect(moved).toMatchObject({ key, version: 3 });
+
+    const graph = await graphOf(harness);
+    const stored = (graph?.graph.nodes as unknown[])[0] as StoredNode & {
+      position: { x: number; y: number };
+      data: { label: string };
+    };
+    expect(stored.position).toEqual({ x: 640, y: 320 });
+    expect(stored.data.label).toBe("Fetch the lead");
+    // The point of a separate mutation: the inputs are none of its business.
+    expect(stored.data.inputs).toEqual({ url: "https://x.test" });
+  });
+
+  test("updateNode refuses a node that is not there, and a call that changes nothing", async () => {
+    const harness = await setup();
+    const { t, workflowId } = harness;
+    const { key } = await add(harness, "http.request");
+
+    expect(
+      await convexErrorData(
+        t.mutation(api.builder.updateNode, {
+          secret: SECRET,
+          workflowId,
+          orgId: ORG,
+          userId: USER,
+          node: "nope",
+          label: "x",
+        }),
+      ),
+    ).toMatchObject({ code: "node_not_found" });
+
+    expect(
+      await convexErrorData(
+        t.mutation(api.builder.updateNode, {
+          secret: SECRET,
+          workflowId,
+          orgId: ORG,
+          userId: USER,
+          node: key,
+        }),
+      ),
+    ).toMatchObject({ code: "nothing_to_do" });
+  });
+
+  test("rename trims the name and leaves the graph version alone", async () => {
+    const harness = await setup();
+    const { t, workflowId } = harness;
+    await add(harness, "http.request");
+    const before = await graphOf(harness);
+
+    const renamed = await t.mutation(api.builder.rename, {
+      secret: SECRET,
+      workflowId,
+      orgId: ORG,
+      userId: USER,
+      name: "  New leads to Airtable  ",
+    });
+    expect(renamed).toEqual({ name: "New leads to Airtable", version: before?.version });
+    expect((await graphOf(harness))?.name).toBe("New leads to Airtable");
+
+    for (const name of ["", "   ", "x".repeat(200)]) {
+      expect(
+        await convexErrorData(
+          t.mutation(api.builder.rename, { secret: SECRET, workflowId, orgId: ORG, userId: USER, name }),
+        ),
+      ).toMatchObject({ code: "invalid_name" });
+    }
+  });
+
+  test("listRuns and getRun read this workflow's runs, newest first, and nobody else's", async () => {
+    const harness = await setup();
+    const { t, workflowId } = harness;
+
+    // A second workflow in the same org: its runs must not leak into this chat.
+    const otherWorkflowId = await t
+      .withIdentity({ subject: USER, issuer: ISSUER, org_id: ORG })
+      .mutation(api.workflows.create, { name: "Other" });
+
+    const { older, newer, foreign } = await t.run(async (ctx) => {
+      const base = {
+        orgId: ORG,
+        workflowVersion: 1,
+        planSlug: "pro",
+        trigger: { type: "manual", payload: {} },
+      };
+      const older = await ctx.db.insert("executions", {
+        ...base,
+        workflowId,
+        status: "completed" as const,
+        startedAt: 1_000,
+        finishedAt: 1_500,
+      });
+      const newer = await ctx.db.insert("executions", {
+        ...base,
+        workflowId,
+        status: "failed" as const,
+        startedAt: 2_000,
+        finishedAt: 2_400,
+        error: "airtable_create_record_1 failed",
+      });
+      const foreign = await ctx.db.insert("executions", {
+        ...base,
+        workflowId: otherWorkflowId,
+        status: "completed" as const,
+        startedAt: 3_000,
+      });
+
+      await ctx.db.insert("steps", {
+        orgId: ORG,
+        executionId: newer,
+        nodeId: "n1",
+        nodeType: "manual.trigger",
+        status: "success" as const,
+        attempt: 1,
+        output: { name: "Sam" },
+        startedAt: 2_000,
+        finishedAt: 2_050,
+      });
+      await ctx.db.insert("steps", {
+        orgId: ORG,
+        executionId: newer,
+        nodeId: "n2",
+        nodeType: "airtable.createRecord",
+        status: "failed" as const,
+        attempt: 1,
+        input: { baseId: "app1", fields: [] },
+        error: "Every field was empty",
+        warnings: ["{{ trigger.email }}: not found"],
+        startedAt: 2_100,
+        finishedAt: 2_400,
+      });
+
+      return { older, newer, foreign };
+    });
+
+    const runs = await t.query(api.builder.listRuns, { secret: SECRET, workflowId, orgId: ORG });
+    expect(runs.map((run) => run.executionId)).toEqual([newer, older]);
+    expect(runs[0]).toMatchObject({
+      status: "failed",
+      triggerType: "manual",
+      error: "airtable_create_record_1 failed",
+    });
+
+    const limited = await t.query(api.builder.listRuns, {
+      secret: SECRET,
+      workflowId,
+      orgId: ORG,
+      limit: 1,
+    });
+    expect(limited).toHaveLength(1);
+
+    const detail = await t.query(api.builder.getRun, {
+      secret: SECRET,
+      executionId: newer,
+      workflowId,
+      orgId: ORG,
+    });
+    expect(detail?.steps.map((step) => step.nodeId)).toEqual(["n1", "n2"]);
+    expect(detail?.steps[1]).toMatchObject({
+      status: "failed",
+      error: "Every field was empty",
+      warnings: ["{{ trigger.email }}: not found"],
+    });
+
+    // A run of another workflow — same org, same chat's secret — is simply not there.
+    expect(
+      await t.query(api.builder.getRun, {
+        secret: SECRET,
+        executionId: foreign,
+        workflowId,
+        orgId: ORG,
+      }),
+    ).toBeNull();
+  });
+
+  test("the run reads refuse a wrong secret and another organisation's workflow", async () => {
+    const { t, workflowId } = await setup();
+
+    expect(
+      await convexErrorData(
+        t.query(api.builder.listRuns, { secret: "nope", workflowId, orgId: ORG }),
+      ),
+    ).toEqual({ code: "unauthorized" });
+
+    expect(
+      await convexErrorData(
+        t.query(api.builder.listRuns, { secret: SECRET, workflowId, orgId: "org_2" }),
+      ),
+    ).toEqual({ code: "not_found" });
+  });
+
   test("startSession reuses this user's open chat and records the eve session id", async () => {
     const { t, workflowId } = await setup();
 

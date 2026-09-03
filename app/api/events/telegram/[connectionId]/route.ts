@@ -33,7 +33,14 @@ const CALLBACK_TIMEOUT_MS = 5_000;
 type RouteContext = { params: Promise<{ connectionId: string }> };
 
 /** The slice of a Bot API update this route reads. Everything else rides along in `update`. */
-type TelegramChat = { id?: unknown; type?: unknown; title?: unknown; first_name?: unknown };
+type TelegramChat = {
+  id?: unknown;
+  type?: unknown;
+  title?: unknown;
+  first_name?: unknown;
+  last_name?: unknown;
+  username?: unknown;
+};
 type TelegramMessage = { message_id?: unknown; chat?: TelegramChat; text?: unknown; from?: unknown };
 type TelegramFrom = { username?: unknown; first_name?: unknown; id?: unknown };
 type TelegramCallbackQuery = {
@@ -44,8 +51,22 @@ type TelegramCallbackQuery = {
 };
 type TelegramUpdate = { message?: TelegramMessage; callback_query?: TelegramCallbackQuery };
 
-/** A chat as `meta.chat_ids` stores it: what the Send-message picker needs, and nothing more. */
-type KnownChat = { id: string; type?: string; title?: string; first_name?: string };
+/**
+ * A chat as `meta.chat_ids` stores it: what the Send-message picker needs, and nothing more.
+ *
+ * A group, supergroup or channel arrives with a `title`; a *private* chat — a DM with one person —
+ * arrives with `first_name` and optionally `last_name` and `username` instead
+ * (core.telegram.org/bots/api). All four are kept because `connectors/telegram.ts#chatLabel` builds
+ * "DM · Sonny Sangha (@sonny)" out of them, and `type` is what says it is a DM at all.
+ */
+type KnownChat = {
+  id: string;
+  type?: string;
+  title?: string;
+  first_name?: string;
+  last_name?: string;
+  username?: string;
+};
 
 function fail(status: number, code: string, error: string): Response {
   return Response.json({ code, error }, { status });
@@ -75,6 +96,8 @@ function toKnownChat(chat: TelegramChat): KnownChat {
     ...(typeof chat.type === "string" ? { type: chat.type } : {}),
     ...(typeof chat.title === "string" ? { title: chat.title } : {}),
     ...(typeof chat.first_name === "string" ? { first_name: chat.first_name } : {}),
+    ...(typeof chat.last_name === "string" ? { last_name: chat.last_name } : {}),
+    ...(typeof chat.username === "string" ? { username: chat.username } : {}),
   };
 }
 

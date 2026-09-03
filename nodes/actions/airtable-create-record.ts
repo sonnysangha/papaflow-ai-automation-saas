@@ -14,6 +14,13 @@ import { ConnectorError, defineNode } from "../define";
  * Airtable allows 5 requests per second per base and answers a sixth with a 429 whose documented
  * remedy is "wait 30 seconds" — it sends no `Retry-After`, so the node supplies that number itself
  * (docs/research/connectors-data.md).
+ *
+ * `typecast` has a dark side, and it is why this node refuses an all-empty record. Templates that
+ * do not resolve become `""` (`nodes/templates.ts` warns and substitutes the empty string rather
+ * than failing the run), so a workflow whose fields all read `{{ trigger.name }}` against a trigger
+ * that has no `name` used to create a blank row per run and report success. Empty values are now
+ * dropped, and a record with nothing left in it is a 400 naming the columns — the mistake is in the
+ * templates, and the run's step `warnings` say which ones.
  */
 
 const FIELD_ROW = z.object({ key: z.string().min(1), value: z.string() });
@@ -21,12 +28,45 @@ const FIELD_ROW = z.object({ key: z.string().min(1), value: z.string() });
 /** Airtable's documented backoff when it throttles a base and says nothing else. */
 const AIRTABLE_BACKOFF = "30s";
 
+/** How many column names the refusal lists before it stops. */
+const NAMED_COLUMNS = 8;
+
 function tokenFrom(credential: Record<string, unknown> | undefined): string {
   const apiKey = credential?.apiKey;
   if (typeof apiKey !== "string" || !apiKey) {
     throw new ConnectorError("This node needs an Airtable connection", 400);
   }
   return apiKey;
+}
+
+/**
+ * The fields worth sending: everything whose value is not blank after trimming.
+ *
+ * Dropping the blanks rather than sending them is deliberate on its own — an empty string sent to a
+ * date or a number column is a 422 from Airtable, and sending nothing leaves the column at its
+ * default. The refusal is what happens when there is nothing left at all.
+ *
+ * @throws ConnectorError 400 when every configured field resolved to nothing.
+ */
+export function fieldsToSend(rows: readonly { key: string; value: string }[]): Record<string, string> {
+  const fields: Record<string, string> = {};
+  for (const row of rows) {
+    if (row.value.trim().length > 0) fields[row.key] = row.value;
+  }
+
+  if (rows.length > 0 && Object.keys(fields).length === 0) {
+    const named = rows.slice(0, NAMED_COLUMNS).map((row) => row.key);
+    const rest = rows.length - named.length;
+    throw new ConnectorError(
+      "Every field was empty — check the templates feeding these columns: " +
+        named.join(", ") +
+        (rest > 0 ? `, and ${rest} more` : "") +
+        ". No record was created. The step's warnings list the {{ templates }} that resolved to nothing.",
+      400,
+    );
+  }
+
+  return fields;
 }
 
 export const airtableCreateRecordNode = defineNode({
@@ -56,8 +96,7 @@ export const airtableCreateRecordNode = defineNode({
   async run({ inputs, credential }) {
     const token = tokenFrom(credential);
 
-    const fields: Record<string, string> = {};
-    for (const row of inputs.fields) fields[row.key] = row.value;
+    const fields = fieldsToSend(inputs.fields);
 
     const response = await fetch(
       `${AIRTABLE_API}/${encodeURIComponent(inputs.baseId)}/${encodeURIComponent(inputs.tableId)}`,

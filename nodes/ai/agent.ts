@@ -160,7 +160,7 @@ export const agentNode = defineNode({
   async run({ inputs, orgId, executionId, planSlug }) {
     // Both imports are dynamic: `@/lib/eve` reaches `eve/client`, and neither belongs in the
     // canvas's bundle. See the note at the top of the file.
-    const { mintEngineToken, runtimeClient } = await import("@/lib/eve");
+    const { endRuntimeSession, mintEngineToken, runtimeClient } = await import("@/lib/eve");
 
     const token = await mintEngineToken({
       orgId,
@@ -176,59 +176,73 @@ export const agentNode = defineNode({
     const outputSchema = outputSchemaFor(inputs.outputFields);
     const client = runtimeClient(token);
 
-    let result;
+    // The session handle is kept so it can be retired below. A node run is one turn, not a
+    // conversation: without the `reset()` in the `finally`, every Agent node would leave its
+    // `workflowEntry` run (and the `sessionTimeoutWorkflow` sleeping beside it) Active until eve's
+    // own session deadline. See `endRuntimeSession` for the calls and the doc quotes.
+    let session: Awaited<ReturnType<typeof client.sessions.create>>["session"] | undefined;
+
     try {
-      const { response } = await client.sessions.create({
-        message: inputs.goal,
-        // eve 0.49.0 has no per-turn tool-step cap (`SendTurnOptions` is `turnPolicy`,
-        // `clientContext`, `outputSchema`, `streamReconnectPolicy`, `signal`, `headers`), so the
-        // budget is stated to the model rather than enforced by the runtime.
-        clientContext: `Use at most ${inputs.maxSteps} tool calls before you answer.`,
-        ...(outputSchema ? { outputSchema } : {}),
-      });
-      result = await response.result();
-    } catch (cause) {
-      // A transport failure: the agent service is down, or the token was refused. 502 so the step
-      // gets the default retries rather than failing the run outright.
-      throw new ConnectorError(
-        `Could not reach the agent service: ${cause instanceof Error ? cause.message : String(cause)}`,
-        502,
-      );
+      let result;
+      try {
+        const created = await client.sessions.create({
+          message: inputs.goal,
+          // eve 0.49.0 has no per-turn tool-step cap (`SendTurnOptions` is `turnPolicy`,
+          // `clientContext`, `outputSchema`, `streamReconnectPolicy`, `signal`, `headers`), so the
+          // budget is stated to the model rather than enforced by the runtime.
+          clientContext: `Use at most ${inputs.maxSteps} tool calls before you answer.`,
+          ...(outputSchema ? { outputSchema } : {}),
+        });
+        session = created.session;
+        result = await created.response.result();
+      } catch (cause) {
+        // A transport failure: the agent service is down, or the token was refused. 502 so the step
+        // gets the default retries rather than failing the run outright.
+        throw new ConnectorError(
+          `Could not reach the agent service: ${cause instanceof Error ? cause.message : String(cause)}`,
+          502,
+        );
+      }
+
+      const toolCalls = toolCallsFrom(result.events as readonly StreamEvent[]);
+
+      // A parked human-in-the-loop question has nobody to answer it: a run is not a conversation.
+      // The node fails with the question in the message so the person reading the run knows what to
+      // fix — and the `finally` retires the session, so the parked turn does not sit there waiting
+      // for an answer that is never coming.
+      if (result.inputRequests.length > 0) {
+        const asked = result.inputRequests
+          .map((request) => (request as { prompt?: unknown }).prompt)
+          .filter((prompt): prompt is string => typeof prompt === "string");
+        throw new ConnectorError(
+          "The agent asked a question, but a workflow run has nobody to answer it: " +
+            `${asked[0] ?? "unknown question"}. Put the missing detail in the goal.`,
+          400,
+        );
+      }
+
+      if (result.status === "failed") {
+        throw new ConnectorError(
+          `The agent could not finish: ${result.message ?? "no reason reported"}.`,
+          400,
+        );
+      }
+
+      if (outputSchema && result.data === undefined) {
+        throw new ConnectorError(
+          "The agent finished without producing the structured fields this node asked for.",
+          400,
+        );
+      }
+
+      return {
+        text: result.message ?? "",
+        result: result.data ?? null,
+        toolCalls,
+      };
+    } finally {
+      // Every exit takes this: the answer, a refusal, a parked question, a `result()` that threw.
+      if (session) await endRuntimeSession(session, `Agent node finished in run ${executionId}`);
     }
-
-    const toolCalls = toolCallsFrom(result.events as readonly StreamEvent[]);
-
-    // A parked human-in-the-loop question has nobody to answer it: a run is not a conversation. The
-    // node fails with the question in the message so the person reading the run knows what to fix.
-    if (result.inputRequests.length > 0) {
-      const asked = result.inputRequests
-        .map((request) => (request as { prompt?: unknown }).prompt)
-        .filter((prompt): prompt is string => typeof prompt === "string");
-      throw new ConnectorError(
-        "The agent asked a question, but a workflow run has nobody to answer it: " +
-          `${asked[0] ?? "unknown question"}. Put the missing detail in the goal.`,
-        400,
-      );
-    }
-
-    if (result.status === "failed") {
-      throw new ConnectorError(
-        `The agent could not finish: ${result.message ?? "no reason reported"}.`,
-        400,
-      );
-    }
-
-    if (outputSchema && result.data === undefined) {
-      throw new ConnectorError(
-        "The agent finished without producing the structured fields this node asked for.",
-        400,
-      );
-    }
-
-    return {
-      text: result.message ?? "",
-      result: result.data ?? null,
-      toolCalls,
-    };
   },
 });

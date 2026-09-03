@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useQuery } from "convex/react";
 import { PencilIcon, RefreshCwIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -11,10 +12,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { api } from "@/convex/_generated/api";
 
 import {
   clearsOnConnectionChange,
   emptyListHint,
+  emptyOptionsNote,
   pickerOptions,
   type PickerOption,
 } from "../picker-options";
@@ -70,6 +73,14 @@ export function PickerField({
 }: PickerFieldProps) {
   // `null` means "follow the value": a template is typed, anything else is chosen from the list.
   const [typing, setTyping] = useState<boolean | null>(null);
+  // Which provider this connection belongs to, purely so an empty list can be explained in that
+  // provider's own words ("message the bot first" reads as nonsense for Slack, and "invite the
+  // bot" reads as nonsense for Telegram). Read from the org's connection list rather than
+  // `api.connections.get`, which throws for an id whose row has since been deleted — a workflow
+  // saved months ago is exactly the case that must not blank the config panel. `undefined` while
+  // it loads, and for a connection that is gone, both of which fall back to the generic sentence.
+  const connections = useQuery(api.connections.list);
+  const provider = connections?.find((row) => row._id === connectionId)?.provider;
   // The list, its three states and its reload, shared with `KeyValueList` — which reads the same
   // route for its key column. Nothing is asked for while a sibling input is still empty: the kind
   // would name half a list, so `loaded` stays `null` and the waiting control below is what renders.
@@ -211,9 +222,7 @@ export function PickerField({
       </div>
 
       {listing.state === "ready" && options.length === 0 && (
-        <p className="text-xs text-muted-foreground">
-          Nothing came back. Invite the bot where it needs to post, then reload — or type the value.
-        </p>
+        <p className="text-xs text-muted-foreground">{emptyOptionsNote(kind, provider)}</p>
       )}
     </div>
   );

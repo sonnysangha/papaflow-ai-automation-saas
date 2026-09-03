@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
-import { useMutation } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import { HistoryIcon, KeyboardIcon, PlayIcon, SparklesIcon } from "lucide-react";
 import { toast } from "sonner";
@@ -44,6 +43,19 @@ export type RunWorkflowAction = (
   workflowId: string,
   sampleJson: string,
 ) => Promise<{ executionId: string; runId: string }>;
+
+/**
+ * The publish switch's server action, handed down the same way. It is an action rather than the
+ * `workflows.setStatus` mutation because publishing a Schedule trigger also has to start (or
+ * cancel) the durable scheduler run, which only the server can do.
+ */
+export type PublishWorkflowAction = (
+  workflowId: string,
+  publish: boolean,
+) => Promise<
+  | { ok: true; status: "active" | "paused"; scheduled: boolean; nextAt: number | null }
+  | { ok: false; code: string; error: string }
+>;
 
 const MANUAL_TRIGGER = "manual.trigger";
 
@@ -113,10 +125,16 @@ const PUBLISH_EXPLANATION =
 /**
  * The publish switch: a pill saying where this workflow stands and the button that moves it.
  *
- * Publishing is the whole of what `api.workflows.setStatus` does, and it is what every trigger
- * checks — the webhook route, the form submit route, the inbound event routes and the scheduler
- * all refuse a workflow that is not `active`. Run is deliberately exempt, so the pill is never a
- * reason the canvas stops working; it only decides whether the outside world can start a run.
+ * It is what every trigger checks — the webhook route, the form submit route, the inbound event
+ * routes and the scheduler all refuse a workflow that is not `active`. Run is deliberately exempt,
+ * so the pill is never a reason the canvas stops working; it only decides whether the outside world
+ * can start a run.
+ *
+ * It calls the `publishWorkflow` **server action** rather than `api.workflows.setStatus`, because a
+ * Schedule trigger's "on" is not only a status: it is also a durable scheduler run that has to be
+ * started (and cancelled) alongside it, which only the server can do. That is why publishing can be
+ * refused — a plan that will not run a two-minute schedule refuses here, with a reason, and the
+ * workflow stays unpublished rather than becoming a published workflow that silently never fires.
  *
  * "Unpublish" writes `paused` rather than `draft`: `draft` means "never published", and losing that
  * distinction would make the workflows list less honest than it is now.
@@ -124,30 +142,43 @@ const PUBLISH_EXPLANATION =
 function PublishControl({
   workflowId,
   status,
+  publishWorkflow,
 }: {
   workflowId: Id<"workflows">;
   status: WorkflowStatus;
+  publishWorkflow: PublishWorkflowAction;
 }) {
-  const setStatus = useMutation(api.workflows.setStatus);
-  const [pending, setPending] = useState(false);
+  const [pending, startTransition] = useTransition();
+  // Kept on screen rather than only toasted: "your plan will not run this schedule" is something to
+  // read twice and act on, and a toast that has faded is no explanation for a button that did
+  // nothing. Cleared by the next attempt.
+  const [error, setError] = useState<string | null>(null);
   const published = status === "active";
 
   const toggle = useCallback(() => {
-    if (pending) return;
-    setPending(true);
-    void setStatus({ id: workflowId, status: published ? "paused" : "active" }).then(
-      () => {
-        setPending(false);
+    startTransition(async () => {
+      try {
+        const result = await publishWorkflow(workflowId, !published);
+        if (!result.ok) {
+          setError(result.error);
+          toast.error(result.error);
+          return;
+        }
+        setError(null);
         toast.success(
-          published ? "Unpublished — its triggers are off" : "Published — its triggers are live",
+          result.status === "paused"
+            ? "Unpublished — its triggers are off"
+            : result.scheduled
+              ? "Published — the schedule is running"
+              : "Published — its triggers are live",
         );
-      },
-      () => {
-        setPending(false);
+      } catch (cause) {
+        console.error(cause);
+        setError(null);
         toast.error("Could not change the publish status");
-      },
-    );
-  }, [pending, published, setStatus, workflowId]);
+      }
+    });
+  }, [publishWorkflow, published, workflowId]);
 
   return (
     <>
@@ -171,8 +202,14 @@ function PublishControl({
         onClick={toggle}
         title={PUBLISH_EXPLANATION}
       >
-        {published ? "Unpublish" : "Publish"}
+        {pending ? "Working…" : published ? "Unpublish" : "Publish"}
       </Button>
+
+      {error ? (
+        <p role="alert" className="text-xs text-destructive">
+          {error}
+        </p>
+      ) : null}
     </>
   );
 }
@@ -223,6 +260,8 @@ type RunBarProps = {
   triggerSample?: string;
   latest: LatestExecution | undefined;
   runWorkflow: RunWorkflowAction;
+  /** Publish/unpublish, which also starts or cancels a Schedule trigger's scheduler run. */
+  publishWorkflow: PublishWorkflowAction;
   /** Opens the Builder chat. The editor owns whether the panel is showing. */
   onOpenBuilder: () => void;
   builderOpen: boolean;
@@ -239,6 +278,7 @@ export function RunBar({
   triggerType,
   latest,
   runWorkflow,
+  publishWorkflow,
   onOpenBuilder,
   builderOpen,
   triggerSample,
@@ -348,7 +388,11 @@ export function RunBar({
           {pending ? "Starting…" : "Run"}
         </Button>
 
-        <PublishControl workflowId={workflowId} status={status} />
+        <PublishControl
+          workflowId={workflowId}
+          status={status}
+          publishWorkflow={publishWorkflow}
+        />
 
         <div className="ml-auto flex items-center gap-2">
           {/*

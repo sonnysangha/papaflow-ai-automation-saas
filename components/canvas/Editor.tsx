@@ -29,7 +29,7 @@ import { Canvas, type EditorControls } from "./Canvas";
 import { fromStoredGraph, type RunNodeState, type SaveState } from "./graph-io";
 import { carryOverSteps, latestStepByNode, type RunStepRow } from "./last-run";
 import { NodeSidebar } from "./NodeSidebar";
-import { RunBar, type RunWorkflowAction } from "./RunBar";
+import { RunBar, type PublishWorkflowAction, type RunWorkflowAction } from "./RunBar";
 import { RunTimeline } from "./RunTimeline";
 import { useLeaveGuard } from "./use-leave-guard";
 
@@ -224,9 +224,11 @@ function useCarriedSteps(steps: readonly RunStepRow[] | undefined): readonly Run
 export function Editor({
   workflowId,
   runWorkflow,
+  publishWorkflow,
 }: {
   workflowId: Id<"workflows">;
   runWorkflow: RunWorkflowAction;
+  publishWorkflow: PublishWorkflowAction;
 }) {
   const workflow = useQuery(api.workflows.get, { id: workflowId });
   const latest = useQuery(api.executions.latestByWorkflow, { workflowId });
@@ -337,6 +339,7 @@ export function Editor({
               triggerSample={triggerSample}
               latest={latest}
               runWorkflow={runWorkflow}
+              publishWorkflow={publishWorkflow}
               builderOpen={builderOpen}
               onOpenBuilder={() => setBuilderOpen((open) => !open)}
             />

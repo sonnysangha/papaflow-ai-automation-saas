@@ -2,7 +2,15 @@ import { ConvexError, v } from "convex/values";
 
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { internalMutation, internalQuery, mutation, query, type MutationCtx } from "./_generated/server";
+import {
+  internalMutation,
+  internalQuery,
+  mutation,
+  query,
+  type MutationCtx,
+  type QueryCtx,
+} from "./_generated/server";
+import { executionStatusValidator, stepStatusValidator } from "./lib/validators";
 import { graphValidator } from "./workflows";
 
 /**
@@ -225,6 +233,164 @@ export const getGraph = query({
 });
 
 /* -------------------------------------------------------------------------------------------------
+ * Runs.
+ *
+ * The Builder can read what its own workflow did, which is the difference between "I can't read run
+ * logs from here" and a debugging loop. These are separate from `convex/executions.ts` and
+ * `convex/steps.ts` for the usual reason: those queries answer a Clerk session through
+ * `requireOrg`, and the agent has none. Same rows, same ownership check, `ENGINE_SECRET` instead of
+ * a session — and scoped to *one* workflow, the one the chat is bound to, so a Builder session
+ * cannot read a run belonging to a workflow the user did not open.
+ *
+ * `steps.input` is already redacted by `runNode` before it is written (CLAUDE.md rule 1); the tool
+ * redacts again on the way out. Nothing here reads `connections`.
+ * ---------------------------------------------------------------------------------------------- */
+
+/** How many runs one `list_runs` call may return, however many the model asks for. */
+const MAX_RUNS = 20;
+
+/** How many step rows one `get_run` may return: a long Loop can write hundreds. */
+const MAX_STEPS = 200;
+
+const runSummary = v.object({
+  executionId: v.id("executions"),
+  status: executionStatusValidator,
+  triggerType: v.string(),
+  workflowVersion: v.number(),
+  startedAt: v.number(),
+  finishedAt: v.optional(v.number()),
+  error: v.optional(v.string()),
+});
+
+const runStep = v.object({
+  stepId: v.id("steps"),
+  nodeId: v.string(),
+  nodeType: v.string(),
+  status: stepStatusValidator,
+  attempt: v.number(),
+  iteration: v.optional(v.number()),
+  input: v.optional(v.any()),
+  output: v.optional(v.any()),
+  error: v.optional(v.string()),
+  warnings: v.optional(v.array(v.string())),
+  parentStepId: v.optional(v.id("steps")),
+  startedAt: v.number(),
+  finishedAt: v.optional(v.number()),
+});
+
+const runDetail = v.union(v.object({ execution: runSummary, steps: v.array(runStep) }), v.null());
+
+type RunSummary = typeof runSummary.type;
+type RunDetail = typeof runDetail.type;
+
+function summarise(execution: Doc<"executions">): RunSummary {
+  return {
+    executionId: execution._id,
+    status: execution.status,
+    triggerType: execution.trigger.type,
+    workflowVersion: execution.workflowVersion,
+    startedAt: execution.startedAt,
+    finishedAt: execution.finishedAt,
+    error: execution.error,
+  };
+}
+
+/** Proves the workflow is this org's from a read context. `workflowInOrg` needs a `MutationCtx`. */
+async function workflowInOrgRead(
+  ctx: QueryCtx,
+  workflowId: Id<"workflows">,
+  orgId: string,
+): Promise<Doc<"workflows">> {
+  const workflow = await ctx.db.get(workflowId);
+  if (!workflow || workflow.orgId !== orgId) throw new ConvexError({ code: "not_found" });
+  return workflow;
+}
+
+export const runsForBuilder = internalQuery({
+  args: { workflowId: v.id("workflows"), orgId: v.string(), limit: v.optional(v.number()) },
+  returns: v.array(runSummary),
+  handler: async (ctx, { workflowId, orgId, limit }) => {
+    await workflowInOrgRead(ctx, workflowId, orgId);
+
+    const take = Math.min(Math.max(Math.trunc(limit ?? 5), 1), MAX_RUNS);
+    const runs = await ctx.db
+      .query("executions")
+      .withIndex("by_workflow_started", (q) => q.eq("workflowId", workflowId))
+      .order("desc")
+      .take(take);
+
+    return runs.map(summarise);
+  },
+});
+
+/** The workflow's most recent runs, newest first. No retention window: the agent sees what is there. */
+export const listRuns = query({
+  args: {
+    secret: v.string(),
+    workflowId: v.id("workflows"),
+    orgId: v.string(),
+    limit: v.optional(v.number()),
+  },
+  returns: v.array(runSummary),
+  handler: async (ctx, { secret, ...args }): Promise<RunSummary[]> => {
+    guard(secret);
+    return await ctx.runQuery(internal.builder.runsForBuilder, args);
+  },
+});
+
+export const runForBuilder = internalQuery({
+  args: { executionId: v.id("executions"), workflowId: v.id("workflows"), orgId: v.string() },
+  returns: runDetail,
+  handler: async (ctx, { executionId, workflowId, orgId }) => {
+    await workflowInOrgRead(ctx, workflowId, orgId);
+
+    const execution = await ctx.db.get(executionId);
+    // A run of another workflow — even one in the same organisation — reads as absent: this chat is
+    // bound to one canvas, and the id came from a model.
+    if (!execution || execution.orgId !== orgId || execution.workflowId !== workflowId) return null;
+
+    const steps = await ctx.db
+      .query("steps")
+      .withIndex("by_execution", (q) => q.eq("executionId", executionId))
+      .take(MAX_STEPS);
+
+    return {
+      execution: summarise(execution),
+      steps: steps.map((step) => ({
+        stepId: step._id,
+        nodeId: step.nodeId,
+        nodeType: step.nodeType,
+        status: step.status,
+        attempt: step.attempt,
+        iteration: step.iteration,
+        input: step.input,
+        output: step.output,
+        error: step.error,
+        warnings: step.warnings,
+        parentStepId: step.parentStepId,
+        startedAt: step.startedAt,
+        finishedAt: step.finishedAt,
+      })),
+    };
+  },
+});
+
+/** One run's step rows, or null when that id is not a run of this workflow. */
+export const getRun = query({
+  args: {
+    secret: v.string(),
+    executionId: v.id("executions"),
+    workflowId: v.id("workflows"),
+    orgId: v.string(),
+  },
+  returns: runDetail,
+  handler: async (ctx, { secret, ...args }): Promise<RunDetail> => {
+    guard(secret);
+    return await ctx.runQuery(internal.builder.runForBuilder, args);
+  },
+});
+
+/* -------------------------------------------------------------------------------------------------
  * Writes.
  * ---------------------------------------------------------------------------------------------- */
 
@@ -412,6 +578,105 @@ export const configureNode = mutation({
   handler: async (ctx, { secret, ...args }): Promise<typeof configureResult.type> => {
     guard(secret);
     return await ctx.runMutation(internal.builder.configureNodeInternal, args);
+  },
+});
+
+const updateResult = v.object({ nodeId: v.string(), key: v.string(), version: v.number() });
+
+export const updateNodeInternal = internalMutation({
+  args: {
+    ...editArgs,
+    node: v.string(),
+    label: v.optional(v.string()),
+    position: v.optional(v.object({ x: v.number(), y: v.number() })),
+  },
+  returns: updateResult,
+  handler: async (ctx, { workflowId, orgId, userId, node: reference, label, position }) => {
+    const workflow = await workflowInOrg(ctx, workflowId, orgId);
+    const target = findNode(readNodes(workflow.graph), reference);
+    if (!target) {
+      throw new ConvexError({ code: "node_not_found", message: `There is no node "${reference}".` });
+    }
+    if (label === undefined && position === undefined) {
+      throw new ConvexError({
+        code: "nothing_to_do",
+        message: "Pass a label, a position, or both.",
+      });
+    }
+
+    const updated = workflow.graph.nodes.map((entry) => {
+      if (!isRecord(entry) || entry.id !== target.id) return entry;
+      const data = isRecord(entry.data) ? entry.data : {};
+      return {
+        ...entry,
+        ...(position ? { position } : {}),
+        ...(label === undefined ? {} : { data: { ...data, label } }),
+      };
+    });
+
+    const graph: StoredGraph = { ...workflow.graph, nodes: updated };
+    const version = await commit(ctx, workflow, graph, userId);
+    return { nodeId: target.id, key: target.data.key, version };
+  },
+});
+
+/**
+ * A node's label and where it sits, without touching its configuration.
+ *
+ * Separate from `configureNode` because `position` is not part of any node's input schema — it is
+ * React Flow's, and the Builder's auto-layout puts every node in one row. Moving a node is how the
+ * agent tidies up after adding a branch.
+ */
+export const updateNode = mutation({
+  args: {
+    secret: v.string(),
+    ...editArgs,
+    node: v.string(),
+    label: v.optional(v.string()),
+    position: v.optional(v.object({ x: v.number(), y: v.number() })),
+  },
+  returns: updateResult,
+  handler: async (ctx, { secret, ...args }): Promise<typeof updateResult.type> => {
+    guard(secret);
+    return await ctx.runMutation(internal.builder.updateNodeInternal, args);
+  },
+});
+
+const renameResult = v.object({ name: v.string(), version: v.number() });
+
+/** The longest workflow name the sidebar can show without becoming a paragraph. */
+const MAX_NAME = 80;
+
+export const renameInternal = internalMutation({
+  args: { ...editArgs, name: v.string() },
+  returns: renameResult,
+  handler: async (ctx, { workflowId, orgId, userId, name }) => {
+    const workflow = await workflowInOrg(ctx, workflowId, orgId);
+    const trimmed = name.trim();
+    if (!trimmed) {
+      throw new ConvexError({ code: "invalid_name", message: "A workflow needs a name." });
+    }
+    if (trimmed.length > MAX_NAME) {
+      throw new ConvexError({
+        code: "invalid_name",
+        message: `That name is ${trimmed.length} characters; keep it under ${MAX_NAME}.`,
+      });
+    }
+
+    // Not a graph edit, so the version stays put: an open canvas has nothing to adopt, and the name
+    // it shows comes from its own subscription.
+    await ctx.db.patch(workflowId, { name: trimmed, lastEditedBy: userId, updatedAt: Date.now() });
+    return { name: trimmed, version: workflow.version };
+  },
+});
+
+/** Renames the workflow the chat is bound to. */
+export const rename = mutation({
+  args: { secret: v.string(), ...editArgs, name: v.string() },
+  returns: renameResult,
+  handler: async (ctx, { secret, ...args }): Promise<typeof renameResult.type> => {
+    guard(secret);
+    return await ctx.runMutation(internal.builder.renameInternal, args);
   },
 });
 

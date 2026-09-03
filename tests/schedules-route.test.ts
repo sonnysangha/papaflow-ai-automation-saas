@@ -3,10 +3,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 /**
  * `POST /api/schedules`, with Clerk, Convex and the Workflow SDK replaced.
  *
- * What is under test is the decision the route makes — who may enable a schedule, on what interval,
- * and what happens to the run that was already sleeping on it — not Convex or the SDK. Clerk
- * Billing is not switched on yet, so `has()` answers false for everybody here too: the free path
- * (an hourly schedule on `free_org`) is the one the phase check actually walks.
+ * The route is now a thin adapter: publishing is the switch users press (`publishWorkflow` in
+ * `app/(app)/w/[workflowId]/actions.ts`), and this endpoint is kept for anything already calling
+ * it. Both run the *same* `lib/schedules-server.ts` functions, so these tests are also the
+ * end-to-end check that a request and a publish cannot disagree about what enabling means —
+ * `tests/schedules-server.test.ts` covers the same functions from the other side.
+ *
+ * What is under test is therefore the decision plus its HTTP dress — who may enable a schedule, on
+ * what interval, what happens to the run that was already sleeping on it, and which status each
+ * refusal earns — not Convex or the SDK. Clerk Billing is not switched on yet, so `has()` answers
+ * false for everybody here too: the free path (an hourly schedule on `free_org`) is the one the
+ * phase check actually walks.
  *
  * Factories rather than automocks: `@/lib/engine-client` pulls in the workflow definitions and
  * `@/workflows/scheduler` pulls in the step files, none of which a route test should load.
@@ -255,6 +262,18 @@ describe("POST /api/schedules — enable", () => {
 
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({ code: "no_schedule_trigger" });
+  });
+
+  it("refuses a Schedule trigger nobody has configured yet", async () => {
+    // `parseScheduleInputs` refuses it, which is a different code from a bad expression: there is
+    // nothing to correct, only something to fill in.
+    getWorkflowForRun.mockResolvedValue(graphWith({ mode: "cron" }));
+
+    const response = await POST(post({ workflowId: WORKFLOW_ID, action: "enable" }));
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: "invalid_cron" });
+    expect(start).not.toHaveBeenCalled();
   });
 
   it("refuses an expression that is not a cron with 400 rather than 403", async () => {

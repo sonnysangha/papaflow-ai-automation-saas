@@ -22,6 +22,8 @@ import {
   BUILDER_FEATURE,
   BUILDER_WORKFLOW_HEADER,
   CANCEL_OPTION_ID,
+  FINISH_TOOL,
+  isServiceFailureOutput,
   pendingConnectionRequests,
   REQUEST_CONNECTION_TOOL,
   toolCallLabel,
@@ -132,6 +134,30 @@ async function readTranscript(
   // A read the deadline cut short still leaves an ordered prefix from index 0, which is exactly
   // what the store's own catch-up knows how to finish — so hand it the rest rather than guessing.
   return { sessionId, events, follow: deadline.aborted || hasOpenTurn(events) };
+}
+
+/**
+ * Retires a durable Builder session, so its `workflowEntry` run ends instead of parking.
+ *
+ * A finished chat is not a closed one. eve parks a settled session at `session.waiting` — *"The
+ * session parked and is ready for the next message"*
+ * (`node_modules/eve/docs/concepts/sessions-runs-and-streaming.md`) — and its `workflowEntry` run,
+ * plus the `sessionTimeoutWorkflow` sleeping beside it, stay Active in the Workflows list until the
+ * agent's `limits.sessionTimeoutMs` deadline. `reset()` is the one call that ends them: *"Reset
+ * terminally retires the exact session ID. A reset ID never becomes a new session; create another
+ * session explicitly for a fresh conversation."* (same doc), which is exactly what `agent.reset()`
+ * arranges on this side — it is local-only (`client/eve-agent-store.js` performs no request), so
+ * the two go together.
+ *
+ * Best effort: a session already gone answers 404, and nothing else here is worth a visible error.
+ */
+async function retireSession(sessionId: string, client: Client, reason: string): Promise<void> {
+  try {
+    await client.sessions.attach(sessionId).reset({ reason });
+  } catch (cause) {
+    if (cause instanceof ClientError && cause.status === 404) return;
+    console.error("builder: could not retire the session", cause);
+  }
 }
 
 type PanelProps = { workflowId: Id<"workflows">; onClose: () => void };
@@ -463,6 +489,50 @@ function BuilderChat({
   const messages = agent.data.messages;
   const connectionRequests = pendingConnectionRequests(messages);
 
+  // ---------------------------------------------------------------------------------------------
+  // Closing a finished chat.
+  //
+  // `finish` is the agent's last call, and after it the conversation has nothing left to say — but
+  // eve parks the session at `session.waiting` and keeps its `workflowEntry` run Active regardless.
+  // So the panel retires the durable session as soon as the finishing turn has settled, and the
+  // next message opens a fresh one. The transcript on screen is untouched: `reset()` is a server
+  // call, and the local store only clears when `agent.reset()` runs, which happens on the next send.
+  const finished = messages.some((message) =>
+    message.parts.some(
+      (part) =>
+        part.type === "dynamic-tool" &&
+        part.toolName === FINISH_TOOL &&
+        part.state === "output-available" &&
+        // A `finish` that could not reach Convex has finished nothing, and the user needs the chat
+        // it is still in to try again.
+        !isServiceFailureOutput(part.output),
+    ),
+  );
+  const sessionId = agent.session?.sessionId;
+  // The id whose durable session this panel has already retired, so the effect below runs once per
+  // session rather than on every render that still shows the finished transcript.
+  const retiredRef = useRef<string | null>(null);
+
+  const retire = useCallback(
+    async (id: string, reason: string) => {
+      retiredRef.current = id;
+      const client = new Client({
+        host: BUILDER_HOST,
+        auth: { bearer: async () => (await getTokenRef.current()) ?? "" },
+        headers: { [BUILDER_WORKFLOW_HEADER]: workflowId },
+      });
+      await retireSession(id, client, reason);
+    },
+    [workflowId],
+  );
+
+  useEffect(() => {
+    // Only once the turn has settled: retiring mid-stream would cut off the summary `finish` was
+    // called to write.
+    if (!finished || locked || !sessionId || retiredRef.current === sessionId) return;
+    void retire(sessionId, "The builder finished this workflow.");
+  }, [finished, locked, retire, sessionId]);
+
   // Every other pending question: the `remove_node` approval, or eve's own `ask_question`.
   const questions = messages
     .flatMap((message) => message.parts)
@@ -534,8 +604,14 @@ function BuilderChat({
     const message = draft.trim();
     if (message.length === 0 || locked) return;
     setDraft("");
+    // A retired session cannot take another message — *"A terminal or reset session does not [accept
+    // another message]. Start a fresh conversation explicitly"*
+    // (`node_modules/eve/docs/guides/client/continuations.mdx`). `agent.reset()` is that fresh
+    // start: it drops the local cursor so this `send` creates a new durable session, and
+    // `onSessionChange` writes the new id over the dead one.
+    if (finished) agent.reset();
     void agent.send(message).catch((cause: unknown) => console.error(cause));
-  }, [agent, draft, locked]);
+  }, [agent, draft, finished, locked]);
 
   const answer = useCallback(
     (requestId: string, response: { optionId?: string; text?: string }) => {
@@ -586,6 +662,12 @@ function BuilderChat({
                 onCancel={() => answer(request.requestId, { optionId: CANCEL_OPTION_ID })}
               />
             ))}
+
+            {finished && !locked ? (
+              <p className="text-xs text-muted-foreground">
+                Finished — this chat is closed. Your next message starts a new one.
+              </p>
+            ) : null}
 
             {agent.error ? (
               <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm break-words text-destructive">
@@ -651,14 +733,21 @@ function BuilderChat({
               variant="ghost"
               // Also the way out of a resume that failed on something `readTranscript` could not
               // rule out (a 404 is already handled there): `reset()` starts a fresh durable session.
+              // The durable one is retired first, so abandoning a chat does not leave its
+              // `workflowEntry` run Active until the agent's session deadline.
               disabled={resuming || (messages.length === 0 && agent.error === undefined)}
-              onClick={() => agent.reset()}
+              onClick={() => {
+                if (sessionId && retiredRef.current !== sessionId) {
+                  void retire(sessionId, "The user started a new builder chat.");
+                }
+                agent.reset();
+              }}
             >
               New chat
             </Button>
           )}
           <span role="status" className="ml-auto text-xs text-muted-foreground">
-            {resuming ? "Catching up…" : busy ? "Working" : "Ready"}
+            {resuming ? "Catching up…" : busy ? "Working" : finished ? "Finished" : "Ready"}
           </span>
         </div>
       </form>

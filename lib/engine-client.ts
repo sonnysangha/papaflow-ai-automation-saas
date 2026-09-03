@@ -74,6 +74,28 @@ export async function getWorkflowForRun(
   return await client.query(api.engine.getWorkflowForRun, { secret, workflowId, orgId });
 }
 
+/**
+ * Publishes a workflow, or takes it back off the air, on behalf of a signed-in user.
+ *
+ * Called from the `publishWorkflow` server action, which has an `orgId` from Clerk but no Convex
+ * session — the same shape every other server-side write in this app takes. `draft` is not a
+ * destination (`convex/workflows.ts`), so the two states here are the only two publishing moves
+ * between.
+ */
+export async function setWorkflowStatus(args: {
+  workflowId: string;
+  orgId: string;
+  status: "active" | "paused";
+}): Promise<void> {
+  const { client, secret } = engineClient();
+  await client.mutation(api.workflows.setStatusFromEngine, {
+    secret,
+    id: workflowRef(args.workflowId),
+    orgId: args.orgId,
+    status: args.status,
+  });
+}
+
 export async function createExecution(args: CreateExecutionInput): Promise<Id<"executions">> {
   const { client, secret } = engineClient();
   return await client.mutation(api.engine.createExecution, { secret, ...args });

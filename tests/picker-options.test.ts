@@ -4,7 +4,9 @@ import {
   choicesForKey,
   clearsOnConnectionChange,
   emptyListHint,
+  emptyOptionsNote,
   firstUnusedKey,
+  GENERIC_EMPTY_NOTE,
   keyOptions,
   parsePickerOptions,
   pickerOptions,
@@ -75,6 +77,43 @@ describe("emptyListHint", () => {
     for (const kind of ["channels", "chats", "targets", "bases", "tables:appABC"]) {
       expect(emptyListHint(kind)).toBeNull();
     }
+  });
+});
+
+/**
+ * The sentence under a dropdown that came back empty, which is the whole of what a user has to go
+ * on. It used to be one line for every provider — "invite the bot where it needs to post" — which
+ * is advice you cannot follow on Telegram, where a bot cannot be invited into a DM and cannot
+ * message anyone who has not written to it first. Each connector now writes its own.
+ */
+describe("emptyOptionsNote", () => {
+  it("asks a Telegram user to message the bot, not to invite it", () => {
+    const note = emptyOptionsNote("targets", "telegram");
+    expect(note).toBe(
+      "No chats yet. Open Telegram, send the bot any message (or /start) from the account or " +
+        "group you want it to post in, then reload.",
+    );
+    expect(note).not.toMatch(/invite/i);
+    expect(emptyOptionsNote("chats", "telegram")).toBe(note);
+  });
+
+  it("offers Slack a channel invite or a person to DM", () => {
+    expect(emptyOptionsNote("targets", "slack")).toMatch(/Invite the bot to a channel/);
+    expect(emptyOptionsNote("channels", "slack")).toMatch(/person to DM/);
+  });
+
+  it("sends a Discord user to the server invite, and names the typed way to DM", () => {
+    expect(emptyOptionsNote("targets", "discord-bot")).toMatch(/Invite the bot to the server/);
+    expect(emptyOptionsNote("targets", "discord-bot")).toMatch(/user:<their Discord id>/);
+  });
+
+  it("falls back to the generic line for an unknown provider, a kind nobody explained, and none", () => {
+    // `undefined` is the real case: the connection list has not arrived yet, or the row is gone.
+    expect(emptyOptionsNote("targets", undefined)).toBe(GENERIC_EMPTY_NOTE);
+    expect(emptyOptionsNote("targets", "not-a-provider")).toBe(GENERIC_EMPTY_NOTE);
+    // A connector with no `emptyHint` at all, and one that has one but not for this kind.
+    expect(emptyOptionsNote("bases", "airtable")).toBe(GENERIC_EMPTY_NOTE);
+    expect(emptyOptionsNote("guilds", "discord-bot")).toBe(GENERIC_EMPTY_NOTE);
   });
 });
 

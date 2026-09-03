@@ -98,6 +98,19 @@ export type ConnectorDef = {
   externalIdFrom?: string;
   /** Lists remote objects for a config field (channels, bases, voices) — never secrets. */
   pick?: (kind: string, secret: Record<string, string>, meta: Record<string, unknown>) => Promise<PickerOption[]>;
+  /**
+   * What the picker says when `pick(kind)` came back with nothing, in this provider's own terms.
+   *
+   * An empty list is a real answer for every chat connector, and the thing to do about it is
+   * different for each: a Slack bot has to be invited to a channel (or pick a person to DM), a
+   * Discord bot has to be invited to the server, and a Telegram bot cannot be reached at all until
+   * somebody writes to it first — so the one generic "invite the bot where it needs to post" is
+   * wrong for Telegram, which is the case that actually sends people looking.
+   *
+   * `null` (or no `emptyHint` at all) leaves the generic sentence in place. Plain text, no secrets:
+   * `components/canvas/picker-options.ts#emptyOptionsNote` renders it in the browser.
+   */
+  emptyHint?: (kind: string) => string | null;
   /** How to create the provider-side app this connector needs, if it needs one (Slack). */
   setup?: ConnectorSetup;
   /** Runs once the row exists and its id is known (registering a webhook, say). */

@@ -421,6 +421,65 @@ describe("airtable.createRecord", () => {
     expect(error.retryAfter).toBe("5");
   });
 
+  it("drops a field whose template resolved to nothing rather than sending an empty string", async () => {
+    const calls = stubFetch({
+      [AIRTABLE_RECORDS]: { body: { records: [{ id: "rec1", fields: {} }] } },
+    });
+
+    // What a run looks like when `{{ trigger.score }}` misses: the engine substitutes "" and warns.
+    const inputs = airtableCreateRecordNode.inputs.parse({
+      connectionId: "conn_1",
+      baseId: "appBase1",
+      tableId: "tblLeads",
+      fields: [
+        { key: "Name", value: "Sam" },
+        { key: "Score", value: "" },
+        { key: "Notes", value: "   " },
+      ],
+    });
+
+    await airtableCreateRecordNode.run(ctx(inputs as never, AIRTABLE_CREDENTIAL));
+    expect(bodyOf(calls[0])).toEqual({ records: [{ fields: { Name: "Sam" } }], typecast: true });
+  });
+
+  it("refuses to create a record when every field resolved to nothing, and names the columns", async () => {
+    const calls = stubFetch({ [AIRTABLE_RECORDS]: { body: { records: [{ id: "rec1" }] } } });
+
+    const inputs = airtableCreateRecordNode.inputs.parse({
+      connectionId: "conn_1",
+      baseId: "appBase1",
+      tableId: "tblLeads",
+      fields: [
+        { key: "Name", value: "" },
+        { key: "Email", value: "" },
+      ],
+    });
+
+    const error = await caught(airtableCreateRecordNode.run(ctx(inputs as never, AIRTABLE_CREDENTIAL)));
+    expect(error.status).toBe(400);
+    expect(error.message).toContain("Every field was empty");
+    expect(error.message).toContain("Name, Email");
+    // The point of the guard: nothing was written.
+    expect(calls).toHaveLength(0);
+  });
+
+  it("still creates a record when the node was deliberately configured with no fields", async () => {
+    const calls = stubFetch({
+      [AIRTABLE_RECORDS]: { body: { records: [{ id: "rec1", fields: {} }] } },
+    });
+
+    const inputs = airtableCreateRecordNode.inputs.parse({
+      connectionId: "conn_1",
+      baseId: "appBase1",
+      tableId: "tblLeads",
+    });
+
+    expect(await airtableCreateRecordNode.run(ctx(inputs as never, AIRTABLE_CREDENTIAL))).toEqual({
+      id: "rec1",
+    });
+    expect(bodyOf(calls[0])).toEqual({ records: [{ fields: {} }], typecast: true });
+  });
+
   it("reports a 422 as the user's to fix and a missing connection as a 400", async () => {
     stubFetch({ [AIRTABLE_RECORDS]: { status: 422, text: "INVALID_VALUE_FOR_COLUMN" } });
 

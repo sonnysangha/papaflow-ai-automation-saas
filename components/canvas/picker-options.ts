@@ -7,6 +7,7 @@
  * testing, and the field itself is then only wiring.
  */
 import { MODELS_PICKER } from "@/connectors/define";
+import { CONNECTORS } from "@/connectors/registry";
 
 /**
  * One remote object a field can be filled from, exactly as `connectors/define.ts` describes it —
@@ -100,6 +101,30 @@ export function emptyListHint(kind: string): string | null {
   return kind === MODELS_PICKER
     ? "This connection has no model list — re-test it on the Connections page or type a model id"
     : null;
+}
+
+/**
+ * The sentence under a dropdown that stayed a dropdown and came back empty, for a connection whose
+ * provider we do not know (the list is still loading, or the row has since been deleted).
+ *
+ * Deliberately vague, because it has to be true of every provider at once — which is exactly why
+ * the provider-specific version below exists.
+ */
+export const GENERIC_EMPTY_NOTE =
+  "Nothing came back. Invite the bot where it needs to post, then reload — or type the value.";
+
+/**
+ * …and the same sentence in one provider's own terms, when the connector has written one.
+ *
+ * "Invite the bot where it needs to post" is actively wrong for Telegram — a bot cannot be invited
+ * into a DM, and cannot message anybody who has not written to it first — so a Telegram user
+ * following it goes looking for an invite that does not exist. `ConnectorDef.emptyHint` is where
+ * each provider says what actually fills its list; this is only the lookup, so the wording stays
+ * next to the `pick()` that produced the empty list.
+ */
+export function emptyOptionsNote(kind: string, provider: string | undefined): string {
+  const hint = provider ? CONNECTORS[provider]?.emptyHint?.(kind) : null;
+  return hint ?? GENERIC_EMPTY_NOTE;
 }
 
 /**

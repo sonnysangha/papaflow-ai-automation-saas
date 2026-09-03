@@ -31,6 +31,8 @@ export type RunStepRow = {
   input?: unknown;
   output?: unknown;
   error?: string;
+  /** Templates that resolved to nothing (`"{{ a.b }}: not found"`), written by `runNode`. */
+  warnings?: string[];
   handle?: string;
   /** The 0-based Loop pass, absent for a node that runs once. */
   iteration?: number;
@@ -69,6 +71,12 @@ export type LastRunStep = {
   input?: unknown;
   output?: unknown;
   error?: string;
+  /**
+   * The templates this step's input referenced and could not find. Not an error — the node ran with
+   * `""` where the reference was — which is exactly why it needs saying out loud: a step that
+   * succeeded while writing nothing is the hardest kind of wrong to spot.
+   */
+  warnings?: string[];
   iteration?: number;
   startedAt: number;
   finishedAt?: number;
@@ -211,6 +219,7 @@ function selfFor(step: RunStepRow): LastRunStep {
     input: step.input,
     output: step.output,
     error: step.error,
+    warnings: step.warnings,
     iteration: step.iteration,
     startedAt: step.startedAt,
     finishedAt: step.finishedAt,

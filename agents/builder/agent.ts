@@ -28,6 +28,24 @@ import { modelsFromMeta, pickConnection, pickModelId } from "./lib/models";
 /** The model a Builder chat gets when the organisation has no usable AI connection of its own. */
 const HOUSE_MODEL = "openai/gpt-5.6-luna";
 
+/**
+ * How long one Builder chat may live before eve retires it.
+ *
+ * A chat is a real conversation, so unlike the Runtime agent this one is not one-shot: the panel
+ * retires the session itself when `finish` lands or the user starts a new chat
+ * (`components/canvas/BuilderPanel.tsx`), and this deadline only catches the chats nobody closes —
+ * a tab shut mid-build, a panel abandoned. Without it eve's default keeps that `workflowEntry` run
+ * Active for thirty days.
+ *
+ * Two hours rather than something tighter, because the option is an **absolute lifetime, not an
+ * idle timer**: *"The deadline starts when the session is created"*
+ * (`node_modules/eve/dist/src/shared/agent-definition.d.ts`, `AgentLimitsDefinition`). eve 0.49.0
+ * has no idle timeout, so a thirty-minute cap would end a chat somebody was still using half an
+ * hour in. An active turn is never interrupted — eve lets it settle and then completes the session
+ * — but the next message would need a fresh chat, so the cap has to be longer than a build takes.
+ */
+const SESSION_TIMEOUT_MS = 2 * 60 * 60 * 1_000;
+
 /** Auth attributes are `string | readonly string[]`; every claim this agent reads is a string. */
 function attribute(
   attributes: Readonly<Record<string, string | readonly string[]>> | undefined,
@@ -38,6 +56,7 @@ function attribute(
 }
 
 export default defineAgent({
+  limits: { sessionTimeoutMs: SESSION_TIMEOUT_MS },
   model: defineDynamic({
     events: {
       "session.started": () => HOUSE_MODEL,

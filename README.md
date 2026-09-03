@@ -48,6 +48,26 @@ triggers on, and **Unpublish** to switch them off again (the badge then reads `P
 The URLs themselves work before publishing — they have to, or there would be nothing to paste into
 the sending system.
 
+**Publishing a Schedule trigger starts it.** A schedule is two things at once: a row in `schedules`,
+and a durable Workflow SDK run sleeping until the next occurrence. Press **Publish** and the server
+action (`app/(app)/w/[workflowId]/actions.ts#publishWorkflow`) does both — it validates the interval
+against the plan, writes the row and `start()`s `workflows/scheduler.ts` — and **Unpublish** cancels
+that run and disables the row. There is no separate Enable switch; the Schedule trigger's panel only
+reports what publishing left behind, with the next three fire times. If your plan will not run the
+interval you asked for (`free_org` is once an hour) publishing is refused with a message saying so,
+and the workflow stays unpublished rather than becoming a published workflow that never fires.
+
+The sleeping scheduler run costs nothing while it sleeps — no compute is held during `sleep()`, only
+storage for the event log — so an hourly schedule is a run that is idle 99.9% of the time. It shows
+as **Active** in Vercel's Workflows list, which is correct: it is a live run, waiting.
+
+Anything that moves the status *without* the action — the Builder's `finish`, an older client
+calling `api.workflows.setStatus` — cannot strand a schedule: `fireSchedule` re-reads the workflow
+on every tick and skips one that is not `active` (`fireSchedule:not-published` in the logs), so the
+schedule resumes if it is published again and fires nothing meanwhile. It does mean a workflow the
+Builder published still needs one press of **Publish** to get a scheduler run; the trigger's panel
+says so when that is the case.
+
 **On localhost**, the form page and the webhook URL work straight from your browser or `curl`, because
 your machine is the one calling them:
 
@@ -92,6 +112,17 @@ the same node `run()` the canvas uses, opening the credential inside the call. T
 
 Tool calls appear in the run drawer as rows nested under the Agent node's own step.
 
+**Sessions are closed when the node is done.** An eve session is a durable `workflowEntry` run plus a
+`sessionTimeoutWorkflow` sleeping beside it, and finishing a turn does not end either — eve parks the
+session at `session.waiting`, ready for a message that, for a workflow node, is never coming. So the
+node calls `session.reset()` as soon as it has its answer (or its error), which terminates both runs;
+`agents/runtime/agent.ts` also sets `limits: { sessionTimeoutMs: 5 * 60 * 1000 }` as the backstop for
+a step that dies before it can. That limit is an **absolute lifetime from session creation, not an
+idle timer** — eve 0.49.0 has no idle timeout — but it never interrupts work: a turn still running at
+the deadline is allowed to settle first. eve's own default is 30 days, which is what left Agent-node
+and chat runs sitting Active in Vercel's Workflows list. A waiting run holds no compute, so the cost
+of the old behaviour was clutter and storage rather than money.
+
 ## Builder agent
 
 Pro organisations get a **Build with AI** button in the canvas run bar. It opens a chat beside the
@@ -125,6 +156,14 @@ first. The default `bash`, `read_file`, `write_file`, `web_fetch` and `agent` to
 the ask as a credential widget (matched on `part.toolName === "request_connection"`), the pasted key
 goes to `POST /api/connections` — never through the chat — and the widget answers with the new
 connection's id alone.
+
+**Ending a chat.** The Builder's session is a durable run too, so the panel retires it rather than
+leaving it parked: when `finish` lands the transcript stays on screen, the composer reads `Finished`,
+and the durable session is `reset()` — the next message opens a fresh one. **New chat** does the same
+thing by hand. `agents/builder/agent.ts` sets `limits: { sessionTimeoutMs: 2 * 60 * 60 * 1000 }` for
+the chats nobody closes; two hours rather than something tighter because the limit is an absolute
+lifetime from creation rather than an idle timer, and a shorter one would end a conversation somebody
+was still having.
 
 **Live canvas.** Nothing in the panel writes to Convex. The agent's mutations arrive on the
 `workflows.get` subscription the editor already holds, and `components/canvas/Canvas.tsx` adopts a

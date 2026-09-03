@@ -198,10 +198,13 @@ describe("telegram connector", () => {
       ],
     };
 
+    // DMs first, and marked as such: a private chat is what somebody reaching for "ask *me*"
+    // wants, and a bare first name between two group titles reads like a third group.
     expect(await telegramConnector.pick!("chats", { botToken: TOKEN }, meta)).toEqual([
-      { id: "-1001234567890", label: "PapaFam" },
-      { id: "42", label: "Sonny" },
+      { id: "42", label: "DM · Sonny" },
+      // Learned before Telegram sent a name for it: still selectable, labelled by its id.
       { id: "7", label: "7" },
+      { id: "-1001234567890", label: "PapaFam" },
     ]);
     expect(await telegramConnector.pick!("chats", { botToken: TOKEN }, {})).toEqual([]);
     expect(await telegramConnector.pick!("models", { botToken: TOKEN }, meta)).toEqual([]);

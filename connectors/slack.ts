@@ -13,10 +13,18 @@ import { APP_ORIGIN_TOKEN, defineConnector, TARGETS_PICKER } from "./define";
  *
  * `chat:write` posts (`nodes/actions/slack-post.ts` and the Approval node's `chat.postMessage`);
  * `chat:write.public` is what lets it post to a public channel nobody has invited it to — Slack
- * documents that it "must also request chat:write". The two read scopes are the channel picker:
- * `conversations.list?types=public_channel,private_channel` needs `channels:read` for the public
- * half and `groups:read` for the private half, and a token missing the second answers
+ * documents that it "must also request chat:write". The two channel read scopes are the channel
+ * picker: `conversations.list?types=public_channel,private_channel` needs `channels:read` for the
+ * public half and `groups:read` for the private half, and a token missing the second answers
  * `missing_scope` for the whole call rather than a shorter list.
+ *
+ * `users:read` is the DM half, and it is a *listing* scope only: `chat.postMessage` opens the
+ * conversation itself when `channel` is a user id — "provide the user's ID as the channel value and
+ * a direct message conversation will be opened if it isn't open already"
+ * (docs.slack.dev/reference/methods/chat.postMessage), which needs nothing beyond `chat:write`. So
+ * no `im:write`, and no `im:read` either: the people in the picker come from `users.list`
+ * (`users:read`) rather than from `conversations.list?types=im`, which would only ever list the DMs
+ * the bot has already opened.
  *
  * Interactivity needs no scope at all: `POST /api/events/slack` is verified with the signing
  * secret, not with a token.
@@ -26,6 +34,7 @@ export const SLACK_BOT_SCOPES: readonly string[] = [
   "chat:write.public",
   "channels:read",
   "groups:read",
+  "users:read",
 ];
 
 /** Slack's own limits on the two names in a manifest (docs.slack.dev/reference/app-manifest). */
@@ -84,7 +93,8 @@ export function slackAppManifest(appName: string = DEFAULT_APP_NAME): Record<str
   return {
     display_information: {
       name,
-      description: "Runs your PapaFlow workflows: posts messages and asks for approvals.",
+      description:
+        "Runs your PapaFlow workflows: posts messages and asks for approvals, in channels or DMs.",
     },
     features: {
       bot_user: { display_name: botDisplayName(name), always_online: true },
@@ -107,12 +117,22 @@ export function slackAppManifest(appName: string = DEFAULT_APP_NAME): Record<str
 const SLACK_API = "https://slack.com/api";
 const TIMEOUT_MS = 15_000;
 
-/** Both kinds the bot can be a member of. DMs and group DMs are not channels a workflow posts to. */
+/**
+ * Both kinds the bot can be a *member* of. `im` and `mpim` are deliberately not here: that list is
+ * the DMs the bot has already opened, which is empty on a fresh app and is not the question the
+ * picker is asking. People come from `users.list` instead, and `chat.postMessage` opens the DM.
+ */
 const CHANNEL_TYPES = "public_channel,private_channel";
 /** Slack's own maximum for `conversations.list`; fewer pages means fewer round trips. */
 const PAGE_SIZE = 1000;
 /** 10 pages = 10,000 channels. Past that the dropdown is the wrong UI anyway. */
 const MAX_PAGES = 10;
+/** `users.list` recommends "no more than 200 results at a time" and refuses a `limit` over 1000. */
+const USER_PAGE_SIZE = 200;
+/** 5 pages = 1,000 people. A workspace bigger than that is a search box, not a dropdown. */
+const MAX_USER_PAGES = 5;
+/** Slack's own assistant is a member of every workspace and is nobody a workflow means to DM. */
+const SLACKBOT_ID = "USLACKBOT";
 
 type SlackResponse = { ok?: boolean; error?: string; [key: string]: unknown };
 
@@ -177,6 +197,108 @@ function conversationsUrl(cursor: string): string {
   return `${SLACK_API}/conversations.list?${query.toString()}`;
 }
 
+/** …and one page of the people list. */
+function usersUrl(cursor: string): string {
+  const query = new URLSearchParams({ limit: String(USER_PAGE_SIZE) });
+  if (cursor) query.set("cursor", cursor);
+  return `${SLACK_API}/users.list?${query.toString()}`;
+}
+
+/** One `users.list` member, reduced to what deciding and labelling need. */
+type Member = {
+  id?: unknown;
+  name?: unknown;
+  real_name?: unknown;
+  deleted?: unknown;
+  is_bot?: unknown;
+  profile?: { real_name?: unknown; display_name?: unknown };
+};
+
+function membersOf(payload: SlackResponse): Member[] {
+  const members = payload.members;
+  if (!Array.isArray(members)) return [];
+  return members.filter((entry): entry is Member => typeof entry === "object" && entry !== null);
+}
+
+/**
+ * Whether this member is a person somebody would mean to DM.
+ *
+ * Every workspace's `users.list` is mostly not people: deactivated accounts stay in it forever, and
+ * every app that has ever been installed is a member with `is_bot`. Slackbot is neither of those and
+ * still cannot be DMed usefully, so it goes by id.
+ */
+function isRealPerson(member: Member): boolean {
+  if (member.deleted === true || member.is_bot === true) return false;
+  return asString(member.id) !== SLACKBOT_ID;
+}
+
+/** `DM · Sonny Sangha (@sonny)` — the real name people recognise, with the handle that is unique. */
+function memberLabel(member: Member): string {
+  const handle = asString(member.name);
+  const named =
+    asString(member.real_name) ||
+    asString(member.profile?.real_name) ||
+    asString(member.profile?.display_name) ||
+    handle ||
+    asString(member.id);
+  return handle && handle !== named ? `DM · ${named} (@${handle})` : `DM · ${named}`;
+}
+
+/** Every channel the bot is a member of (plus every public one, which it can post to uninvited). */
+async function slackChannels(token: string): Promise<{ id: string; label: string }[]> {
+  const options: { id: string; label: string }[] = [];
+  let cursor = "";
+
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const result = await callSlack(token, conversationsUrl(cursor));
+    if (!result.ok) throw new Error(`slack: conversations.list — ${result.error}`);
+
+    for (const channel of conversationsOf(result.result)) {
+      const id = asString(channel.id);
+      const name = asString(channel.name);
+      if (id) options.push({ id, label: name ? `#${name}` : id });
+    }
+
+    cursor = nextCursor(result.result);
+    if (!cursor) break;
+  }
+
+  return options;
+}
+
+/**
+ * The people in the workspace, as options whose value is a user id — which is all a DM needs, since
+ * `chat.postMessage` opens the conversation when `channel` is one.
+ *
+ * A refusal here is *not* fatal, which is the one thing worth knowing about this function: an app
+ * installed before `users:read` was in the manifest answers `missing_scope`, and turning that into
+ * a failed picker would take away the channel list too — for a feature that workspace has never
+ * had. So the people half is dropped and the channels still arrive; reinstalling the app with the
+ * current manifest is what brings the DMs back.
+ */
+async function slackPeople(token: string): Promise<{ id: string; label: string }[]> {
+  const options: { id: string; label: string }[] = [];
+  let cursor = "";
+
+  for (let page = 0; page < MAX_USER_PAGES; page += 1) {
+    const result = await callSlack(token, usersUrl(cursor));
+    if (!result.ok) {
+      console.warn(`slack: users.list — ${result.error} (DMs are not offered for this token)`);
+      return [];
+    }
+
+    for (const member of membersOf(result.result)) {
+      const id = asString(member.id);
+      if (id && isRealPerson(member)) options.push({ id, label: memberLabel(member) });
+    }
+
+    cursor = nextCursor(result.result);
+    if (!cursor) break;
+  }
+
+  return options;
+}
+
 export const slackConnector = defineConnector({
   provider: "slack",
   name: "Slack",
@@ -217,6 +339,7 @@ export const slackConnector = defineConnector({
       "On Basic Information, copy the Signing Secret into the optional field — Approval buttons and Slack triggers are verified with it.",
       `The manifest already switches Interactivity on and points it at ${SLACK_INTERACTIVITY_URL}, so there is nothing to paste back: presses are matched to this connection by your workspace id.`,
       "Invite the bot to any private channel you want to post in (/invite @PapaFlow). Public channels work without an invite.",
+      "Direct messages need no invite at all: the manifest asks for users:read, so the channel dropdown also lists everyone in the workspace as “DM · Name”, and Slack opens the conversation the first time your workflow posts.",
     ],
     manifest: slackAppManifest(),
   },
@@ -262,33 +385,30 @@ export const slackConnector = defineConnector({
   },
 
   /**
-   * The channel dropdown behind `slack.postMessage`. Private channels only appear once the bot has
-   * been invited to them, which is exactly the set it can post to, so an empty list is a real
-   * answer and not a failure.
+   * The "where should this go" dropdown behind `slack.postMessage` and the Approval node: every
+   * channel the bot can post in, then every person it can DM.
+   *
+   * Channels come first because they are what a workflow usually means, and both halves write the
+   * same kind of value — `chat.postMessage` takes a `C…` channel id or a `U…` user id in the same
+   * `channel` argument, and opens the DM itself for the second. Private channels only appear once
+   * the bot has been invited to them, which is exactly the set it can post to, so an empty channel
+   * half is a real answer and not a failure.
    */
   async pick(kind, secret) {
     // `targets` is the provider-agnostic kind the Approval node asks for; for Slack that is the
-    // same channel list `slack.postMessage` uses.
+    // same list `slack.postMessage` uses.
     if (kind !== "channels" && kind !== TARGETS_PICKER) return [];
 
     const token = secret.botToken?.trim() ?? "";
-    const options: { id: string; label: string }[] = [];
-    let cursor = "";
+    return [...(await slackChannels(token)), ...(await slackPeople(token))];
+  },
 
-    for (let page = 0; page < MAX_PAGES; page += 1) {
-      const result = await callSlack(token, conversationsUrl(cursor));
-      if (!result.ok) throw new Error(`slack: conversations.list — ${result.error}`);
-
-      for (const channel of conversationsOf(result.result)) {
-        const id = asString(channel.id);
-        const name = asString(channel.name);
-        if (id) options.push({ id, label: name ? `#${name}` : id });
-      }
-
-      cursor = nextCursor(result.result);
-      if (!cursor) break;
-    }
-
-    return options;
+  /** Both halves of the list are empty, so say what fills each one. */
+  emptyHint(kind) {
+    if (kind !== "channels" && kind !== TARGETS_PICKER) return null;
+    return (
+      "No channels or people yet. Invite the bot to a channel (/invite @PapaFlow), or pick a " +
+      "person to DM — reinstall the app from the manifest if people are missing, then reload."
+    );
   },
 });

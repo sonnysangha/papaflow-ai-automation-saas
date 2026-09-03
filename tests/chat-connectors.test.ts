@@ -5,7 +5,13 @@ import {
   substituteAppOrigin,
   type ConnectorTestResult,
 } from "@/connectors/define";
-import { discordBotConnector, discordInviteUrl } from "@/connectors/discord-bot";
+import {
+  DISCORD_USER_PREFIX,
+  discordBotConnector,
+  discordInviteUrl,
+  discordUserId,
+  openDiscordDm,
+} from "@/connectors/discord-bot";
 import { discordWebhookConnector, parseDiscordWebhookUrl } from "@/connectors/discord-webhook";
 import {
   SLACK_BOT_SCOPES,
@@ -27,6 +33,30 @@ const SLACK_TOKEN = "xoxb-1111-2222-testtokenabcd";
 const AUTH_TEST = "https://slack.com/api/auth.test";
 const CHANNELS = "https://slack.com/api/conversations.list?types=public_channel%2Cprivate_channel&limit=1000";
 const CHANNELS_PAGE_2 = `${CHANNELS}&cursor=page2`;
+const USERS = "https://slack.com/api/users.list?limit=200";
+const USERS_PAGE_2 = `${USERS}&cursor=people2`;
+
+/** One page of people, with the three kinds of member that must never reach the dropdown. */
+const USERS_BODY = {
+  ok: true,
+  members: [
+    { id: "U1", name: "sonny", real_name: "Sonny Sangha" },
+    { id: "U2", name: "ada", profile: { real_name: "Ada Lovelace" } },
+    // Same handle as name: no redundant `(@…)` suffix.
+    { id: "U3", name: "grace" },
+    { id: "UBOT", name: "papaflow", is_bot: true },
+    { id: "UGONE", name: "ghost", real_name: "Left Long Ago", deleted: true },
+    { id: "USLACKBOT", name: "slackbot", real_name: "Slackbot" },
+  ],
+  response_metadata: { next_cursor: "" },
+};
+
+/** What `USERS_BODY` should survive as. */
+const SLACK_PEOPLE = [
+  { id: "U1", label: "DM · Sonny Sangha (@sonny)" },
+  { id: "U2", label: "DM · Ada Lovelace (@ada)" },
+  { id: "U3", label: "DM · grace" },
+];
 
 const BOT_TOKEN = "MTIzNDU2Nzg5.Gabcde.bot-token-wxyz";
 const APP_ID = "1234567890123456789";
@@ -34,6 +64,9 @@ const USERS_ME = "https://discord.com/api/v10/users/@me";
 const GUILDS = "https://discord.com/api/v10/users/@me/guilds";
 const GUILD_CHANNELS = "https://discord.com/api/v10/guilds/555/channels";
 const OTHER_GUILD_CHANNELS = "https://discord.com/api/v10/guilds/666/channels";
+const GUILD_MEMBERS = "https://discord.com/api/v10/guilds/555/members?limit=200";
+const OTHER_GUILD_MEMBERS = "https://discord.com/api/v10/guilds/666/members?limit=200";
+const CREATE_DM = "https://discord.com/api/v10/users/@me/channels";
 
 const WEBHOOK_ID = "987654321098765432";
 const WEBHOOK_TOKEN = "aBcDeF-webhook-token_1234";
@@ -172,16 +205,88 @@ describe("slack connector", () => {
           response_metadata: { next_cursor: "" },
         },
       },
+      [USERS]: { body: { ok: true, members: [], response_metadata: { next_cursor: "" } } },
     });
 
     const options = await slackConnector.pick?.("channels", { botToken: SLACK_TOKEN }, {});
 
-    expect(calls.map((call) => call.url)).toEqual([CHANNELS, CHANNELS_PAGE_2]);
+    expect(calls.map((call) => call.url)).toEqual([CHANNELS, CHANNELS_PAGE_2, USERS]);
     expect(calls.every((call) => call.headers.Authorization === `Bearer ${SLACK_TOKEN}`)).toBe(true);
     expect(options).toEqual([
       { id: "C1", label: "#general" },
       { id: "C2", label: "#random" },
       { id: "C3", label: "#private-ops" },
+    ]);
+  });
+
+  /**
+   * DMs. `chat.postMessage` takes a user id in the same `channel` argument it takes a channel id in
+   * and opens the conversation itself (docs.slack.dev/reference/methods/chat.postMessage), so a
+   * person is an option like any other — the only work is listing them and keeping the list to
+   * people.
+   */
+  it("appends people to the same list, as DM options carrying their user id", async () => {
+    const calls = stubFetch({
+      [CHANNELS]: {
+        body: { ok: true, channels: [{ id: "C1", name: "general" }], response_metadata: {} },
+      },
+      [USERS]: { body: USERS_BODY },
+    });
+
+    const options = await slackConnector.pick?.("targets", { botToken: SLACK_TOKEN }, {});
+
+    expect(calls.map((call) => call.url)).toEqual([CHANNELS, USERS]);
+    // Channels first — what a workflow usually means — then everyone who can be DMed.
+    expect(options).toEqual([{ id: "C1", label: "#general" }, ...SLACK_PEOPLE]);
+    // Bots, deactivated accounts and Slackbot are members of `users.list` and none of them is
+    // somebody a workflow means to message.
+    expect(options?.map((option) => option.id)).not.toContain("UBOT");
+    expect(options?.map((option) => option.id)).not.toContain("UGONE");
+    expect(options?.map((option) => option.id)).not.toContain("USLACKBOT");
+  });
+
+  it("pages the people list with a cursor, like the channel list", async () => {
+    const calls = stubFetch({
+      [CHANNELS]: { body: { ok: true, channels: [], response_metadata: {} } },
+      [USERS]: {
+        body: {
+          ok: true,
+          members: [{ id: "U1", name: "sonny", real_name: "Sonny Sangha" }],
+          response_metadata: { next_cursor: "people2" },
+        },
+      },
+      [USERS_PAGE_2]: {
+        body: {
+          ok: true,
+          members: [{ id: "U9", name: "late", real_name: "Late Joiner" }],
+          response_metadata: { next_cursor: "" },
+        },
+      },
+    });
+
+    await expect(slackConnector.pick?.("channels", { botToken: SLACK_TOKEN }, {})).resolves.toEqual([
+      { id: "U1", label: "DM · Sonny Sangha (@sonny)" },
+      { id: "U9", label: "DM · Late Joiner (@late)" },
+    ]);
+    expect(calls.map((call) => call.url)).toEqual([CHANNELS, USERS, USERS_PAGE_2]);
+  });
+
+  /**
+   * The compatibility case, and the reason `slackPeople` swallows its own failure: an app installed
+   * before `users:read` was in the manifest answers `missing_scope`, and losing the channel list
+   * over a feature that workspace has never had would be a regression for every existing user.
+   */
+  it("keeps the channel list when the token predates users:read", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    stubFetch({
+      [CHANNELS]: {
+        body: { ok: true, channels: [{ id: "C1", name: "general" }], response_metadata: {} },
+      },
+      [USERS]: { body: { ok: false, error: "missing_scope" } },
+    });
+
+    await expect(slackConnector.pick?.("targets", { botToken: SLACK_TOKEN }, {})).resolves.toEqual([
+      { id: "C1", label: "#general" },
     ]);
   });
 
@@ -195,6 +300,14 @@ describe("slack connector", () => {
     const calls = forbidFetch();
     await expect(slackConnector.pick?.("guilds", { botToken: SLACK_TOKEN }, {})).resolves.toEqual([]);
     expect(calls).toHaveLength(0);
+  });
+
+  it("says what fills an empty list, in Slack's terms", () => {
+    for (const kind of ["channels", "targets"]) {
+      expect(slackConnector.emptyHint?.(kind)).toMatch(/Invite the bot to a channel/);
+      expect(slackConnector.emptyHint?.(kind)).toMatch(/person to DM/);
+    }
+    expect(slackConnector.emptyHint?.("models")).toBeNull();
   });
 });
 
@@ -371,13 +484,88 @@ describe("discord bot connector", () => {
       [GUILDS]: { body: [{ id: "555", name: "PapaFam" }, { id: "666", name: "Side project" }] },
       [GUILD_CHANNELS]: { body: [{ id: "C1", name: "general", type: 0 }] },
       [OTHER_GUILD_CHANNELS]: { body: [{ id: "C9", name: "general", type: 0 }] },
+      // The members endpoint needs the privileged Server Members Intent; without it every guild
+      // answers 403 and the list is channels only, exactly as it was before DMs existed.
+      [GUILD_MEMBERS]: { status: 403, body: { message: "Missing Access", code: 50001 } },
+      [OTHER_GUILD_MEMBERS]: { status: 403, body: { message: "Missing Access", code: 50001 } },
     });
 
     await expect(discordBotConnector.pick?.("channels", SECRET, {})).resolves.toEqual([
       { id: "C1", label: "#general · PapaFam" },
       { id: "C9", label: "#general · Side project" },
     ]);
-    expect(calls.map((call) => call.url)).toEqual([GUILDS, GUILD_CHANNELS, OTHER_GUILD_CHANNELS]);
+    expect(calls.map((call) => call.url)).toEqual([
+      GUILDS,
+      GUILD_CHANNELS,
+      GUILD_MEMBERS,
+      OTHER_GUILD_CHANNELS,
+      OTHER_GUILD_MEMBERS,
+    ]);
+  });
+
+  /**
+   * DMs, for a bot whose app has the Server Members Intent switched on — the only way to enumerate
+   * members at all (docs.discord.com/developers/resources/guild). The value carries a `user:`
+   * prefix because a Discord snowflake says nothing about whether it is a channel or a person, and
+   * guessing wrong means posting a private approval into a channel.
+   */
+  it("offers the people it can see as user: targets, once per person", async () => {
+    stubFetch({
+      [GUILDS]: { body: [{ id: "555", name: "PapaFam" }, { id: "666", name: "Side project" }] },
+      [GUILD_CHANNELS]: { body: [{ id: "C1", name: "general", type: 0 }] },
+      [OTHER_GUILD_CHANNELS]: { body: [] },
+      [GUILD_MEMBERS]: {
+        body: [
+          { nick: "Sonny", user: { id: "U1", username: "sonny", global_name: "Sonny Sangha" } },
+          { user: { id: "U2", username: "ada", global_name: "Ada Lovelace" } },
+          { user: { id: "U3", username: "grace" } },
+          { user: { id: "UBOT", username: "some-bot", bot: true } },
+        ],
+      },
+      // The same person again, in the bot's other server: one option, not two.
+      [OTHER_GUILD_MEMBERS]: { body: [{ user: { id: "U1", username: "sonny" } }] },
+    });
+
+    await expect(discordBotConnector.pick?.("targets", SECRET, {})).resolves.toEqual([
+      { id: "C1", label: "#general · PapaFam" },
+      { id: "user:U1", label: "DM · Sonny (@sonny)" },
+      { id: "user:U2", label: "DM · Ada Lovelace (@ada)" },
+      { id: "user:U3", label: "DM · grace" },
+    ]);
+  });
+
+  it("opens a DM channel with POST /users/@me/channels", async () => {
+    const calls = stubFetch({ [CREATE_DM]: { body: { id: "DM123", type: 1 } } });
+
+    await expect(openDiscordDm(BOT_TOKEN, "U1")).resolves.toEqual({ ok: true, channelId: "DM123" });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ url: CREATE_DM, method: "POST" });
+    expect(calls[0].headers.Authorization).toBe(`Bot ${BOT_TOKEN}`);
+    expect(JSON.parse(calls[0].body ?? "{}")).toEqual({ recipient_id: "U1" });
+  });
+
+  it("reports a DM Discord would not open, rather than throwing", async () => {
+    stubFetch({
+      [CREATE_DM]: { status: 403, body: { message: "Cannot send messages to this user", code: 50007 } },
+    });
+
+    await expect(openDiscordDm(BOT_TOKEN, "U1")).resolves.toMatchObject({
+      ok: false,
+      status: 403,
+    });
+
+    vi.unstubAllGlobals();
+    stubFetch({ [CREATE_DM]: { body: {} } });
+    await expect(openDiscordDm(BOT_TOKEN, "U1")).resolves.toMatchObject({ ok: false, status: 502 });
+  });
+
+  it("reads the user id out of a user: target and nothing else", () => {
+    expect(DISCORD_USER_PREFIX).toBe("user:");
+    expect(discordUserId("user:123456789")).toBe("123456789");
+    expect(discordUserId("user: 123 ")).toBe("123");
+    expect(discordUserId("user:")).toBeNull();
+    // A bare snowflake is a channel; treating it as a user would DM whoever owns that id.
+    expect(discordUserId("123456789")).toBeNull();
   });
 
   it("throws when Discord refuses a list, and ignores an unknown picker", async () => {
@@ -389,6 +577,14 @@ describe("discord bot connector", () => {
     await expect(discordBotConnector.pick?.("models", SECRET, {})).resolves.toEqual([]);
     expect(calls).toHaveLength(0);
   });
+
+  it("says what fills an empty list, and how to DM without the members intent", () => {
+    for (const kind of ["channels", "targets"]) {
+      expect(discordBotConnector.emptyHint?.(kind)).toMatch(/Invite the bot to the server/);
+      expect(discordBotConnector.emptyHint?.(kind)).toMatch(/user:<their Discord id>/);
+    }
+    expect(discordBotConnector.emptyHint?.("guilds")).toBeNull();
+  });
 });
 
 describe("telegram pick, alongside the other chat connectors", () => {
@@ -396,19 +592,58 @@ describe("telegram pick, alongside the other chat connectors", () => {
     const calls = forbidFetch();
     const meta = {
       chat_ids: [
-        { id: 42, title: "Ops room" },
+        { id: 42, title: "Ops room", type: "supergroup" },
+        // Learned before the route recorded a `type`: named the way only a private chat is.
         { id: 7, first_name: "Sonny" },
         { id: 9 },
       ],
     };
 
     await expect(telegramConnector.pick?.("chats", { botToken: "x" }, meta)).resolves.toEqual([
+      { id: "7", label: "DM · Sonny" },
       { id: "42", label: "Ops room" },
-      { id: "7", label: "Sonny" },
       { id: "9", label: "9" },
     ]);
     await expect(telegramConnector.pick?.("channels", { botToken: "x" }, meta)).resolves.toEqual([]);
     expect(calls).toHaveLength(0);
+  });
+
+  /**
+   * The user's actual complaint: an Approval node on a Telegram connection whose "Ask in" picker
+   * was empty. A DM is the one chat a bot can *never* be invited into — the person has to write
+   * first (core.telegram.org/bots/api) — so the fix is half labelling and half saying so.
+   */
+  it("labels a private chat as a DM, with the name and handle, and lists DMs first", async () => {
+    const meta = {
+      chat_ids: [
+        { id: -1001234567890, title: "PapaFam", type: "supergroup" },
+        { id: 111, type: "private", first_name: "Sonny", last_name: "Sangha", username: "sonny" },
+        { id: 222, type: "private", first_name: "Ada" },
+        { id: 333, type: "private", username: "grace" },
+        { id: -100999, title: "Announcements", type: "channel" },
+      ],
+    };
+
+    for (const kind of ["chats", "targets"]) {
+      await expect(telegramConnector.pick?.(kind, { botToken: "x" }, meta)).resolves.toEqual([
+        { id: "111", label: "DM · Sonny Sangha (@sonny)" },
+        { id: "222", label: "DM · Ada" },
+        { id: "333", label: "DM · @grace" },
+        { id: "-1001234567890", label: "PapaFam" },
+        { id: "-100999", label: "Announcements" },
+      ]);
+    }
+  });
+
+  it("tells a Telegram user to message the bot, not to invite it", () => {
+    const hint =
+      "No chats yet. Open Telegram, send the bot any message (or /start) from the account or " +
+      "group you want it to post in, then reload.";
+    expect(telegramConnector.emptyHint?.("chats")).toBe(hint);
+    expect(telegramConnector.emptyHint?.("targets")).toBe(hint);
+    // The generic sentence is the wrong advice here, and this is the whole reason `emptyHint` exists.
+    expect(telegramConnector.emptyHint?.("targets")).not.toMatch(/invite/i);
+    expect(telegramConnector.emptyHint?.("models")).toBeNull();
   });
 });
 
@@ -431,16 +666,30 @@ describe("slack app manifest", () => {
 
   const manifest = () => slackAppManifest() as unknown as Manifest;
 
-  it("asks for exactly the scopes chat.postMessage and conversations.list need", () => {
+  it("asks for exactly the scopes chat.postMessage, conversations.list and users.list need", () => {
     // `chat:write` posts, `chat:write.public` posts without an invite, and the channel picker asks
-    // for `types=public_channel,private_channel` — one read scope each.
+    // for `types=public_channel,private_channel` — one read scope each. `users:read` is the DM
+    // half: it is what `users.list` needs to name the people in the dropdown.
     expect(SLACK_BOT_SCOPES).toEqual([
       "chat:write",
       "chat:write.public",
       "channels:read",
       "groups:read",
+      "users:read",
     ]);
     expect(manifest().oauth_config.scopes.bot).toEqual([...SLACK_BOT_SCOPES]);
+
+    // Posting the DM itself needs nothing beyond `chat:write`: passing a user id as `channel` opens
+    // the conversation (docs.slack.dev/reference/methods/chat.postMessage). Asking for `im:write`
+    // or `im:read` would be a scope users have to approve for a call this app never makes.
+    expect(SLACK_BOT_SCOPES).not.toContain("im:write");
+    expect(SLACK_BOT_SCOPES).not.toContain("im:read");
+    expect(SLACK_BOT_SCOPES).not.toContain("mpim:read");
+  });
+
+  it("tells the user that DMs work without an invite", () => {
+    expect(slackConnector.setup?.steps.join(" ")).toMatch(/users:read/);
+    expect(slackConnector.setup?.steps.join(" ")).toMatch(/DM · Name/);
   });
 
   it("switches interactivity on and points it at this deployment's own Slack endpoint", () => {

@@ -4,6 +4,7 @@ import { limitsForPlan } from "../lib/plans";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internalMutation, internalQuery, query, type QueryCtx } from "./_generated/server";
 import { requireOrg } from "./lib/auth";
+import { workflowStatusValidator } from "./lib/validators";
 
 /**
  * The `schedules` table: one row per workflow, holding the cron the scheduler run is sleeping on.
@@ -11,9 +12,9 @@ import { requireOrg } from "./lib/auth";
  * Only one function here is reachable from a browser — `getForWorkflow`, which the config panel
  * subscribes to. Every write is internal, and reaches Convex through the secret-checked wrappers in
  * `convex/engine.ts`, because a schedule row is only half of the state: the other half is a durable
- * Workflow SDK run, and only `app/api/schedules/route.ts` can move both at once (start the run,
- * store its id; cancel the run, clear it). A client that could flip `enabled` on its own would be
- * able to leave a row and a run disagreeing about whether this workflow is scheduled.
+ * Workflow SDK run, and only `lib/schedules-server.ts` can move both at once (start the run, store
+ * its id; cancel the run, clear it). A client that could flip `enabled` on its own would be able to
+ * leave a row and a run disagreeing about whether this workflow is scheduled.
  *
  * `mode` and `everyMinutes` are deliberately not stored: they are how the *user* described the
  * schedule and they live on the trigger node's inputs in the graph. What fires is the cron.
@@ -91,8 +92,12 @@ async function scheduleInOrg(
 
 /**
  * The schedule the canvas' Schedule trigger panel shows, live, together with the plan's smallest
- * allowed interval — the panel needs both to decide what to say, and one subscription is one
- * re-render when the scheduler fires and moves `nextAt`.
+ * allowed interval and whether the workflow is published — the panel needs all three to decide what
+ * to say, and one subscription is one re-render when the scheduler fires and moves `nextAt`.
+ *
+ * `status` rides along because publishing *is* the schedule's switch now (`publishWorkflow` in
+ * `app/(app)/w/[workflowId]/actions.ts`), so "is this running?" is two facts rather than one — and
+ * the workflow document is already loaded here for the ownership check, so it costs no extra read.
  *
  * The plan comes from the session token's `pla` claim (`requireOrg`), so this is the same answer
  * `has()` would give in a route, without a round trip to Clerk.
@@ -102,6 +107,7 @@ export const getForWorkflow = query({
   returns: v.object({
     plan: v.string(),
     minScheduleMinutes: v.number(),
+    status: workflowStatusValidator,
     schedule: v.union(scheduleSummary, v.null()),
   }),
   handler: async (ctx, { workflowId }) => {
@@ -115,6 +121,7 @@ export const getForWorkflow = query({
     return {
       plan,
       minScheduleMinutes: limitsForPlan(plan).minScheduleMinutes,
+      status: workflow.status,
       schedule:
         schedule === null
           ? null

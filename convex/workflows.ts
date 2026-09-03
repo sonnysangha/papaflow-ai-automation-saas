@@ -3,7 +3,7 @@ import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type QueryCtx } from "./_generated/server";
-import { requireOrg } from "./lib/auth";
+import { requireEngineSecret, requireOrg } from "./lib/auth";
 import { currentPlan } from "./lib/plan";
 import schema from "./schema";
 
@@ -204,6 +204,14 @@ export const saveGraph = mutation({
  * `draft` is not a destination: it is where `create` starts a workflow and the one state it can
  * never be put back into, so "unpublish" means `paused` and the list can say which workflows were
  * published once. Like `rename`, this is not a graph edit and does not bump `version`.
+ *
+ * **This mutation moves the switch and nothing else.** The canvas publishes through the
+ * `publishWorkflow` server action instead, because a Schedule trigger's "on" is two writes — this
+ * status *and* a sleeping scheduler run — and only the server can make both. Anything that flips
+ * the status on its own (the Builder agent, an older client) therefore risks leaving a schedule
+ * enabled on an unpublished workflow; that is safe by construction rather than by luck, because
+ * `fireSchedule` skips a workflow whose status is not `active` and the schedule simply resumes if
+ * it is published again (`workflows/steps/schedule-steps.ts`).
  */
 export const setStatus = mutation({
   args: {
@@ -213,6 +221,31 @@ export const setStatus = mutation({
   returns: v.null(),
   handler: async (ctx, { id, status }) => {
     const { orgId } = await requireOrg(ctx);
+    await workflowInOrg(ctx, id, orgId);
+
+    await ctx.db.patch(id, { status, updatedAt: Date.now() });
+    return null;
+  },
+});
+
+/**
+ * The same switch, for a caller with no Clerk session: the `publishWorkflow` server action.
+ *
+ * It is guarded by `ENGINE_SECRET` rather than by a session (CLAUDE.md rule 5) for the same reason
+ * `runWorkflow` and `POST /api/schedules` are — the action already holds an engine client to write
+ * the schedule row, and publishing has to be one decision rather than two half-authenticated ones.
+ * `orgId` comes from Clerk on the caller's side and is re-checked here against the row.
+ */
+export const setStatusFromEngine = mutation({
+  args: {
+    secret: v.string(),
+    id: v.id("workflows"),
+    orgId: v.string(),
+    status: v.union(v.literal("active"), v.literal("paused")),
+  },
+  returns: v.null(),
+  handler: async (ctx, { secret, id, orgId, status }) => {
+    requireEngineSecret(secret);
     await workflowInOrg(ctx, id, orgId);
 
     await ctx.db.patch(id, { status, updatedAt: Date.now() });

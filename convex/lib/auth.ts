@@ -1,4 +1,5 @@
 import type { GenericDataModel, GenericQueryCtx } from "convex/server";
+import { ConvexError } from "convex/values";
 
 import { DEFAULT_PLAN, featuresForPlan, isPlanSlug, type PlanSlug } from "../../lib/plans";
 
@@ -53,6 +54,22 @@ export async function requireOrg(ctx: Ctx): Promise<OrgIdentity> {
     plan,
     features: featuresFromClaim(id["fea"]) ?? featuresForPlan(plan),
   };
+}
+
+/**
+ * The engine's own authentication, for functions that run without a Clerk session.
+ *
+ * Steps, routes and server actions on Vercel have no user identity to present, so they prove they
+ * are the engine with an unguessable argument instead (CLAUDE.md rule 5). Every function that takes
+ * a `secret` calls this *first*, then delegates; ownership is still not taken on trust, because
+ * `orgId` travels with the call and the handler re-checks it against the row it is about to touch.
+ *
+ * `convex/engine.ts#guard` is this same check, kept private there; collapse the two when that file
+ * is next touched.
+ */
+export function requireEngineSecret(secret: string): void {
+  const expected = process.env.ENGINE_SECRET;
+  if (!expected || secret !== expected) throw new ConvexError({ code: "unauthorized" });
 }
 
 function isOrgId(value: unknown): value is string {

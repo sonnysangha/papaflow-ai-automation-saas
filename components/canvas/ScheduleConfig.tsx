@@ -1,11 +1,9 @@
 "use client";
 
-import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 import { useQuery } from "convex/react";
-import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
-import { Switch } from "@/components/ui/switch";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import {
@@ -19,19 +17,24 @@ import {
 import { parseScheduleInputs } from "@/nodes/triggers/schedule";
 
 /**
- * The Schedule trigger's panel: what this schedule will actually do, and the switch that makes it
- * do it.
+ * The Schedule trigger's panel: what this schedule will actually do, and whether it is doing it.
  *
- * The preview is the point. `mode: "every"` is translated to cron and cron is read in a timezone,
- * so "every 90 minutes" and "0 9 * * *" both mean something a little different from what they look
- * like — showing the next three real fire times is more honest than any amount of explanation, and
- * it is computed with the same `lib/schedule.ts` the scheduler step uses, so the preview and the
- * run cannot disagree.
+ * Read-only, on purpose. There used to be an Enable switch here, and it was the bug: publishing a
+ * workflow whose trigger is a schedule did nothing at all, because starting the schedule was a
+ * *second*, separate switch most people never found — the `schedules` table stayed empty while the
+ * canvas said "Published". Publishing is now the one switch (`publishWorkflow` in
+ * `app/(app)/w/[workflowId]/actions.ts` starts and cancels the scheduler run with the status), so
+ * this panel's whole job is to report where that left things.
  *
- * The switch posts to `/api/schedules`, which owns the row *and* the sleeping Workflow SDK run;
- * this component never writes the schedule itself. What it shows comes back through the live
- * `schedules.getForWorkflow` subscription, so a schedule enabled in another tab — or a `nextAt`
- * moved by the scheduler firing thirty seconds ago — lands here without a refresh.
+ * The preview is the other half of the point. `mode: "every"` is translated to cron and cron is read
+ * in a timezone, so "every 90 minutes" and "0 9 * * *" both mean something a little different from
+ * what they look like — showing the next three real fire times is more honest than any amount of
+ * explanation, and it is computed with the same `lib/schedule.ts` the scheduler step uses, so the
+ * preview and the run cannot disagree.
+ *
+ * Everything shown comes through the live `schedules.getForWorkflow` subscription, so a workflow
+ * published in another tab — or a `nextAt` moved by the scheduler firing thirty seconds ago — lands
+ * here without a refresh.
  */
 
 export type ScheduleConfigProps = {
@@ -82,7 +85,6 @@ function formatFireTime(at: Date, timezone: string): string {
 
 export function ScheduleConfig({ workflowId, inputs }: ScheduleConfigProps) {
   const status = useQuery(api.schedules.getForWorkflow, { workflowId });
-  const [pending, setPending] = useState(false);
 
   // `null` until mounted: fire times depend on the clock, and computing them while rendering on the
   // server would hand React different markup to hydrate.
@@ -97,61 +99,49 @@ export function ScheduleConfig({ workflowId, inputs }: ScheduleConfigProps) {
     [now, spec],
   );
 
-  // Decoration, not enforcement: the same check runs again in the route, which is what actually
-  // decides (CLAUDE.md rule 3). Showing it here just means the switch does not have to be the way
-  // you find out your plan will not run this.
+  // Decoration, not enforcement: the same check runs again in `enableSchedule`, which is what
+  // actually decides (CLAUDE.md rule 3). Showing it here just means pressing Publish does not have
+  // to be the way you find out your plan will not run this.
   const verdict = useMemo(
     () => (spec && status ? validateSchedule(spec, status.plan, new Date(now ?? 0)) : null),
     [now, spec, status],
   );
 
-  const enabled = status?.schedule?.enabled ?? false;
+  const published = status?.status === "active";
+  const running = published && (status?.schedule?.enabled ?? false);
+  // The next fire time the *scheduler run* is actually sleeping on, which is not the same thing as
+  // the preview: the preview follows the box you are typing in, this follows the saved schedule.
+  const nextAt = status?.schedule?.nextAt;
 
-  const toggle = useCallback(
-    (next: boolean) => {
-      setPending(true);
-      void fetch("/api/schedules", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ workflowId, action: next ? "enable" : "pause" }),
-      })
-        .then(async (response) => {
-          const payload = (await response.json().catch(() => ({}))) as { error?: string };
-          if (!response.ok) {
-            toast.error(payload.error ?? "Could not change this schedule");
-            return;
-          }
-          toast.success(next ? "Schedule enabled" : "Schedule paused");
-        })
-        .catch(() => toast.error("Could not reach the server — please try again"))
-        .finally(() => setPending(false));
-    },
-    [workflowId],
-  );
+  /**
+   * Four states, and each one names its own way out:
+   *
+   * - running, with the instant the sleeping run will next wake;
+   * - published but with no schedule row — the workflow was activated by something that only moves
+   *   the status (the Builder's `finish`, an older client), so nothing is sleeping on it yet;
+   * - not published, which is the ordinary "off";
+   * - not configured yet, which the trigger's own fields above are where you fix.
+   */
+  const headline = spec === null ? "Not configured" : running ? "Running" : "Not running";
+  const explanation =
+    spec === null
+      ? "Finish configuring the trigger above."
+      : running
+        ? now !== null && nextAt !== undefined
+          ? `Runs ${describeSchedule(spec)} while this workflow is published — next run ${formatFireTime(new Date(nextAt), timezone)}.`
+          : `Runs ${describeSchedule(spec)} while this workflow is published.`
+        : published
+          ? "This workflow is published, but no schedule is sleeping on it yet. Press Unpublish, then Publish, to start one."
+          : "Not running: publish the workflow to start its schedule.";
 
   return (
     <div className="space-y-3 rounded-lg border border-border p-3">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-sm font-medium">{enabled ? "Running" : "Paused"}</p>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            {spec === null
-              ? "Finish configuring the trigger above."
-              : `Fires ${describeSchedule(spec)} — ${timezone}`}
-          </p>
-        </div>
-        <Switch
-          id="schedule-enabled"
-          aria-label={enabled ? "Pause this schedule" : "Enable this schedule"}
-          checked={enabled}
-          disabled={pending || status === undefined || spec === null}
-          onCheckedChange={toggle}
-        />
+      <div className="min-w-0">
+        <p className="text-sm font-medium">{headline}</p>
+        <p className="mt-0.5 text-xs text-muted-foreground">{explanation}</p>
       </div>
 
-      {cron.length > 0 && (
-        <p className="font-mono text-xs text-muted-foreground">{cron}</p>
-      )}
+      {cron.length > 0 && <p className="font-mono text-xs text-muted-foreground">{cron}</p>}
 
       {verdict && !verdict.ok ? (
         <p className="text-xs text-destructive">{verdict.error.message}</p>
@@ -186,8 +176,8 @@ export function ScheduleConfig({ workflowId, inputs }: ScheduleConfigProps) {
       </div>
 
       <p className="text-xs text-muted-foreground">
-        Enabling schedules the workflow that is <em>saved</em>: edit the interval above, let the
-        canvas save, then toggle this off and on again.
+        Publishing schedules the workflow that is <em>saved</em>: edit the interval above, let the
+        canvas save, then unpublish and publish again.
       </p>
     </div>
   );

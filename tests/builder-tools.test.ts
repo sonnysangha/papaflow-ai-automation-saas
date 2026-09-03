@@ -1,3 +1,6 @@
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
+
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { EveMessage } from "eve/react";
@@ -33,6 +36,15 @@ const listNodeTypes = (await import("@/agents/builder/tools/list_node_types")).d
 const removeNodeTool = (await import("@/agents/builder/tools/remove_node")).default;
 const requestConnection = (await import("@/agents/builder/tools/request_connection")).default;
 const bash = (await import("@/agents/builder/tools/bash")).default;
+
+const getWorkflow = (await import("@/agents/builder/tools/get_workflow")).default;
+const listRuns = (await import("@/agents/builder/tools/list_runs")).default;
+const getRun = (await import("@/agents/builder/tools/get_run")).default;
+const listPickerOptions = (await import("@/agents/builder/tools/list_picker_options")).default;
+const runWorkflow = (await import("@/agents/builder/tools/run_workflow")).default;
+const updateNode = (await import("@/agents/builder/tools/update_node")).default;
+const setTriggerSample = (await import("@/agents/builder/tools/set_trigger_sample")).default;
+const renameWorkflow = (await import("@/agents/builder/tools/rename_workflow")).default;
 
 /** A session as `agents/builder/channels/eve.ts` projects it from a verified Clerk token. */
 function session(attributes: Record<string, string> | null) {
@@ -188,9 +200,102 @@ describe("tool input schemas", () => {
     expect(addNode).not.toHaveProperty("approval");
   });
 
+  it("get_workflow, list_runs and validate_workflow take no arguments", () => {
+    expect(parse(getWorkflow, {}).success).toBe(true);
+    expect(parse(listRuns, {}).success).toBe(true);
+    expect(parse(listRuns, { limit: 3 }).success).toBe(true);
+    // Bounded so one call cannot pull twenty runs' worth of node output into the context window.
+    expect(parse(listRuns, { limit: 0 }).success).toBe(false);
+    expect(parse(listRuns, { limit: 50 }).success).toBe(false);
+  });
+
+  it("get_run wants a run id", () => {
+    expect(parse(getRun, { runId: "exec_1" }).success).toBe(true);
+    expect(parse(getRun, {}).success).toBe(false);
+    expect(parse(getRun, { runId: "" }).success).toBe(false);
+  });
+
+  it("list_picker_options wants a connection and a kind", () => {
+    expect(parse(listPickerOptions, { connectionId: "conn_1", kind: "bases" }).success).toBe(true);
+    expect(parse(listPickerOptions, { connectionId: "conn_1", kind: "" }).success).toBe(false);
+    expect(parse(listPickerOptions, { kind: "bases" }).success).toBe(false);
+  });
+
+  it("run_workflow takes an optional payload and a bounded wait", () => {
+    expect(parse(runWorkflow, {}).success).toBe(true);
+    expect(parse(runWorkflow, { payload: { name: "Sam" }, wait: false }).success).toBe(true);
+    expect(parse(runWorkflow, { waitSeconds: 30 }).success).toBe(true);
+    expect(parse(runWorkflow, { waitSeconds: 600 }).success).toBe(false);
+    // A payload has to be an object: templates address it by key.
+    expect(parse(runWorkflow, { payload: "name=Sam" }).success).toBe(false);
+  });
+
+  it("update_node takes a label, a position, or both", () => {
+    expect(parse(updateNode, { node: "set_1", label: "Score it" }).success).toBe(true);
+    expect(parse(updateNode, { node: "set_1", position: { x: 10, y: 20 } }).success).toBe(true);
+    expect(parse(updateNode, { node: "set_1", position: { x: 10 } }).success).toBe(false);
+    expect(parse(updateNode, {}).success).toBe(false);
+  });
+
+  it("set_trigger_sample and rename_workflow want the one thing each", () => {
+    expect(parse(setTriggerSample, { sample: { name: "Sam" } }).success).toBe(true);
+    expect(parse(setTriggerSample, { sample: "{}" }).success).toBe(false);
+    expect(parse(renameWorkflow, { name: "New leads to Airtable" }).success).toBe(true);
+    expect(parse(renameWorkflow, { name: "" }).success).toBe(false);
+    expect(parse(renameWorkflow, { name: "x".repeat(200) }).success).toBe(false);
+  });
+
   it("the shell, filesystem, fetch and subagent tools are disabled", () => {
     // `disableTool()` returns eve's sentinel rather than a definition, so the shape is the assertion.
     expect(bash).not.toHaveProperty("execute");
+  });
+});
+
+/**
+ * Every file under `agents/builder/tools/` is registered as a tool named after its slug, so the
+ * directory listing *is* the agent's surface. Pinned here because the two ways it goes wrong are
+ * both silent: a tool added without instructions to use it, and eve's twelve built-ins coming back
+ * because a `disableTool()` file was renamed (`docs/research/eve-spike.md` §7).
+ */
+describe("the Builder's tool inventory", () => {
+  const AUTHORED = [
+    "add_node",
+    "configure_node",
+    "connect_nodes",
+    "finish",
+    "get_run",
+    "get_workflow",
+    "list_connections",
+    "list_node_types",
+    "list_picker_options",
+    "list_runs",
+    "remove_node",
+    "rename_workflow",
+    "request_connection",
+    "run_workflow",
+    "set_trigger_sample",
+    "update_node",
+    "validate_workflow",
+  ];
+
+  /** eve ships these on by default; a workflow builder has no business with any of them. */
+  const DISABLED = ["agent", "bash", "read_file", "web_fetch", "write_file"];
+
+  const slugs = readdirSync(join(process.cwd(), "agents/builder/tools"))
+    .filter((file) => file.endsWith(".ts"))
+    .map((file) => file.replace(/\.ts$/, ""))
+    .sort();
+
+  it("is exactly the tools this agent means to expose", () => {
+    expect(slugs).toEqual([...AUTHORED, ...DISABLED].sort());
+    expect(AUTHORED).toHaveLength(17);
+  });
+
+  it("gives the panel a sentence for every authored tool", async () => {
+    // `toolCallLabel` falls back to the raw slug, which reads as a bug in the transcript.
+    for (const slug of AUTHORED) {
+      expect(toolCallLabel(slug, {})).not.toBe(slug);
+    }
   });
 });
 

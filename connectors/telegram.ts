@@ -58,8 +58,26 @@ function generateSecretToken(): string {
   return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-/** A chat learned from an inbound update, as the route stores it in `meta.chat_ids`. */
-type KnownChat = { id: unknown; title?: unknown; first_name?: unknown };
+/**
+ * A chat learned from an inbound update, as the route stores it in `meta.chat_ids`.
+ *
+ * `title` is what a group, supergroup or channel is called; the other three are what a *private*
+ * chat carries instead (core.telegram.org/bots/api — a private chat has `first_name`, and
+ * optionally `last_name` and `username`, and never a `title`). Every field is optional here because
+ * rows written before a field existed are still in `meta`, and a chat nobody can name is still a
+ * chat the bot can post to.
+ */
+type KnownChat = {
+  id: unknown;
+  type?: unknown;
+  title?: unknown;
+  first_name?: unknown;
+  last_name?: unknown;
+  username?: unknown;
+};
+
+/** Telegram's own name for a one-to-one chat between the bot and a person. */
+const PRIVATE_CHAT = "private";
 
 function knownChats(meta: Record<string, unknown>): KnownChat[] {
   const chats = meta.chat_ids;
@@ -67,10 +85,35 @@ function knownChats(meta: Record<string, unknown>): KnownChat[] {
   return chats.filter((chat): chat is KnownChat => typeof chat === "object" && chat !== null);
 }
 
+function text(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function isDirectMessage(chat: KnownChat): boolean {
+  // `type` is the answer whenever the route recorded one. A chat learned before it did is a DM if
+  // it is named the way only a private chat is: `first_name` with no `title`.
+  if (typeof chat.type === "string") return chat.type === PRIVATE_CHAT;
+  return text(chat.first_name).length > 0 && text(chat.title).length === 0;
+}
+
+/**
+ * `DM · Sonny Sangha (@sonny)` for a person, the group's own title for everything else.
+ *
+ * The `DM ·` prefix is the point: a Telegram chat id says nothing about who is on the other end,
+ * and "Sonny" sitting between two group names reads like a third group. The `@username` is added
+ * when there is one because two people can share a first name and nothing else in the list can tell
+ * them apart. A chat stored before any of this had labels keeps its id, and stays selectable.
+ */
 function chatLabel(chat: KnownChat): string {
-  if (typeof chat.title === "string" && chat.title) return chat.title;
-  if (typeof chat.first_name === "string" && chat.first_name) return chat.first_name;
-  return String(chat.id);
+  const title = text(chat.title);
+  if (title) return title;
+
+  const named = [text(chat.first_name), text(chat.last_name)].filter(Boolean).join(" ");
+  const handle = text(chat.username);
+  if (!named && !handle) return String(chat.id);
+
+  const who = named && handle ? `${named} (@${handle})` : named || `@${handle}`;
+  return isDirectMessage(chat) ? `DM · ${who}` : who;
 }
 
 export const telegramConnector = defineConnector({
@@ -145,10 +188,33 @@ export const telegramConnector = defineConnector({
    * Telegram has no "list my chats" endpoint: a bot only learns a chat exists when someone writes
    * to it. The inbound route records each one in `meta.chat_ids`, and this turns that into the
    * options the Send-message node's picker shows.
+   *
+   * DMs come first. A private chat is the one a person is most likely to be reaching for — "ask
+   * *me* before you ship" — and it is also the one that looks least like an option in a list of
+   * group titles, so it is labelled and sorted rather than left to be recognised by id. The order
+   * within each half is the order the chats were learned in, which is stable.
    */
   async pick(kind, _secret, meta) {
     // `targets` is the Approval node's provider-agnostic kind; a Telegram "target" is a chat.
     if (kind !== "chats" && kind !== TARGETS_PICKER) return [];
-    return knownChats(meta).map((chat) => ({ id: String(chat.id), label: chatLabel(chat) }));
+
+    const chats = knownChats(meta);
+    return [...chats.filter(isDirectMessage), ...chats.filter((chat) => !isDirectMessage(chat))].map(
+      (chat) => ({ id: String(chat.id), label: chatLabel(chat) }),
+    );
+  },
+
+  /**
+   * The generic "invite the bot where it needs to post" is wrong here, and wrong in a way that
+   * costs people an afternoon: a Telegram bot cannot be invited into a DM and cannot message
+   * anybody who has not written to it first (core.telegram.org/bots/api). The chat has to come to
+   * the bot, so that is what this says.
+   */
+  emptyHint(kind) {
+    if (kind !== "chats" && kind !== TARGETS_PICKER) return null;
+    return (
+      "No chats yet. Open Telegram, send the bot any message (or /start) from the account or " +
+      "group you want it to post in, then reload."
+    );
   },
 });

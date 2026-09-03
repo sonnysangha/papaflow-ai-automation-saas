@@ -1,6 +1,7 @@
 // Server only. Like `lib/connections-engine.ts`, this module talks to Convex with `ENGINE_SECRET`
 // and must never be imported from a Client Component or any browser bundle.
 import { ConvexHttpClient } from "convex/browser";
+import type { FunctionReturnType } from "convex/server";
 import { ConvexError } from "convex/values";
 
 import { api } from "@/convex/_generated/api";
@@ -142,6 +143,78 @@ export async function removeBuilderNode(
     orgId: identity.orgId,
     userId: identity.userId,
     node,
+  });
+}
+
+export async function updateBuilderNode(
+  identity: EditIdentity,
+  change: { node: string; label?: string; position?: { x: number; y: number } },
+): Promise<{ nodeId: string; key: string; version: number }> {
+  const { client, secret } = engineConvex();
+  return await client.mutation(api.builder.updateNode, {
+    secret,
+    workflowId: identity.workflowId as Id<"workflows">,
+    orgId: identity.orgId,
+    userId: identity.userId,
+    ...change,
+  });
+}
+
+export async function renameBuilderWorkflow(
+  identity: EditIdentity,
+  name: string,
+): Promise<{ name: string; version: number }> {
+  const { client, secret } = engineConvex();
+  return await client.mutation(api.builder.rename, {
+    secret,
+    workflowId: identity.workflowId as Id<"workflows">,
+    orgId: identity.orgId,
+    userId: identity.userId,
+    name,
+  });
+}
+
+/* -------------------------------------------------------------------------------------------------
+ * Runs.
+ *
+ * What the workflow actually did, for the tools that debug rather than build. Both are scoped to the
+ * one workflow the chat is bound to, and Convex re-checks the organisation on every call.
+ * ---------------------------------------------------------------------------------------------- */
+
+/** One execution, as `list_runs` and `get_run` describe it. */
+export type BuilderRun = FunctionReturnType<typeof api.builder.listRuns>[number];
+
+/** One run's step rows, or null when that id is not a run of this workflow. */
+export type BuilderRunDetail = FunctionReturnType<typeof api.builder.getRun>;
+
+/** One step row of one run. `input` was redacted by the engine before it was stored. */
+export type BuilderRunStep = NonNullable<BuilderRunDetail>["steps"][number];
+
+export async function listBuilderRuns(
+  workflowId: string,
+  orgId: string,
+  limit?: number,
+): Promise<BuilderRun[]> {
+  const { client, secret } = engineConvex();
+  return await client.query(api.builder.listRuns, {
+    secret,
+    workflowId: workflowId as Id<"workflows">,
+    orgId,
+    ...(limit === undefined ? {} : { limit }),
+  });
+}
+
+export async function getBuilderRun(args: {
+  executionId: string;
+  workflowId: string;
+  orgId: string;
+}): Promise<BuilderRunDetail> {
+  const { client, secret } = engineConvex();
+  return await client.query(api.builder.getRun, {
+    secret,
+    executionId: args.executionId as Id<"executions">,
+    workflowId: args.workflowId as Id<"workflows">,
+    orgId: args.orgId,
   });
 }
 

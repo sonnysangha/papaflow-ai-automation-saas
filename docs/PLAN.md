@@ -51,14 +51,17 @@ One text box: "When someone fills in my contact form, qualify them with Claude, 
 
 ### Its tools
 
+- **get_workflow** `v1`: The graph as it stands — every node's key, type, label, position, stored inputs (templates unresolved) and output handles, every edge as `from → handle → to`, plus `endNodes` and `orphanNodes`. Called before any edit, and the reason the agent never asks "which nodes are the end nodes?".
 - **list_node_types** `v1`: Returns the node catalogue with input schemas as JSON Schema, filtered by what the org's plan allows. The model can't reach for a Pro node on a Free org.
-- **list_connections** `v1`: The org's active connections: id, provider, label, scopes, model list. Never secrets.
-- **add_node · connect_nodes · configure_node · remove_node** `v1`: Convex mutations on the workflow doc. Inputs validated against the node's zod schema, so a bad config comes back as a tool error the agent can fix.
+- **list_connections** `v1`: The org's active connections: id, provider, label, status. Never secrets.
+- **list_picker_options** `v1`: The same lists the canvas dropdowns get (`pickConnectionOptions`, re-implemented eve-side in `agents/builder/lib/pickers.ts` because `lib/connections-server.ts` reaches `lib/engine-client.ts`): Airtable bases/tables/columns, Slack channels, Telegram chats, Notion databases/properties, a provider's models. The credential is opened inside the tool and dropped; ids and labels come back. This is what stops the agent inventing a column name.
+- **add_node · connect_nodes · configure_node · update_node · remove_node** `v1`: Convex mutations on the workflow doc. Inputs validated against the node's zod schema, so a bad config comes back as a tool error the agent can fix. `update_node` is label and position only — position is React Flow's, not any node's schema.
+- **set_trigger_sample · rename_workflow** `v1`: The Manual trigger's sample JSON (so `{{ trigger.… }}` resolves to something the first time Run is pressed) and the workflow's name.
 - **request_connection** `v1`: The pause. Declares what it needs (`{ provider: "slack" }` or `{ provider: "anthropic", kind: "apiKey" }`); the turn parks, the UI shows the widget, the tool resumes with `{ connectionId, label }`.
 - **validate_workflow** `v1`: Dangling edges, unconfigured required inputs, template references to nodes that don't exist, Condition without both branches. Returns a fix list.
-- **test_run** `v2`: Starts a run with sample data and reads the step records back, so it can see a red node and fix it.
-- **ask_user** `v1`: Plain clarifying question when the prompt is ambiguous ("which Slack channel?"). Same parking mechanism, different widget.
-- **finish** `v1`: Marks the workflow ready, returns a summary and the trigger URL or form link.
+- **run_workflow · list_runs · get_run** `v2` (the plan's old `test_run`, split in three): `run_workflow` starts a manual run with an optional payload and waits for it; `list_runs` is one line per recent run; `get_run` is a run's step rows in order with status, duration, error, the unresolved-template `warnings`, and input/output trimmed to ~2 KB each. Loop passes are numbered and an Agent node's tool calls are labelled with their parent. **The run is started through `POST /api/engine/run` in the Next app, not `start()` here** — a workflow function only exists after the Workflow SDK's compiler has transformed it, and that happens in the Next build, not in the agent's own Vercel service (Phase 12 addendum item 5 in `docs/research/eve-spike.md`). The route authenticates with `ENGINE_SECRET` as a bearer token compared with `timingSafeEqual`, and calls the same `startRun` the Run button's server action calls.
+- **ask_user** `v1`: eve's own `ask_question`, left enabled — a plain clarifying question when the prompt is ambiguous ("which Slack channel?").
+- **finish** `v1`: Marks the workflow ready, returns a summary and how the workflow starts (never the webhook URL — it carries `webhookSecret`).
 
 ### The credential handoff
 
@@ -355,7 +358,7 @@ Every node is one file: zod `inputs` (generates the config form, validates befor
 - **Manual** `v1`: Run button with optional sample JSON.
 - **Webhook** `v1`: Unique URL per workflow. Body, headers, query become the output.
 - **Form** `v1`: Hosted public form page per workflow, fields defined in the node.
-- **Schedule** `v1`: Cron or "every N minutes". Starts a scheduler run; pausing cancels it.
+- **Schedule** `v1`: Cron or "every N minutes". **Publish** starts the scheduler run and **Unpublish** cancels it (`lib/schedules-server.ts`, called from the `publishWorkflow` server action and from `POST /api/schedules`, which is kept for compatibility) — there is no separate Enable switch, because a published workflow whose schedule was not also enabled is a workflow that silently never fires.
 - **Telegram message** `v1`: Bot receives a message. Simplest inbound trigger to demo from a phone.
 - **Discord slash command** `v2`: Interactions endpoint, Ed25519, deferred reply then PATCH with the result.
 - **Slack mention** `v2`: Events API `app_mention`, challenge handshake, 3s ack.
@@ -412,7 +415,7 @@ Ordered so something runs durably inside the first 25 minutes and each chapter a
 8. **Generic OAuth + Slack** _(10 min)_ — Provider config, state, callback, encrypt, channel picker. Then Notion as "same module, new config".
 9. **Wait and Approval** _(8 min)_ — `sleep()` for a Wait node, then the Approval node: Slack buttons, `createHook`, interactivity route calls `resumeHook`. Press the button on a phone.
 10. **Agent node with eve** _(12 min)_ — `withEve`, the Runtime agent directory, `defineDynamic` returning the org's connector tools, `eve/client` from the step. Drop a skill markdown file in and watch it change behaviour.
-11. **Schedule trigger** _(5 min)_ — The sleeping scheduler workflow. Set "every 2 minutes" and let it fire once while you talk.
+11. **Schedule trigger** _(5 min)_ — The sleeping scheduler workflow. Set "every 2 minutes", press **Publish** (which is what starts it), and let it fire once while you talk. On Free the same press is refused with the plan's hourly floor, which is the gate worth showing.
 12. **Clerk Billing** _(10 min)_ — Plans for Organizations with feature slugs, `<PricingTable for="organization" />`, `<Show when={{ feature: "org:pro_connectors" }}>` on the Pro node cards, `has()` in the run route, `PLAN_LIMITS` in the `createWorkflow` mutation, billing webhook into Convex. Hit the 3-workflow wall on Free, upgrade on the test gateway, wall disappears.
 13. **The Builder agent** _(15 min)_ — Second eve directory, the editing tools as Convex mutations, `request_connection` with `ask()` and the credential widget. Type the climax workflow into the box and watch the canvas draw itself, pause for a Slack connect, carry on. Then run it.
 

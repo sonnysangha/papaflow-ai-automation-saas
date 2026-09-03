@@ -33,6 +33,25 @@ import { openOrgConnection } from "../../lib/connections-engine";
  */
 const HOUSE_MODEL = "openai/gpt-5.6-luna";
 
+/**
+ * How long one Agent-node session may live before eve retires it.
+ *
+ * This is a **backstop, not the mechanism**: `nodes/ai/agent.ts` calls `reset()` the moment it has
+ * its answer, which ends the session in seconds. The deadline is what catches the sessions nothing
+ * gets to reset — a step killed mid-flight, a deploy in the middle of a turn — so they do not sit
+ * in the Workflows list as Active runs for eve's default month.
+ *
+ * Five minutes is safe despite an agent turn sometimes taking longer, because the deadline never
+ * interrupts work: *"The deadline starts when the session is created and survives process restarts
+ * and redeployments. If it elapses during an active turn, eve lets that turn settle before
+ * completing the session normally."*
+ * (`node_modules/eve/dist/src/shared/agent-definition.d.ts`, `AgentLimitsDefinition`.)
+ *
+ * It is an absolute lifetime rather than an idle timer — eve 0.49.0 has no idle timeout — which is
+ * exactly right for a session that only ever holds one turn. Default is 2_592_000_000 ms (30 days).
+ */
+const SESSION_TIMEOUT_MS = 5 * 60 * 1_000;
+
 /** Auth attributes are `string | readonly string[]`; every claim this agent reads is a string. */
 function attribute(
   attributes: Readonly<Record<string, string | readonly string[]>> | undefined,
@@ -43,6 +62,7 @@ function attribute(
 }
 
 export default defineAgent({
+  limits: { sessionTimeoutMs: SESSION_TIMEOUT_MS },
   model: defineDynamic({
     events: {
       "session.started": () => HOUSE_MODEL,

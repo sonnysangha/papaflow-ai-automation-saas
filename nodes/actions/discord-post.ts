@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { discordUserId, openDiscordDm } from "@/connectors/discord-bot";
 import { discordWebhookEndpoint, parseDiscordWebhookUrl } from "@/connectors/discord-webhook";
 import { ConnectorError, defineNode } from "../define";
 
@@ -7,9 +8,10 @@ import { ConnectorError, defineNode } from "../define";
  * Post to Discord through whichever kind of Discord connection the node was pointed at.
  *
  * `credential: "discord"` is a family rather than one provider: a webhook connection posts to the
- * single channel its URL was created for, a bot connection posts to any channel it can see. Both
- * take the same message, so they are one node with one branch inside `run` — `credential.provider`
- * is what `runNode` puts there, and it is the only thing that distinguishes them.
+ * single channel its URL was created for, a bot connection posts to any channel it can see — or,
+ * for a `user:<id>` target, into a DM with that person. Both take the same message, so they are one
+ * node with one branch inside `run` — `credential.provider` is what `runNode` puts there, and it is
+ * the only thing that distinguishes them.
  *
  * Discord wants at least one of content / embeds, and refuses an empty message with a 400 that says
  * nothing useful, so the check happens here where the message can name the actual field.
@@ -75,7 +77,10 @@ export const discordPostNode = defineNode({
       .string()
       .optional()
       .meta({ picker: "channels" })
-      .describe("Bot connections only — a webhook always posts to its own channel"),
+      .describe(
+        "Bot connections only — a webhook always posts to its own channel. Pick a channel, or a " +
+          "person to DM (user:<their Discord id>)",
+      ),
     content: z.string().optional(),
     embedTitle: z.string().optional(),
     embedDescription: z.string().optional(),
@@ -96,7 +101,7 @@ export const discordPostNode = defineNode({
     const provider = credentialString(credential, "provider");
     const request =
       provider === "discord-bot"
-        ? botRequest(credential, inputs.channelId)
+        ? await botRequest(credential, inputs.channelId)
         : webhookRequest(credential);
 
     const response = await fetch(request.url, {
@@ -127,10 +132,18 @@ function webhookRequest(credential: Record<string, unknown> | undefined): {
   return { url: `${discordWebhookEndpoint(parsed.id, parsed.token)}?wait=true`, headers: {} };
 }
 
-function botRequest(
+/**
+ * Where a bot connection posts: a channel it can see, or the DM channel with one person.
+ *
+ * A `user:<id>` target costs one extra call — `POST /users/@me/channels` — because a DM has a
+ * channel id like any other and Discord will not accept a user id in the messages URL. That call
+ * is idempotent (the conversation is only opened the first time), so a step that re-runs after a
+ * retry does not open anything twice.
+ */
+async function botRequest(
   credential: Record<string, unknown> | undefined,
   channelId: string | undefined,
-): { url: string; headers: Record<string, string> } {
+): Promise<{ url: string; headers: Record<string, string> }> {
   const token = credentialString(credential, "botToken");
   if (!token) {
     throw new ConnectorError("This Discord connection has no bot token — reconnect it.", 400);
@@ -138,8 +151,16 @@ function botRequest(
   if (!channelId) {
     throw new ConnectorError("Choose a channel: a bot connection does not have one of its own.", 400);
   }
-  return {
-    url: `${BOT_API}/channels/${channelId}/messages`,
-    headers: { Authorization: `Bot ${token}` },
-  };
+
+  const headers = { Authorization: `Bot ${token}` };
+  const userId = discordUserId(channelId);
+  if (!userId) return { url: `${BOT_API}/channels/${channelId}/messages`, headers };
+
+  const dm = await openDiscordDm(token, userId);
+  if (!dm.ok) {
+    // A person who shares no server with the bot, or has DMs closed, is a configuration problem —
+    // retrying it earns the rate limit Discord warns about rather than a message.
+    throw new ConnectorError(`Discord could not open that DM: ${dm.error}`, dm.status || 400);
+  }
+  return { url: `${BOT_API}/channels/${dm.channelId}/messages`, headers };
 }

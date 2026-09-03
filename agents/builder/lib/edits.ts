@@ -6,6 +6,8 @@ import {
   connectBuilderNodes,
   getBuilderWorkflow,
   removeBuilderNode,
+  renameBuilderWorkflow,
+  updateBuilderNode,
   type BuilderWorkflow,
   type EditIdentity,
 } from "../../../lib/builder-engine";
@@ -280,6 +282,159 @@ export async function removeNode(session: BuilderSession, node: string) {
   };
 }
 
+export type UpdateArgs = {
+  node: string;
+  label?: string;
+  position?: { x: number; y: number };
+};
+
+/** Renames or moves one node. Configuration is `configureNode`'s business, not this one's. */
+export async function updateNode(session: BuilderSession, args: UpdateArgs) {
+  const workflow = await readWorkflow(session);
+  const stored = findStoredNode(workflow, args.node);
+  if (!stored) throw new Error(`There is no node "${args.node}" in this workflow.`);
+
+  const result = await convex(() => updateBuilderNode(identityOf(session), args));
+  return {
+    updated: result.key || result.nodeId,
+    label: args.label ?? stored.label,
+    position: args.position ?? stored.position,
+    version: result.version,
+  };
+}
+
+/** Renames the workflow itself — the name on the canvas header and in the workflow list. */
+export async function renameWorkflow(session: BuilderSession, name: string) {
+  const result = await convex(() => renameBuilderWorkflow(identityOf(session), name));
+  return { renamed: result.name, version: result.version };
+}
+
+/** The node type the Run button starts, and the only one that carries a sample payload. */
+const MANUAL_TRIGGER = "manual.trigger";
+
+/**
+ * Sets the JSON the Run button starts this workflow with.
+ *
+ * It is stored as the Manual trigger's `sample` input — a string, because the config panel edits it
+ * in a textarea — so this goes through `configureNode` and gets that node's own zod check for free.
+ * A run started with an empty payload falls back to it (`lib/engine-client.ts#withTriggerSample`),
+ * which is what makes `{{ trigger.name }}` resolve to something the first time anyone presses Run.
+ */
+export async function setTriggerSample(session: BuilderSession, sample: Record<string, unknown>) {
+  const workflow = await readWorkflow(session);
+  const trigger = storedNodes(workflow).find((node) => node.nodeType === MANUAL_TRIGGER);
+  if (!trigger) {
+    throw new Error(
+      "This workflow does not start with a Manual trigger, so it has no sample payload. " +
+        "Only manual.trigger has one.",
+    );
+  }
+
+  const json = JSON.stringify(sample, null, 2);
+  await convex(() =>
+    configureBuilderNode(identityOf(session), { node: trigger.id, inputs: { sample: json } }),
+  );
+
+  return {
+    node: trigger.key,
+    // The keys a template may address as `{{ trigger.… }}`, which is the half the model gets wrong.
+    triggerKeys: Object.keys(sample),
+    sample,
+  };
+}
+
+/* -------------------------------------------------------------------------------------------------
+ * Reading the graph back.
+ * ---------------------------------------------------------------------------------------------- */
+
+export type WorkflowNodeView = {
+  node: string;
+  nodeId: string;
+  type: string;
+  label: string;
+  position: { x: number; y: number };
+  inputs: Record<string, unknown>;
+  /** The outputs an edge may leave by. A plain node offers exactly `["out"]`. */
+  handles: string[];
+  /** Required fields that are still unset, as `validate_workflow` would report them. */
+  needs: string[];
+  isTrigger: boolean;
+};
+
+export type WorkflowView = {
+  name: string;
+  status: string;
+  version: number;
+  trigger: { node: string; type: string } | null;
+  nodes: WorkflowNodeView[];
+  edges: { from: string; handle: string; to: string }[];
+  /** Node keys with no outgoing edge — where a new step would be appended. */
+  endNodes: string[];
+  /** Nodes nothing is wired into (the trigger aside): they will never run. */
+  orphanNodes: string[];
+};
+
+/**
+ * The whole graph, as the model needs to read it: keys, types, labels, positions, the configuration
+ * exactly as it is stored (templates unresolved), every edge with the handle it leaves by, and the
+ * two things a plan actually turns on — which nodes are ends, and which nodes nothing reaches.
+ *
+ * This is the tool that stops the Builder asking "which nodes are the end nodes?". Nothing here is
+ * a secret: `inputs` holds `connectionId`s, never credentials (CLAUDE.md rule 1), and the workflow's
+ * `webhookSecret` is not part of the graph.
+ */
+export async function describeWorkflow(session: BuilderSession): Promise<WorkflowView> {
+  const workflow = await readWorkflow(session);
+  const nodes = storedNodes(workflow);
+  const edges = storedEdges(workflow);
+
+  const keyOf = new Map(nodes.map((node) => [node.id, node.key || node.id]));
+  const named = (id: string): string => keyOf.get(id) ?? id;
+
+  const triggerId =
+    nodes.find((node) => node.id === workflow.graph.triggerId)?.id ??
+    nodes.find((node) => NODES[node.nodeType]?.category === "trigger")?.id;
+
+  const hasOutgoing = new Set(edges.map((edge) => edge.source));
+  const hasIncoming = new Set(edges.map((edge) => edge.target));
+
+  return {
+    name: workflow.name,
+    status: workflow.status,
+    version: workflow.version,
+    trigger: triggerId
+      ? { node: named(triggerId), type: nodes.find((n) => n.id === triggerId)?.nodeType ?? "" }
+      : null,
+    nodes: nodes.map((node) => {
+      const definition = NODES[node.nodeType];
+      return {
+        node: node.key || node.id,
+        nodeId: node.id,
+        type: node.nodeType,
+        label: node.label,
+        position: node.position,
+        inputs: node.inputs,
+        handles: definition ? sourceHandlesFor(definition, node.inputs) : [],
+        needs: definition
+          ? inputIssues(definition, node.inputs, {}).map((issue) => issue.path).filter(Boolean)
+          : [],
+        isTrigger: node.id === triggerId,
+      };
+    }),
+    edges: edges.map((edge) => ({
+      from: named(edge.source),
+      handle: edge.sourceHandle,
+      to: named(edge.target),
+    })),
+    endNodes: nodes
+      .filter((node) => !hasOutgoing.has(node.id))
+      .map((node) => node.key || node.id),
+    orphanNodes: nodes
+      .filter((node) => node.id !== triggerId && !hasIncoming.has(node.id))
+      .map((node) => node.key || node.id),
+  };
+}
+
 /** Everything that would stop this graph running, as the run would find it. */
 export async function validate(session: BuilderSession) {
   const workflow = await readWorkflow(session);
@@ -324,10 +479,23 @@ export async function finish(session: BuilderSession, summary: string) {
  * exactly as `workflows/graph.ts#toRunGraph` does.
  * ---------------------------------------------------------------------------------------------- */
 
-type StoredNodeView = { id: string; key: string; nodeType: string; inputs: Record<string, unknown> };
+export type StoredNodeView = {
+  id: string;
+  key: string;
+  nodeType: string;
+  label: string;
+  position: { x: number; y: number };
+  inputs: Record<string, unknown>;
+};
+
+type StoredEdgeView = { id: string; source: string; target: string; sourceHandle: string };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function coordinate(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 function storedNodes(workflow: BuilderWorkflow): StoredNodeView[] {
@@ -336,14 +504,41 @@ function storedNodes(workflow: BuilderWorkflow): StoredNodeView[] {
     if (!isRecord(entry) || typeof entry.id !== "string") continue;
     const data = isRecord(entry.data) ? entry.data : {};
     if (typeof data.nodeType !== "string") continue;
+    const position = isRecord(entry.position) ? entry.position : {};
     nodes.push({
       id: entry.id,
       key: typeof data.key === "string" ? data.key : "",
       nodeType: data.nodeType,
+      label: typeof data.label === "string" ? data.label : data.nodeType,
+      position: { x: coordinate(position.x), y: coordinate(position.y) },
       inputs: isRecord(data.inputs) ? data.inputs : {},
     });
   }
   return nodes;
+}
+
+/** The stored nodes of a workflow the caller already read. Used by the run tools to name a step. */
+export function storedNodesOf(workflow: BuilderWorkflow): StoredNodeView[] {
+  return storedNodes(workflow);
+}
+
+/** The canvas leaves `sourceHandle` unset on a node's single output; the engine calls that `out`. */
+const DEFAULT_HANDLE = "out";
+
+function storedEdges(workflow: BuilderWorkflow): StoredEdgeView[] {
+  const edges: StoredEdgeView[] = [];
+  for (const entry of workflow.graph.edges ?? []) {
+    if (!isRecord(entry)) continue;
+    const { id, source, target, sourceHandle } = entry;
+    if (typeof source !== "string" || typeof target !== "string") continue;
+    edges.push({
+      id: typeof id === "string" ? id : `${source}->${target}`,
+      source,
+      target,
+      sourceHandle: typeof sourceHandle === "string" && sourceHandle ? sourceHandle : DEFAULT_HANDLE,
+    });
+  }
+  return edges;
 }
 
 /** A node by id or by template key, the two ways the agent may refer to one. */

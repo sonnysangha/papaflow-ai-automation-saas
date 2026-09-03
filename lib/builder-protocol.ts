@@ -34,6 +34,27 @@ export const REQUEST_CONNECTION_TOOL = "request_connection";
 /** The option id `request_connection` treats as "the user declined". */
 export const CANCEL_OPTION_ID = "cancel";
 
+/**
+ * The last tool of a build (`agents/builder/tools/finish.ts`). The panel watches for it: a chat
+ * that has finished has nothing left to say, so its durable session is retired rather than left
+ * parked at `session.waiting` holding a `workflowEntry` run open.
+ */
+export const FINISH_TOOL = "finish";
+
+/**
+ * True when a tool answered with the terminal "the backend is unreachable" result rather than doing
+ * the work (`agents/builder/lib/tool-result.ts#serviceUnavailable`).
+ *
+ * Shape-matched here rather than imported: that module reaches Convex and `lib/engine-env.ts`, and
+ * this one is bundled into the browser. It matters for exactly one decision — a `finish` that could
+ * not reach Convex has not finished anything, so the panel must leave the chat open.
+ */
+export function isServiceFailureOutput(output: unknown): boolean {
+  if (typeof output !== "object" || output === null) return false;
+  const { ok, error } = output as { ok?: unknown; error?: unknown };
+  return ok === false && error === "service_unavailable";
+}
+
 /** A pending `request_connection` ask, ready for the widget to render. */
 export type PendingConnectionRequest = {
   requestId: string;
@@ -113,8 +134,24 @@ export function toolCallLabel(toolName: string, input: unknown): string {
     }
     case "configure_node":
       return `Configured ${value("node") || "a node"}`;
+    case "update_node":
+      return `Updated ${value("node") || "a node"}`;
     case "remove_node":
       return `Removed ${value("node") || "a node"}`;
+    case "get_workflow":
+      return "Read the workflow";
+    case "list_runs":
+      return "Looked at recent runs";
+    case "get_run":
+      return "Read a run's steps";
+    case "run_workflow":
+      return "Ran the workflow";
+    case "list_picker_options":
+      return `Listed ${value("kind") || "options"}`;
+    case "set_trigger_sample":
+      return "Set the trigger's sample payload";
+    case "rename_workflow":
+      return `Renamed the workflow${value("name") ? ` to ${value("name")}` : ""}`;
     case REQUEST_CONNECTION_TOOL:
       return `Asked for a ${value("provider") || "connection"} connection`;
     case "validate_workflow":

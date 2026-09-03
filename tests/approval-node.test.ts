@@ -308,4 +308,98 @@ describe("logic.approval", () => {
     // Telegram's token is in the URL, which is exactly why no failure path echoes it.
     expect(telegram.message).not.toContain(TELEGRAM_TOKEN);
   });
+
+  /**
+   * Asking one person rather than a room. All three providers can do it and only one of them needs
+   * the node to know: Slack and Telegram take the id in the same argument a channel goes in, while
+   * Discord has to be told to open the conversation first.
+   */
+  describe("direct messages", () => {
+    /** The same run, pointed at a person instead of a channel. */
+    const asking = (provider: string, token: string, target: string) =>
+      ctx(provider, token, { inputs: { ...defaults(), target, message: "Ship it?" } });
+
+    it("sends a Slack user id straight through as the channel", async () => {
+      const fetchMock = reply({ ok: true, ts: "1.1", channel: "D0123" });
+
+      await expect(approvalNode.run(asking("slack", SLACK_TOKEN, "U0SONNY"))).resolves.toEqual({
+        posted: true,
+        provider: "slack",
+      });
+
+      // One call, no `conversations.open`: Slack opens the DM off the user id itself.
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchMock.mock.calls[0] as FetchArgs;
+      expect(url).toBe("https://slack.com/api/chat.postMessage");
+      expect(bodyOf(init).channel).toBe("U0SONNY");
+    });
+
+    it("sends a Telegram private chat id straight through as the chat", async () => {
+      const fetchMock = reply({ ok: true, result: { message_id: 5 } });
+
+      await expect(approvalNode.run(asking("telegram", TELEGRAM_TOKEN, "111"))).resolves.toEqual({
+        posted: true,
+        provider: "telegram",
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [, init] = fetchMock.mock.calls[0] as FetchArgs;
+      expect(bodyOf(init).chat_id).toBe("111");
+      // The buttons are the same ones a channel would get, and they resume the same way.
+      const keyboard = (bodyOf(init).reply_markup as { inline_keyboard: { callback_data: string }[][] })
+        .inline_keyboard[0];
+      expect(keyboard.map((button) => button.callback_data)).toEqual([
+        `approve:${STEP_ID}`,
+        `reject:${STEP_ID}`,
+      ]);
+    });
+
+    it("opens a Discord DM channel for a user: target, then posts the buttons there", async () => {
+      const fetchMock = mockFetch(async (input) =>
+        String(input).endsWith("/users/@me/channels")
+          ? new Response(JSON.stringify({ id: "DM42", type: 1 }), {
+              headers: { "content-type": "application/json" },
+            })
+          : new Response(JSON.stringify({ id: "M1" }), {
+              headers: { "content-type": "application/json" },
+            }),
+      );
+
+      await expect(
+        approvalNode.run(asking("discord-bot", DISCORD_TOKEN, "user:U9")),
+      ).resolves.toEqual({ posted: true, provider: "discord-bot" });
+
+      const [openUrl, openInit] = fetchMock.mock.calls[0] as FetchArgs;
+      expect(openUrl).toBe("https://discord.com/api/v10/users/@me/channels");
+      expect(openInit?.method).toBe("POST");
+      expect(bodyOf(openInit)).toEqual({ recipient_id: "U9" });
+
+      const [postUrl, postInit] = fetchMock.mock.calls[1] as FetchArgs;
+      expect(postUrl).toBe("https://discord.com/api/v10/channels/DM42/messages");
+      const row = (bodyOf(postInit).components as { components: { custom_id: string }[] }[])[0];
+      expect(row.components.map((button) => button.custom_id)).toEqual([
+        `approve:${STEP_ID}`,
+        `reject:${STEP_ID}`,
+      ]);
+    });
+
+    it("leaves a bare Discord snowflake as the channel it is", async () => {
+      const fetchMock = reply({ id: "M1" });
+
+      await approvalNode.run(asking("discord-bot", DISCORD_TOKEN, "C0123456789"));
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url] = fetchMock.mock.calls[0] as FetchArgs;
+      expect(url).toBe("https://discord.com/api/v10/channels/C0123456789/messages");
+    });
+
+    it("fails the step when Discord will not open the DM", async () => {
+      reply({ message: "Cannot send messages to this user", code: 50007 }, { status: 403 });
+
+      const error = await caught(approvalNode.run(asking("discord-bot", DISCORD_TOKEN, "user:U9")));
+      expect(error.status).toBe(403);
+      expect(error.message).toMatch(/could not open that DM/i);
+      expect(error.message).not.toContain(DISCORD_TOKEN);
+    });
+  });
 });

@@ -1,6 +1,6 @@
 import { Editor } from "@/components/canvas/Editor";
 import type { Id } from "@/convex/_generated/dataModel";
-import { runWorkflow } from "./actions";
+import { publishWorkflow, runWorkflow } from "./actions";
 
 export default async function WorkflowEditorPage({
   params,
@@ -15,6 +15,15 @@ export default async function WorkflowEditorPage({
   // the workflow at all. It is handed to the editor (and on to <RunBar/>) as a prop rather than
   // imported inside the client component, which keeps the chain rooted in this entrypoint.
   //
+  // `publishWorkflow` rides the same path and is what roots `workflows/scheduler` here too: it is
+  // the switch that starts and cancels a Schedule trigger's sleeping run.
+  //
   // The id is only trusted as far as Convex: `workflows.get` re-checks it against the org.
-  return <Editor workflowId={workflowId as Id<"workflows">} runWorkflow={runWorkflow} />;
+  return (
+    <Editor
+      workflowId={workflowId as Id<"workflows">}
+      runWorkflow={runWorkflow}
+      publishWorkflow={publishWorkflow}
+    />
+  );
 }

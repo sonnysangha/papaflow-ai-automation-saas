@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { CHAT_CREDENTIAL, TARGETS_PICKER } from "@/connectors/define";
+import { discordUserId, openDiscordDm } from "@/connectors/discord-bot";
 import { ConnectorError, defineNode } from "../define";
 
 /**
@@ -68,7 +69,11 @@ const approvalInputs = z.object({
     .string()
     .min(1)
     .meta({ picker: TARGETS_PICKER, label: "Ask in" })
-    .describe("Where the question is posted — a Slack or Discord channel, or a Telegram chat."),
+    .describe(
+      "Where the question is posted: a channel, or one person's DMs. Slack lists everyone in the " +
+        "workspace; Discord lists the people it shares a server with (or type user:<id>); " +
+        "Telegram lists the chats that have written to the bot, so DM it once first.",
+    ),
   message: z
     .string()
     .min(1)
@@ -163,10 +168,31 @@ async function postSlack(inputs: ApprovalInputs, token: string, stepId: string):
   }
 }
 
+/**
+ * The Discord channel this approval goes in: the target as given, or — for a `user:<id>` target
+ * chosen from the picker or typed by hand — the DM channel with that person, opened first.
+ *
+ * Buttons work the same either way: an interaction from a DM reaches
+ * `POST /api/events/discord/[connectionId]` exactly as one from a guild channel does, carrying the
+ * same `custom_id`, so nothing downstream has to know where the question was asked.
+ */
+async function discordChannel(target: string, token: string): Promise<string> {
+  const userId = discordUserId(target);
+  if (!userId) return target;
+
+  const dm = await openDiscordDm(token, userId);
+  if (!dm.ok) {
+    throw new ConnectorError(`Discord could not open that DM: ${dm.error}`, dm.status || 400);
+  }
+  return dm.channelId;
+}
+
 /** A bot message with one action row of two buttons: style 3 is green (success), 4 is red (danger). */
 async function postDiscord(inputs: ApprovalInputs, token: string, stepId: string): Promise<void> {
+  const channelId = await discordChannel(inputs.target, token);
+
   const response = await fetch(
-    `https://discord.com/api/v10/channels/${inputs.target}/messages`,
+    `https://discord.com/api/v10/channels/${channelId}/messages`,
     {
       method: "POST",
       headers: { Authorization: `Bot ${token}`, "Content-Type": "application/json" },
@@ -272,9 +298,10 @@ export const approvalNode = defineNode({
   category: "logic",
   guide: {
     summary:
-      "Post a question with two buttons into the channel or chat you pick, and hold the run until " +
-      "someone presses one. Everyone in that channel can answer, and the first press wins. Press " +
-      "yes and the run takes the “approved” arrow; press no and it takes “rejected”.",
+      "Post a question with two buttons into the channel, chat or DM you pick, and hold the run " +
+      "until someone presses one. Everyone who can see it can answer, and the first press wins — " +
+      "so pick a person's DMs when the decision is theirs alone. Press yes and the run takes the " +
+      "“approved” arrow; press no and it takes “rejected”.",
     outputs: { [APPROVED_HANDLE]: "approved", [REJECTED_HANDLE]: "rejected" },
   },
   icon: "ShieldCheck",

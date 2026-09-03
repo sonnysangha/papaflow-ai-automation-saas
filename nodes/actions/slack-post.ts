@@ -43,7 +43,7 @@ function parseBlocks(blocks: string | undefined): unknown[] | undefined {
 export const slackPostNode = defineNode({
   type: "slack.postMessage",
   name: "Slack: Post message",
-  description: "Post a message to a Slack channel as your bot.",
+  description: "Post a message to a Slack channel, or into one person's DMs, as your bot.",
   category: "chat",
   icon: "Hash",
   credential: "slack",
@@ -51,7 +51,13 @@ export const slackPostNode = defineNode({
   version: "v1",
   inputs: z.object({
     connectionId: z.string(),
-    channel: z.string().meta({ picker: "channels" }),
+    channel: z
+      .string()
+      .meta({ picker: "channels" })
+      .describe(
+        "A channel the bot can post in, or a person to DM — the dropdown lists both, and Slack " +
+          "opens the DM itself when the value is a user id.",
+      ),
     text: z.string().min(1),
     blocks: z.string().optional().describe("Optional Block Kit JSON"),
   }),

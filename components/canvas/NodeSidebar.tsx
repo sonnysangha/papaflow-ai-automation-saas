@@ -1,11 +1,20 @@
 "use client";
 
-import { useMemo, useState, type DragEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type DragEvent,
+  type ReactNode,
+} from "react";
 import Link from "next/link";
 import { useQuery } from "convex/react";
-import { SearchIcon } from "lucide-react";
+import { PanelLeftCloseIcon, PanelLeftOpenIcon, SearchIcon } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/convex/_generated/api";
@@ -17,7 +26,7 @@ import { nodeCatalogue, type CatalogueEntry } from "@/nodes/registry";
 
 import { NODE_DRAG_MIME } from "./graph-io";
 import { NodeIcon } from "./node-icon";
-import { NODE_SEARCH_INPUT_ID } from "./shortcuts";
+import { NODE_SEARCH_INPUT_ID, hasModifier, isTypingTarget } from "./shortcuts";
 
 const CARD = "block rounded-lg border border-border bg-background p-2.5 transition-colors";
 
@@ -146,12 +155,71 @@ function NodeSidebarItem({
  * one), because dragging a Slack node onto the canvas only to find an empty connection dropdown is
  * a wasted trip.
  */
+/**
+ * "Is the palette folded away" as an external store, because that is what `localStorage` is: the
+ * choice should survive a reload and follow the person across workflows, and
+ * `useSyncExternalStore` gives the server and the first hydration pass `false` (open) before the
+ * stored answer swaps in, so the markup never disagrees with itself.
+ */
+const COLLAPSE_KEY = "papaflow:nodes-collapsed";
+const COLLAPSE_EVENT = "papaflow:nodes-collapsed";
+
+function subscribeToCollapse(onChange: () => void): () => void {
+  window.addEventListener("storage", onChange);
+  window.addEventListener(COLLAPSE_EVENT, onChange);
+  return () => {
+    window.removeEventListener("storage", onChange);
+    window.removeEventListener(COLLAPSE_EVENT, onChange);
+  };
+}
+
+function readCollapsed(): boolean {
+  try {
+    return window.localStorage.getItem(COLLAPSE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeCollapsed(collapsed: boolean): void {
+  try {
+    window.localStorage.setItem(COLLAPSE_KEY, collapsed ? "1" : "0");
+  } catch {
+    // Private mode or a full store: the palette still toggles for this page through the event.
+  }
+  window.dispatchEvent(new Event(COLLAPSE_EVENT));
+}
+
 export function NodeSidebar() {
   const plan = useQuery(api.plan.current, {});
   // The same list the config panel's connection picker reads, so the palette and the dropdown can
   // never disagree about whether this org has a usable Slack token.
   const connections = useQuery(api.connections.list);
   const [search, setSearch] = useState("");
+  const collapsed = useSyncExternalStore(subscribeToCollapse, readCollapsed, () => false);
+  // `/` from anywhere: focus the search — and if the palette is folded away, unfold it first and
+  // focus once the input exists. A ref carries that intent across the re-render.
+  const focusAfterExpand = useRef(false);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "/" || hasModifier(event) || isTypingTarget(event.target)) return;
+      event.preventDefault();
+      if (readCollapsed()) {
+        focusAfterExpand.current = true;
+        writeCollapsed(false);
+      } else {
+        document.getElementById(NODE_SEARCH_INPUT_ID)?.focus();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+  useEffect(() => {
+    if (!collapsed && focusAfterExpand.current) {
+      focusAfterExpand.current = false;
+      document.getElementById(NODE_SEARCH_INPUT_ID)?.focus();
+    }
+  }, [collapsed]);
 
   const features = plan?.features;
   const catalogue = useMemo(() => nodeCatalogue(features ?? []), [features]);
@@ -168,10 +236,35 @@ export function NodeSidebar() {
     entries: matches.filter((entry) => entry.category === category.id),
   })).filter((group) => group.entries.length > 0);
 
+  if (collapsed) {
+    return (
+      <aside
+        aria-label="Nodes, collapsed"
+        className="flex w-10 shrink-0 flex-col items-center gap-1 border-r border-border bg-card py-2"
+      >
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="size-8"
+          aria-label="Show nodes"
+          title="Show nodes (/)"
+          onClick={() => writeCollapsed(false)}
+        >
+          <PanelLeftOpenIcon className="size-4" />
+        </Button>
+        <span className="mt-1 text-[10px] font-medium tracking-wide text-muted-foreground [writing-mode:vertical-rl]">
+          Nodes
+        </span>
+      </aside>
+    );
+  }
+
   return (
     <aside className="flex w-64 shrink-0 flex-col border-r border-border bg-card">
       <div className="border-b border-border p-3">
-        <div className="relative">
+        <div className="flex items-center gap-1.5">
+        <div className="relative min-w-0 flex-1">
           <SearchIcon
             aria-hidden
             className="pointer-events-none absolute top-1/2 left-2.5 h-4 w-4 -translate-y-1/2 text-muted-foreground"
@@ -197,6 +290,18 @@ export function NodeSidebar() {
           >
             /
           </kbd>
+        </div>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="size-8 shrink-0"
+          aria-label="Hide nodes"
+          title="Hide the node list"
+          onClick={() => writeCollapsed(true)}
+        >
+          <PanelLeftCloseIcon className="size-4" />
+        </Button>
         </div>
         <p id={`${NODE_SEARCH_INPUT_ID}-hint`} className="mt-2 text-xs text-muted-foreground">
           Drag a node onto the canvas. Press / to search from anywhere.

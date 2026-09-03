@@ -4,7 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Textarea } from "@/components/ui/textarea";
 
-import { VariablePicker, type VariableGroup } from "../VariablePicker";
+import { VariablePicker } from "../VariablePicker";
+import type { VariableGroup } from "../variables";
 
 /** Mirrors `WHOLE_TEMPLATE` in `nodes/templates.ts`: a value that is nothing but one reference. */
 const WHOLE_TEMPLATE = /^\s*\{\{\s*([^}]+?)\s*\}\}\s*$/;

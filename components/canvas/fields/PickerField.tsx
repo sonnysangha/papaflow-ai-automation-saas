@@ -18,7 +18,7 @@ import {
   pickerOptions,
   type PickerOption,
 } from "../picker-options";
-import type { VariableGroup } from "../VariablePicker";
+import type { VariableGroup } from "../variables";
 import { TemplateInput } from "./TemplateInput";
 
 /**

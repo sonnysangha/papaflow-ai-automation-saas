@@ -69,3 +69,50 @@
     animation: none;
   }
 }
+
+/*
+ * Clerk's cards on a phone.
+ *
+ * `<SignIn />` and friends ship their own layout, and its defaults are desktop numbers: 40px of
+ * horizontal card padding and 32px-tall controls, which at 320px leaves a 202px-wide form of
+ * targets too small to hit. Clerk's `cl-*` element classes are the documented styling hook, so the
+ * phone step is applied here rather than by fighting `appearance` from JavaScript — the appearance
+ * objects in `ClerkCards.tsx` are module constants precisely so they never re-render, and a
+ * viewport is not something they should learn about.
+ *
+ * Everything is scoped to `.pf-auth` (the `AuthShell` root) so the app's own Clerk widgets — the
+ * user button, the org switcher, the pricing table — are untouched, and doubled up on the class to
+ * out-specify Clerk's single-class internals whatever order the stylesheets land in.
+ */
+@media (width < 40rem) {
+  .pf-auth .cl-card.cl-card {
+    max-width: 100%;
+    padding: 1.5rem 1.25rem;
+  }
+
+  .pf-auth .cl-footerItem.cl-footerItem {
+    padding-inline: 1.25rem;
+  }
+
+  /* 44px targets, and 16px in the inputs so iOS does not zoom the page in on focus. */
+  .pf-auth .cl-button.cl-button,
+  .pf-auth .cl-formFieldInput.cl-formFieldInput,
+  .pf-auth .cl-otpCodeFieldInput.cl-otpCodeFieldInput,
+  .pf-auth .cl-selectButton.cl-selectButton,
+  .pf-auth .cl-footerActionLink.cl-footerActionLink,
+  .pf-auth .cl-organizationListPreviewButton.cl-organizationListPreviewButton,
+  .pf-auth .cl-organizationSwitcherPreviewButton.cl-organizationSwitcherPreviewButton {
+    min-height: 2.75rem;
+  }
+
+  .pf-auth .cl-footerActionLink.cl-footerActionLink {
+    display: inline-flex;
+    align-items: center;
+  }
+
+
+  .pf-auth .cl-formFieldInput.cl-formFieldInput,
+  .pf-auth .cl-otpCodeFieldInput.cl-otpCodeFieldInput {
+    font-size: 1rem;
+  }
+}

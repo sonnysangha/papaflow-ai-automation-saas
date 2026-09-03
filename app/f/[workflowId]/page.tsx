@@ -67,19 +67,27 @@ export default async function PublicFormPage({ params }: PageParams) {
   const { spec, published } = loaded;
 
   return (
-    <main className="flex flex-1 items-center justify-center bg-background px-6 py-16 text-foreground">
+    // A shared link is opened on a phone more often than not: the page pads to the safe area, the
+    // card is allowed the full width it can get, and only the desktop numbers are held at `sm`.
+    <main className="flex flex-1 items-center justify-center bg-background px-5 py-8 pb-[max(2rem,env(safe-area-inset-bottom))] text-foreground sm:px-6 sm:py-16 sm:pb-16">
       <Card className="w-full max-w-lg">
+
         <CardHeader>
-          <CardTitle className="text-xl">{spec.title}</CardTitle>
-          {spec.description && <CardDescription>{spec.description}</CardDescription>}
+          <CardTitle className="text-xl max-sm:text-balance">{spec.title}</CardTitle>
+          {spec.description && (
+            <CardDescription className="max-sm:text-pretty">
+              {spec.description}
+            </CardDescription>
+          )}
         </CardHeader>
-        <CardContent className="grid gap-4">
+        <CardContent className="grid gap-5 sm:gap-4">
           {published ? null : (
             // The submit route refuses this too (409 `not_published`), so the banner is a warning
             // rather than the check — it exists so the owner previewing their own form knows why.
             <p
               role="status"
-              className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-foreground"
+              className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 text-sm text-foreground max-sm:text-pretty sm:py-2"
+
             >
               <TriangleAlertIcon aria-hidden className="mt-0.5 size-4 shrink-0 text-amber-600" />
               This form is not published yet — submissions will not start a run.
@@ -89,5 +97,6 @@ export default async function PublicFormPage({ params }: PageParams) {
         </CardContent>
       </Card>
     </main>
+
   );
 }

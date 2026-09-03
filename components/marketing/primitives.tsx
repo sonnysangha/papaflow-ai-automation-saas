@@ -33,8 +33,18 @@ export function Eyebrow({
   );
 }
 
-/** Buttons big enough to be the point of the page; `buttonVariants`' own sizes stop at 36px. */
-export const CTA_BASE = "h-11 gap-2 px-5 text-[0.9375rem]";
+/**
+ * Buttons big enough to be the point of the page; `buttonVariants`' own sizes stop at 36px.
+ *
+ * On a phone a call to action is a full-width bar rather than a chip floating in a wrapped row:
+ * `CTA_ROW` stacks them, `CTA_BASE` lets each one fill the column, and both hand the layout back
+ * at `sm` exactly as it was.
+ */
+export const CTA_ROW =
+  "flex w-full flex-col items-stretch gap-3 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center";
+
+export const CTA_BASE = "h-11 w-full gap-2 px-5 text-[0.9375rem] sm:w-auto";
+
 
 /**
  * The accent is spent here and on the live wire in the hero — nowhere else.

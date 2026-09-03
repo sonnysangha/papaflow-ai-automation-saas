@@ -94,7 +94,7 @@ export function CanvasMock() {
     <figure className="mx-auto w-full max-w-5xl">
       <div className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
         {/* Editor chrome, so the still reads as a screen and not a diagram. */}
-        <div className="flex items-center gap-3 border-b border-border bg-muted/40 px-4 py-2.5">
+        <div className="flex items-center gap-2 border-b border-border bg-muted/40 px-3 py-2.5 sm:gap-3 sm:px-4">
           <CircleDotIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
           <span className="truncate text-sm font-medium">Support triage</span>
           <span className="font-mono text-xs text-muted-foreground max-sm:hidden">v7</span>
@@ -105,7 +105,7 @@ export function CanvasMock() {
         </div>
 
         {/* The stage. */}
-        <div className="pf-grid relative flex flex-col bg-background p-4 md:block md:h-[340px] md:p-0">
+        <div className="pf-grid relative flex flex-col bg-background p-3 sm:p-4 md:block md:h-[340px] md:p-0">
           <svg
             aria-hidden
             viewBox="0 0 100 340"
@@ -147,14 +147,15 @@ export function CanvasMock() {
 
         {/* The run ledger: the thing PapaFlow actually sells, written the way the product writes it. */}
         <div className="border-t border-border bg-muted/30">
-          <p className="border-b border-border px-4 py-2 font-mono text-[0.7rem] tracking-[0.14em] text-muted-foreground uppercase">
+          <p className="border-b border-border px-3 py-2 font-mono text-[0.7rem] tracking-[0.14em] text-muted-foreground uppercase sm:px-4">
+
             Run 01K4X · steps
           </p>
           <ol className="divide-y divide-border">
             {LEDGER.map((row) => (
               <li
                 key={row.key}
-                className="flex items-center gap-3 px-4 py-2 font-mono text-xs"
+                className="flex items-center gap-2.5 px-3 py-2 font-mono text-xs sm:gap-3 sm:px-4"
               >
                 <span className="text-muted-foreground max-sm:hidden">{row.time}</span>
                 <StatusRing status={row.status} />

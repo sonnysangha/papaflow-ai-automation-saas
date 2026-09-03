@@ -11,6 +11,11 @@ import { displayFont } from "./fonts";
  * The left panel disappears below `lg`, where a phone has no room for a manifesto, and a compact
  * lockup takes its place above the card. Nothing here touches Clerk's own routing, so
  * `/sign-in?__clerk_ticket=…` (an organisation invitation) still lands on `<SignIn />` untouched.
+ *
+ * The column is the only thing that scrolls: `flex-1` inside the root layout's `min-h-full` body
+ * means a tall card (sign-up with every field open) grows the page rather than trapping a second
+ * scrollbar inside a fixed-height box. Card padding on a phone is tuned in `marketing.css`, since
+ * it belongs to Clerk's markup rather than this frame.
  */
 
 const PROOF = [
@@ -28,7 +33,7 @@ export function AuthShell({
 }) {
   return (
     <div
-      className={`${displayFont.variable} flex flex-1 bg-background text-foreground`}
+      className={`pf-auth ${displayFont.variable} flex flex-1 bg-background text-foreground`}
     >
       <aside className="hidden w-2/5 max-w-lg flex-col justify-between border-r border-border bg-muted/30 p-10 lg:flex">
         <Wordmark />
@@ -61,10 +66,10 @@ export function AuthShell({
         </Link>
       </aside>
 
-      <div className="flex flex-1 flex-col items-center justify-center gap-8 px-5 py-12 sm:px-8">
+      <div className="flex w-full min-w-0 flex-1 flex-col items-center justify-center gap-6 px-5 py-8 pb-[max(2rem,env(safe-area-inset-bottom))] sm:gap-8 sm:px-8 sm:py-12 sm:pb-12">
         <Link
           href="/"
-          className="flex items-center gap-2 rounded-md text-foreground lg:hidden"
+          className="flex min-h-11 items-center gap-2 rounded-md text-foreground sm:min-h-0 lg:hidden"
         >
           <BrandMark />
           <span className="pf-display text-base font-semibold tracking-tight">

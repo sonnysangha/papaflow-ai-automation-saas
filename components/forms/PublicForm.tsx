@@ -24,6 +24,9 @@ import type { FormField, FormSpec } from "@/nodes/triggers/form";
  * check is `app/api/forms/[workflowId]/route.ts`, which rebuilds the schema from the same spec.
  *
  * Every answer is held as a string (that is what an input gives you); the route coerces numbers.
+ *
+ * Sizing is phone-first: this form is shared as a link, so most of the people filling it in are on
+ * a phone. Controls are 44px there and hand back to the compact desktop sizes at `sm`.
  */
 export function PublicForm({ workflowId, spec }: { workflowId: string; spec: FormSpec }) {
   const prefix = useId();
@@ -96,7 +99,7 @@ export function PublicForm({ workflowId, spec }: { workflowId: string; spec: For
 
   if (sent) {
     return (
-      <div role="status" className="grid gap-2 py-4 text-center">
+      <div role="status" className="grid gap-2 py-6 text-center sm:py-4">
         <p className="text-base font-medium">Thanks — we got it.</p>
         <p className="text-sm text-muted-foreground">Your answers have been sent.</p>
       </div>
@@ -104,7 +107,7 @@ export function PublicForm({ workflowId, spec }: { workflowId: string; spec: For
   }
 
   return (
-    <form noValidate onSubmit={onSubmit} className="grid gap-4">
+    <form noValidate onSubmit={onSubmit} className="grid gap-5 sm:gap-4">
       {spec.fields.map((field) => (
         <FieldRow
           key={field.name}
@@ -122,7 +125,11 @@ export function PublicForm({ workflowId, spec }: { workflowId: string; spec: For
         </p>
       )}
 
-      <Button type="submit" disabled={pending} className="w-full">
+      <Button
+        type="submit"
+        disabled={pending}
+        className="h-11 w-full text-[0.9375rem] sm:h-8 sm:text-sm"
+      >
         {pending ? "Sending…" : spec.submitLabel}
       </Button>
     </form>
@@ -202,6 +209,7 @@ function FieldControl({
         rows={4}
         value={value}
         onChange={(event) => onChange(event.target.value)}
+        className="min-h-28 sm:min-h-16"
       />
     );
   }
@@ -216,7 +224,13 @@ function FieldControl({
           if (typeof next === "string") onChange(next);
         }}
       >
-        <SelectTrigger id={id} aria-invalid={invalid || undefined} className="h-9 w-full">
+        {/* `h-11!` because the trigger takes its height from `data-size`, which out-specifies a
+            plain height class; leaving `sm:` alone hands it back to that default. */}
+        <SelectTrigger
+          id={id}
+          aria-invalid={invalid || undefined}
+          className="w-full max-sm:h-11! max-sm:text-base"
+        >
           <SelectValue placeholder="Choose…" />
         </SelectTrigger>
         <SelectContent>
@@ -236,7 +250,8 @@ function FieldControl({
       type={field.type === "email" ? "email" : field.type === "number" ? "number" : "text"}
       value={value}
       onChange={(event) => onChange(event.target.value)}
-      className="h-9"
+      className="h-11 sm:h-9"
     />
+
   );
 }

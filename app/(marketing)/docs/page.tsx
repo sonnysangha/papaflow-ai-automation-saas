@@ -1,7 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
-import { Eyebrow, ctaPrimary, ctaSecondary } from "@/components/marketing/primitives";
+import {
+  CTA_ROW,
+  Eyebrow,
+  ctaPrimary,
+  ctaSecondary,
+} from "@/components/marketing/primitives";
 
 export const metadata: Metadata = {
   title: "Docs — PapaFlow",
@@ -33,24 +38,26 @@ const SECTION = "mx-auto w-full max-w-3xl px-5 sm:px-8";
 export default function DocsPage() {
   return (
     <>
-      <section className={`${SECTION} flex flex-col gap-6 pt-16 pb-10 sm:pt-20`}>
+      <section
+        className={`${SECTION} flex flex-col gap-5 pt-10 pb-8 sm:gap-6 sm:pt-20 sm:pb-10`}
+      >
         <Eyebrow className="w-full max-w-sm">Docs</Eyebrow>
-        <h1 className="pf-display text-4xl leading-[1.05] font-semibold tracking-[-0.02em] text-balance sm:text-5xl">
+        <h1 className="pf-display text-[2rem] leading-[1.07] font-semibold tracking-[-0.02em] text-balance min-[360px]:text-4xl sm:text-5xl sm:leading-[1.05]">
           The full docs are still being written.
         </h1>
-        <p className="text-lg text-pretty text-muted-foreground">
+        <p className="text-base text-pretty text-muted-foreground sm:text-lg">
           Reference pages for every node and connector are on the way. In the
           meantime, this is the whole path from a new account to a run you can
           read.
         </p>
       </section>
 
-      <section className={`${SECTION} pb-20`}>
+      <section className={`${SECTION} pb-14 sm:pb-20`}>
         <ol className="flex flex-col">
           {QUICKSTART.map((step, index) => (
             <li
               key={step.title}
-              className="flex flex-col gap-2 border-t border-border py-6"
+              className="flex flex-col gap-2 border-t border-border py-5 sm:py-6"
             >
               <span className="font-mono text-xs text-[var(--pf-accent)]">
                 {String(index + 1).padStart(2, "0")}
@@ -62,14 +69,16 @@ export default function DocsPage() {
         </ol>
       </section>
 
-      <section className="border-t border-border py-16">
-        <div className={`${SECTION} flex flex-wrap items-center gap-3`}>
-          <Link href="/sign-up" className={ctaPrimary()}>
-            Start free
-          </Link>
-          <Link href="/pricing" className={ctaSecondary()}>
-            See pricing
-          </Link>
+      <section className="border-t border-border py-12 sm:py-16">
+        <div className={SECTION}>
+          <div className={CTA_ROW}>
+            <Link href="/sign-up" className={ctaPrimary()}>
+              Start free
+            </Link>
+            <Link href="/pricing" className={ctaSecondary()}>
+              See pricing
+            </Link>
+          </div>
         </div>
       </section>
     </>

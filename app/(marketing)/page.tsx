@@ -11,7 +11,12 @@ import {
 } from "lucide-react";
 
 import { CanvasMock } from "@/components/marketing/CanvasMock";
-import { Eyebrow, ctaPrimary, ctaSecondary } from "@/components/marketing/primitives";
+import {
+  CTA_ROW,
+  Eyebrow,
+  ctaPrimary,
+  ctaSecondary,
+} from "@/components/marketing/primitives";
 import { WorksWith } from "@/components/marketing/WorksWith";
 import { connectorCatalogue } from "@/connectors/registry";
 
@@ -103,20 +108,26 @@ export default function LandingPage() {
   return (
     <>
       {/* Hero */}
-      <section className={`${SECTION} flex flex-col items-start gap-6 pt-16 pb-12 sm:pt-24`}>
+      <section
+        className={`${SECTION} flex flex-col items-start gap-5 pt-10 pb-10 sm:gap-6 sm:pt-24 sm:pb-12`}
+      >
         <Eyebrow className="w-full max-w-md">Durable workflow automation</Eyebrow>
 
-        <h1 className="pf-display max-w-3xl text-4xl leading-[1.05] font-semibold tracking-[-0.02em] text-balance sm:text-5xl lg:text-6xl">
+        {/*
+          The display face is cut for size, so the phone step is set explicitly rather than left to
+          `text-4xl`: 2rem at 320, 2.25rem once there is a line's worth of width for it.
+        */}
+        <h1 className="pf-display max-w-3xl text-[2rem] leading-[1.07] font-semibold tracking-[-0.02em] text-balance min-[360px]:text-4xl sm:text-5xl sm:leading-[1.05] lg:text-6xl">
           Automate your work with a canvas, not a codebase.
         </h1>
 
-        <p className="max-w-2xl text-lg text-pretty text-muted-foreground">
+        <p className="max-w-2xl text-base text-pretty text-muted-foreground sm:text-lg">
           Drag triggers, AI steps and app actions onto a canvas, plug in your own
           OpenAI or Anthropic key, and let every run finish on its own — retries,
           week-long waits and human approvals included.
         </p>
 
-        <div className="flex flex-wrap items-center gap-3">
+        <div className={CTA_ROW}>
           <Link href="/sign-up" className={ctaPrimary()}>
             Start free
           </Link>
@@ -126,6 +137,7 @@ export default function LandingPage() {
         </div>
 
         <ul className="flex flex-wrap items-center gap-x-5 gap-y-2 font-mono text-xs text-muted-foreground">
+
           <li>3 workflows free</li>
           <li aria-hidden>·</li>
           <li>No card to start</li>
@@ -135,20 +147,21 @@ export default function LandingPage() {
       </section>
 
       {/* The product, mid-run */}
-      <section className={`${SECTION} pb-20 sm:pb-28`}>
+      <section className={`${SECTION} pb-14 sm:pb-28`}>
         <CanvasMock />
       </section>
 
       {/* How it works — a real sequence, so it is numbered */}
       <section
         id="how-it-works"
-        className="scroll-mt-20 border-t border-border bg-muted/25 py-20 sm:py-24"
+        className="scroll-mt-16 border-t border-border bg-muted/25 py-14 sm:scroll-mt-20 sm:py-24"
       >
-        <div className={`${SECTION} flex flex-col gap-10`}>
+        <div className={`${SECTION} flex flex-col gap-8 sm:gap-10`}>
           <div className="flex flex-col gap-4">
             <Eyebrow className="max-w-sm">How it works</Eyebrow>
-            <h2 className="pf-display max-w-2xl text-3xl font-semibold tracking-[-0.015em] text-balance sm:text-4xl">
+            <h2 className="pf-display max-w-2xl text-[1.75rem]/[1.2] font-semibold tracking-[-0.015em] text-balance sm:text-4xl">
               Three moves, then it runs without you.
+
             </h2>
           </div>
 
@@ -161,7 +174,8 @@ export default function LandingPage() {
                 <h3 className="text-lg font-semibold tracking-tight">{step.title}</h3>
                 <p className="text-sm text-pretty text-muted-foreground">{step.body}</p>
                 {"code" in step ? (
-                  <code className="w-fit rounded-md border border-border bg-card px-2 py-1 font-mono text-xs text-foreground">
+                  <code className="block w-fit max-w-full overflow-x-auto rounded-md border border-border bg-card px-2 py-1 font-mono text-xs text-foreground">
+
                     {step.code}
                   </code>
                 ) : null}
@@ -172,16 +186,19 @@ export default function LandingPage() {
       </section>
 
       {/* Features */}
-      <section id="features" className={`${SECTION} scroll-mt-20 py-20 sm:py-24`}>
-        <div className="flex flex-col gap-10">
+      <section
+        id="features"
+        className={`${SECTION} scroll-mt-16 py-14 sm:scroll-mt-20 sm:py-24`}
+      >
+        <div className="flex flex-col gap-8 sm:gap-10">
           <div className="flex flex-col gap-4">
             <Eyebrow className="max-w-sm">What you get</Eyebrow>
-            <h2 className="pf-display max-w-2xl text-3xl font-semibold tracking-[-0.015em] text-balance sm:text-4xl">
+            <h2 className="pf-display max-w-2xl text-[1.75rem]/[1.2] font-semibold tracking-[-0.015em] text-balance sm:text-4xl">
               Everything a real automation needs on day two.
             </h2>
           </div>
 
-          <ul className="grid gap-x-10 gap-y-9 sm:grid-cols-2 lg:grid-cols-3">
+          <ul className="grid gap-x-10 gap-y-8 sm:grid-cols-2 sm:gap-y-9 lg:grid-cols-3">
             {FEATURES.map((feature) => (
               <li key={feature.title} className="flex flex-col gap-2.5">
                 <feature.icon
@@ -199,15 +216,15 @@ export default function LandingPage() {
       {/* Works with */}
       <section
         id="works-with"
-        className="scroll-mt-20 border-t border-border bg-muted/25 py-20 sm:py-24"
+        className="scroll-mt-16 border-t border-border bg-muted/25 py-14 sm:scroll-mt-20 sm:py-24"
       >
-        <div className={`${SECTION} flex flex-col gap-10`}>
+        <div className={`${SECTION} flex flex-col gap-8 sm:gap-10`}>
           <div className="flex flex-col gap-4">
             <Eyebrow className="max-w-sm">Works with</Eyebrow>
-            <h2 className="pf-display max-w-2xl text-3xl font-semibold tracking-[-0.015em] text-balance sm:text-4xl">
+            <h2 className="pf-display max-w-2xl text-[1.75rem]/[1.2] font-semibold tracking-[-0.015em] text-balance sm:text-4xl">
               Bring the accounts you already pay for.
             </h2>
-            <p className="max-w-2xl text-pretty text-muted-foreground">
+            <p className="max-w-2xl text-sm text-pretty text-muted-foreground sm:text-base">
               {connectorCount} providers connect today, and every one of them uses
               a credential you own. Each tile says what you will need to paste.
             </p>
@@ -218,7 +235,7 @@ export default function LandingPage() {
       </section>
 
       {/* Built on */}
-      <section className={`${SECTION} py-14`}>
+      <section className={`${SECTION} py-10 sm:py-14`}>
         <div className="flex flex-col gap-4">
           <h2 className="font-mono text-[0.7rem] tracking-[0.18em] text-muted-foreground uppercase">
             Built on
@@ -237,16 +254,17 @@ export default function LandingPage() {
       </section>
 
       {/* Final CTA */}
-      <section className="border-t border-border py-20 sm:py-24">
-        <div className={`${SECTION} flex flex-col items-start gap-6`}>
-          <h2 className="pf-display max-w-2xl text-3xl font-semibold tracking-[-0.015em] text-balance sm:text-4xl">
+      <section className="border-t border-border py-14 sm:py-24">
+        <div className={`${SECTION} flex flex-col items-start gap-5 sm:gap-6`}>
+          <h2 className="pf-display max-w-2xl text-[1.75rem]/[1.2] font-semibold tracking-[-0.015em] text-balance sm:text-4xl">
             Your first run is about ten minutes away.
           </h2>
           <p className="max-w-xl text-pretty text-muted-foreground">
             Create an organisation, connect one provider, and watch a run light up
             node by node on the canvas.
           </p>
-          <div className="flex flex-wrap items-center gap-3">
+          <div className={CTA_ROW}>
+
             <Link href="/sign-up" className={ctaPrimary()}>
               Start free
             </Link>

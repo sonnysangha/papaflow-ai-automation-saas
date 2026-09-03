@@ -2,7 +2,12 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { PlanCards } from "@/components/billing/PlanCards";
-import { Eyebrow, ctaPrimary, ctaSecondary } from "@/components/marketing/primitives";
+import {
+  CTA_ROW,
+  Eyebrow,
+  ctaPrimary,
+  ctaSecondary,
+} from "@/components/marketing/primitives";
 import { PRICING } from "@/lib/plans";
 
 const DESCRIPTION = `Free to start, $${PRICING.pro.monthly} a month for Pro. Plans are per organisation, and AI usage is billed by the provider whose key you bring.`;
@@ -57,12 +62,14 @@ const SECTION = "mx-auto w-full max-w-6xl px-5 sm:px-8";
 export default function PricingPage() {
   return (
     <>
-      <section className={`${SECTION} flex flex-col gap-6 pt-16 pb-10 sm:pt-20`}>
+      <section
+        className={`${SECTION} flex flex-col gap-5 pt-10 pb-8 sm:gap-6 sm:pt-20 sm:pb-10`}
+      >
         <Eyebrow className="w-full max-w-md">Pricing</Eyebrow>
-        <h1 className="pf-display max-w-3xl text-4xl leading-[1.05] font-semibold tracking-[-0.02em] text-balance sm:text-5xl">
+        <h1 className="pf-display max-w-3xl text-[2rem] leading-[1.07] font-semibold tracking-[-0.02em] text-balance min-[360px]:text-4xl sm:text-5xl sm:leading-[1.05]">
           One price per organisation. Your AI spend stays yours.
         </h1>
-        <p className="max-w-2xl text-lg text-pretty text-muted-foreground">
+        <p className="max-w-2xl text-base text-pretty text-muted-foreground sm:text-lg">
           Everyone in the org gets the plan&apos;s features. Model calls are billed
           by the provider whose key you connected, so nothing here marks up your
           tokens.
@@ -75,15 +82,18 @@ export default function PricingPage() {
         no session gets the list prices from `lib/plans.ts` in the HTML and never waits on billing.
         A checkout started here lands back inside the app, which is where the plan takes effect.
       */}
-      <section className={`${SECTION} pb-20`}>
+      <section className={`${SECTION} pb-14 sm:pb-20`}>
         <PlanCards variant="marketing" redirectUrl="/settings/billing?upgraded=1" />
       </section>
 
-      <section className="scroll-mt-20 border-t border-border bg-muted/25 py-20" id="faq">
-        <div className={`${SECTION} flex flex-col gap-10`}>
+      <section
+        className="scroll-mt-16 border-t border-border bg-muted/25 py-14 sm:scroll-mt-20 sm:py-20"
+        id="faq"
+      >
+        <div className={`${SECTION} flex flex-col gap-8 sm:gap-10`}>
           <div className="flex flex-col gap-4">
             <Eyebrow className="max-w-sm">Questions</Eyebrow>
-            <h2 className="pf-display max-w-2xl text-3xl font-semibold tracking-[-0.015em] text-balance sm:text-4xl">
+            <h2 className="pf-display max-w-2xl text-[1.75rem]/[1.2] font-semibold tracking-[-0.015em] text-balance sm:text-4xl">
               Before you pick a plan.
             </h2>
           </div>
@@ -103,12 +113,13 @@ export default function PricingPage() {
         </div>
       </section>
 
-      <section className="border-t border-border py-20">
-        <div className={`${SECTION} flex flex-col items-start gap-6`}>
-          <h2 className="pf-display max-w-2xl text-3xl font-semibold tracking-[-0.015em] text-balance sm:text-4xl">
+      <section className="border-t border-border py-14 sm:py-20">
+        <div className={`${SECTION} flex flex-col items-start gap-5 sm:gap-6`}>
+          <h2 className="pf-display max-w-2xl text-[1.75rem]/[1.2] font-semibold tracking-[-0.015em] text-balance sm:text-4xl">
             Start on Free. Move up when a schedule needs to fire every minute.
           </h2>
-          <div className="flex flex-wrap items-center gap-3">
+          <div className={CTA_ROW}>
+
             <Link href="/sign-up" className={ctaPrimary()}>
               Start free
             </Link>

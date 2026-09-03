@@ -9,7 +9,6 @@ import { StatusRing } from "@/components/canvas/StatusRing";
 import { CopyableUrl } from "@/components/canvas/fields/CopyableUrl";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Sheet,
   SheetContent,
@@ -151,15 +150,21 @@ function passLabel(step: Step, passes: number): string | null {
   return step.iteration === undefined ? null : `${step.iteration + 1}/${Math.max(passes, 1)}`;
 }
 
+/**
+ * A plain scrolling box, for the same reason the canvas panel uses one (`LastRunSection`): a
+ * `ScrollArea` root with `max-h-*` caps its own box but not its `height: 100%` viewport, so a long
+ * response body drew itself over everything below it instead of scrolling. `break-all` because what
+ * overflows here is a URL or a token, which `overflow-wrap` will not break inside `pre-wrap`.
+ */
 function JsonBlock({ label, value }: { label: string; value: unknown }) {
   return (
-    <div className="flex min-w-0 flex-1 flex-col gap-1">
-      <span className="text-xs font-medium text-muted-foreground">{label}</span>
-      <ScrollArea className="max-h-56 rounded-md border border-border bg-muted/40">
-        <pre className="p-2 font-mono text-xs break-words whitespace-pre-wrap">
+    <div className="flex min-w-0 flex-1 basis-64 flex-col gap-1">
+      <span className="truncate text-xs font-medium text-muted-foreground">{label}</span>
+      <div className="max-h-56 min-w-0 overflow-auto overscroll-contain rounded-md border border-border bg-muted/40">
+        <pre className="p-2 font-mono text-xs break-all whitespace-pre-wrap">
           {value === undefined ? "—" : JSON.stringify(value, null, 2)}
         </pre>
-      </ScrollArea>
+      </div>
     </div>
   );
 }
@@ -178,7 +183,7 @@ function ResumeUrl({ step }: { step: Step }) {
   const url = `${appOrigin()}/api/wait/${step.hookToken ?? ""}`;
 
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex min-w-0 flex-col gap-1">
       <span className="text-xs font-medium text-muted-foreground">Resume URL</span>
       <CopyableUrl value={url} label="Resume URL" />
       <p className="text-xs text-muted-foreground">
@@ -191,14 +196,16 @@ function ResumeUrl({ step }: { step: Step }) {
 /** The expanded half of a step row: what went in (redacted by `runNode`) and what came back. */
 function StepDetail({ step }: { step: Step }) {
   return (
-    <div className="flex flex-col gap-3 rounded-lg bg-muted/30 p-3">
+    <div className="flex min-w-0 flex-col gap-3 rounded-lg bg-muted/30 p-3">
       {step.status === "waiting" && step.hookToken ? <ResumeUrl step={step} /> : null}
-      <div className="flex flex-wrap gap-3">
+      <div className="flex min-w-0 flex-wrap gap-3">
         <JsonBlock label="Input" value={step.input} />
         <JsonBlock label="Output" value={step.output} />
       </div>
       {step.error ? (
-        <p className="font-mono text-xs whitespace-pre-wrap text-destructive">{step.error}</p>
+        <p className="max-h-40 overflow-auto font-mono text-xs break-all whitespace-pre-wrap text-destructive">
+          {step.error}
+        </p>
       ) : null}
     </div>
   );

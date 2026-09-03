@@ -24,11 +24,11 @@ export function TagList({ id, value, onChange, placeholder, addLabel = "Add item
     onChange(value.map((current, at) => (at === index ? entry : current)));
 
   return (
-    <div className="space-y-1.5">
+    <div className="min-w-0 space-y-1.5">
       {/* Index keys: the rows are positional and have no id of their own — editing one rewrites
           that position, and adding or removing always happens at the end or by index. */}
       {value.map((entry, index) => (
-        <div key={index} className="flex items-center gap-1.5">
+        <div key={index} className="flex min-w-0 items-center gap-1.5">
           <Input
             id={index === 0 ? id : undefined}
             value={entry}

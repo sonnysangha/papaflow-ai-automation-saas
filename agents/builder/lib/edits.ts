@@ -100,6 +100,12 @@ export type CatalogueDetail = CatalogueSummary & {
   inputs: unknown;
   outputs: unknown;
   handles: string[];
+  /**
+   * The node's own explanation of itself, and what each of its handles means — read-only, and only
+   * at this depth. `handles` alone says a Loop has `each` and `done`; this says which one the body
+   * hangs off, which is the half a plan gets wrong.
+   */
+  guide?: { summary: string; outputs?: Record<string, string> };
 };
 
 /**
@@ -131,6 +137,7 @@ export function catalogue(
         inputs: entry.inputsSchema,
         outputs: entry.outputsSchema,
         handles: entry.handles,
+        guide: NODES[entry.type]?.guide,
       }));
 
     const missing = options.types.filter((type) => !NODES[type]);

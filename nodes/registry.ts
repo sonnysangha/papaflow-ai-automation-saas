@@ -84,6 +84,10 @@ export interface CatalogueEntry {
   requiresFeature: string | null;
   /** Whether the org's plan features cover this node. */
   allowed: boolean;
+  /** The connection kind this node needs (`"ai"`, `"slack"`, a family), or null for none. */
+  credential: string | null;
+  /** …and whether it still runs without one, like the HTTP and Send email nodes. */
+  credentialOptional: boolean;
   inputsSchema: JsonSchema;
   outputsSchema: JsonSchema;
   handles: string[];
@@ -110,6 +114,8 @@ export function nodeCatalogue(features: readonly string[]): CatalogueEntry[] {
       version: definition.version,
       requiresFeature: definition.requiresFeature,
       allowed: !definition.requiresFeature || features.includes(definition.requiresFeature),
+      credential: definition.credential,
+      credentialOptional: definition.credentialOptional ?? false,
       inputsSchema: toJsonSchema(definition.inputs),
       outputsSchema: toJsonSchema(definition.outputs),
       handles: definition.handles?.(defaultInputs(definition)) ?? ["out"],

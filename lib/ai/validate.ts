@@ -26,12 +26,73 @@ export const AI_PROVIDER_NAMES: Record<string, string> = {
 
 type Json = Record<string, unknown>;
 
-/** A non-2xx answer: the provider looked at the key and said no (or fell over). */
+/** How much of a provider's own error text is worth repeating; the rest is stack-trace noise. */
+const MAX_PROVIDER_MESSAGE = 200;
+
+/**
+ * A non-2xx answer: the provider looked at the key and said no (or fell over).
+ *
+ * `detail` is the provider's own words when its body carried any — "invalid x-api-key",
+ * "Incorrect API key provided", "API key not valid" — because a bare `HTTP 401` cannot tell the
+ * difference between a typo, an expired key, a key for the wrong product (an Anthropic Admin key,
+ * a Claude Code token) and a key for the wrong provider entirely.
+ */
 class HttpError extends Error {
-  constructor(readonly status: number) {
-    super(`HTTP ${status}`);
+  constructor(
+    readonly status: number,
+    readonly detail?: string,
+  ) {
+    super(detail ? `HTTP ${status}: ${detail}` : `HTTP ${status}`);
     this.name = "HttpError";
   }
+}
+
+function asString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+/**
+ * The message out of an error body, across the shapes the ten providers actually use:
+ * `{ error: { message } }` (Anthropic, OpenAI, Google, Groq, DeepSeek, OpenRouter),
+ * `{ error: "…" }` / `{ message }` (xAI, Mistral) and `{ detail }` or `{ detail: { message } }`
+ * (ElevenLabs, fal). A body that is not JSON at all is used verbatim, which covers the HTML a
+ * proxy or a WAF answers with.
+ */
+export function providerErrorDetail(body: string): string | null {
+  const text = body.trim();
+  if (text.length === 0) return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    // Not JSON: an HTML error page is worse than nothing, a one-line text body is not.
+    return text.startsWith("<") ? null : truncate(text);
+  }
+
+  // A bare JSON string is the message; anything else scalar is not worth quoting back.
+  if (typeof parsed === "string") return asString(parsed) === null ? null : truncate(parsed);
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const root = parsed as Json;
+
+  const candidates: unknown[] = [root.error, root.detail, root];
+  for (const candidate of candidates) {
+    const direct = asString(candidate);
+    if (direct) return truncate(direct);
+    if (typeof candidate === "object" && candidate !== null) {
+      const nested = asString((candidate as Json).message) ?? asString((candidate as Json).error);
+      if (nested) return truncate(nested);
+    }
+  }
+
+  return null;
+}
+
+function truncate(text: string): string {
+  const single = text.replace(/\s+/g, " ").trim();
+  return single.length > MAX_PROVIDER_MESSAGE
+    ? `${single.slice(0, MAX_PROVIDER_MESSAGE - 1)}…`
+    : single;
 }
 
 /** A 200 answer that still means "you cannot use this key" — xAI's blocked flags. */
@@ -52,7 +113,12 @@ async function request(
     ...(options.body === undefined ? {} : { body: options.body }),
     signal: AbortSignal.timeout(TIMEOUT_MS),
   });
-  if (!response.ok) throw new HttpError(response.status);
+  if (!response.ok) {
+    // Read before throwing: the body is where every provider says *why* it refused, and it is the
+    // only part of a 401 the user can act on.
+    const body = await response.text().catch(() => "");
+    throw new HttpError(response.status, providerErrorDetail(body) ?? undefined);
+  }
   return response.json().catch(() => ({}));
 }
 
@@ -172,11 +238,15 @@ export async function validateAndDiscover(provider: string, apiKey: string): Pro
   const name = AI_PROVIDER_NAMES[provider];
   const discover = DISCOVERERS[provider];
   if (!name || !discover) return { ok: false, error: `Unknown AI provider: ${provider}` };
-  if (!apiKey) return { ok: false, error: `${name} needs an API key` };
 
-  const hint = apiKey.slice(-4);
+  // Belt and braces: `createConnectionFromInput` normalises every typed field before it gets here,
+  // but this is also the retest path for rows sealed before that existed.
+  const key = apiKey?.trim() ?? "";
+  if (!key) return { ok: false, error: `${name} needs an API key` };
+
+  const hint = key.slice(-4);
   try {
-    const { models, meta } = await discover(apiKey);
+    const { models, meta } = await discover(key);
     return {
       ok: true,
       label: `${name} (…${hint})`,
@@ -184,7 +254,23 @@ export async function validateAndDiscover(provider: string, apiKey: string): Pro
       meta: { models, fetchedAt: Date.now(), ...meta },
     };
   } catch (error) {
-    if (error instanceof HttpError) return { ok: false, error: `${name} rejected the key (HTTP ${error.status})` };
+    if (error instanceof HttpError) return { ok: false, error: rejectionMessage(name, error, key) };
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
+}
+
+/**
+ * How a refusal reads: the provider's own words when it gave any ("Anthropic rejected the key
+ * (401: invalid x-api-key)"), the bare status when it did not ("Anthropic rejected the key
+ * (HTTP 500)").
+ *
+ * The key itself is scrubbed out of the provider's text first. No provider is known to echo one
+ * back, but this string is rendered in the browser and a message that quotes a remote body is not
+ * the place to find out otherwise (CLAUDE.md rule 1).
+ */
+function rejectionMessage(name: string, error: HttpError, apiKey: string): string {
+  if (!error.detail) return `${name} rejected the key (HTTP ${error.status})`;
+
+  const detail = apiKey.length >= 8 ? error.detail.split(apiKey).join("••••") : error.detail;
+  return `${name} rejected the key (${error.status}: ${detail})`;
 }

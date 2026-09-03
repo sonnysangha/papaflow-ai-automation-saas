@@ -2,7 +2,7 @@
 // call that works with any of them, so it is the test. The pickers then use the metadata API,
 // which needs `schema.bases:read` — a PAT without it passes the test and fails the picker, which
 // is exactly the distinction the user needs to see (docs/research/connectors-data.md).
-import { defineConnector } from "./define";
+import { defineConnector, type PickerOption } from "./define";
 
 export const AIRTABLE_API = "https://api.airtable.com/v0";
 
@@ -64,6 +64,77 @@ function namedList(data: Record<string, unknown>, key: string): { id: string; la
     }));
 }
 
+/**
+ * The field types Airtable computes for itself. Every one of them refuses a write — a `formula`
+ * column is the formula's answer, an `autoNumber` is Airtable's counter — so offering them in the
+ * "which column?" dropdown could only ever produce a 422 the user cannot fix
+ * (https://airtable.com/developers/web/api/field-model). Everything else is writable, including
+ * the ones the create-record node's `typecast: true` coerces a string into.
+ */
+const COMPUTED_FIELD_TYPES: ReadonlySet<string> = new Set([
+  "aiText",
+  "autoNumber",
+  "button",
+  "count",
+  "createdBy",
+  "createdTime",
+  "externalSyncSource",
+  "formula",
+  "lastModifiedBy",
+  "lastModifiedTime",
+  // Airtable names the lookup type `multipleLookupValues`; `lookup` is the older spelling, and a
+  // base that still answers with it must be filtered too.
+  "lookup",
+  "multipleLookupValues",
+  "rollup",
+]);
+
+/** `options.choices[].name` for a `singleSelect`/`multipleSelects` field, or nothing for the rest. */
+function choicesOf(field: Record<string, unknown>): string[] | undefined {
+  const options = field.options;
+  if (typeof options !== "object" || options === null) return undefined;
+
+  const choices = (options as { choices?: unknown }).choices;
+  if (!Array.isArray(choices)) return undefined;
+
+  const names = choices
+    .map((choice) => (choice as { name?: unknown })?.name)
+    .filter((name): name is string => typeof name === "string" && name.length > 0);
+  return names.length > 0 ? names : undefined;
+}
+
+/**
+ * The writable columns of one table in a base schema, as picker options.
+ *
+ * The value is the field *name*, not its id: `airtable.createRecord` posts `fields: { "<name>": … }`
+ * and that is what the user sees in the grid. The table is matched on its id or its name for the
+ * same reason — the table picker stores ids, but a hand-typed `Leads` is equally valid in the
+ * records URL, and a field list that came back empty for it would look like a permissions problem.
+ */
+function writableFields(data: Record<string, unknown>, tableId: string): PickerOption[] {
+  const tables = Array.isArray(data.tables) ? data.tables : [];
+  const table = tables
+    .filter((entry): entry is Record<string, unknown> => typeof entry === "object" && entry !== null)
+    .find((entry) => entry.id === tableId || entry.name === tableId);
+
+  const fields = Array.isArray(table?.fields) ? table.fields : [];
+  const options: PickerOption[] = [];
+
+  for (const entry of fields) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const field = entry as Record<string, unknown>;
+
+    const name = typeof field.name === "string" ? field.name : "";
+    const type = typeof field.type === "string" ? field.type : "";
+    if (!name || COMPUTED_FIELD_TYPES.has(type)) continue;
+
+    const choices = choicesOf(field);
+    options.push({ id: name, label: name, ...(type ? { type } : {}), ...(choices ? { choices } : {}) });
+  }
+
+  return options;
+}
+
 export const airtableConnector = defineConnector({
   provider: "airtable",
   name: "Airtable",
@@ -108,7 +179,8 @@ export const airtableConnector = defineConnector({
   /**
    * `bases` fills the base dropdown; `tables:<baseId>` fills the table dropdown underneath it —
    * the base has to be chosen first, which is why the kind carries it rather than a second
-   * argument (the pick route only ever forwards one string).
+   * argument (the pick route only ever forwards one string). `fields:<baseId>:<tableId>` is the
+   * same idea one level down: the column names of one table, for the Fields editor's key column.
    */
   async pick(kind, secret) {
     const token = secret.apiKey?.trim() ?? "";
@@ -125,6 +197,20 @@ export const airtableConnector = defineConnector({
       const result = await callAirtable(token, `/meta/bases/${encodeURIComponent(baseId)}/tables`);
       if (!result.ok) throw new Error(result.error);
       return namedList(result.data, "tables");
+    }
+
+    if (kind.startsWith("fields:")) {
+      // `<baseId>:<tableId>` — neither id nor a table name may contain a colon, so anything else
+      // is a kind this connector did not write and is answered with nothing rather than a guess.
+      const parts = kind.slice("fields:".length).split(":");
+      if (parts.length !== 2) return [];
+      const [baseId, tableId] = parts;
+      if (!baseId || !tableId) return [];
+
+      // The one metadata call there is: the whole base's schema, tables and fields together.
+      const result = await callAirtable(token, `/meta/bases/${encodeURIComponent(baseId)}/tables`);
+      if (!result.ok) throw new Error(result.error);
+      return writableFields(result.data, tableId);
     }
 
     return [];

@@ -12,6 +12,11 @@
  * handful of names no rule can rescue (`everyMinutes` → "Every (minutes)"); everything else reads
  * correctly from the two rules below.
  *
+ * The same split applies twice more, and lives here for the same reason: `.meta({ options })` gives
+ * an enum's *values* display words (`greaterThan` → "is greater than") while the graph keeps
+ * storing the value, and `.meta({ showWhen })` lets a node hide a field that does not apply to the
+ * mode you picked. All three keys survive `z.toJSONSchema()`, which is the whole trick.
+ *
  * React-free so it can be unit tested on its own.
  */
 
@@ -84,8 +89,11 @@ export function humaniseFieldName(name: string): string {
     .join(" ");
 }
 
-/** A field's schema, seen through the one key this module reads. */
-export type LabelledSchema = { label?: unknown } | null | undefined;
+/** A field's schema, seen through the three `.meta()` keys this module reads. */
+export type LabelledSchema =
+  | { label?: unknown; options?: unknown; showWhen?: unknown }
+  | null
+  | undefined;
 
 /**
  * The label to render above a field: the node's own `.meta({ label })` when it declared one,
@@ -95,4 +103,53 @@ export function fieldLabel(name: string, schema?: LabelledSchema): string {
   const declared = schema?.label;
   if (typeof declared === "string" && declared.trim().length > 0) return declared.trim();
   return humaniseFieldName(name) || name;
+}
+
+/** One choice in a `z.enum()` field: the value the graph stores, and the words the reader sees. */
+export type EnumOption = { value: string; label: string };
+
+function record(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+/**
+ * The words one `z.enum()` value is *shown* under, as opposed to the value that is stored.
+ *
+ * A node declares them with `.meta({ options: { equals: "is equal to", … } })`, which survives
+ * `z.toJSONSchema()` beside `enum` the same way `label` and `picker` do — so the Condition node can
+ * offer "is greater than" while the graph, the templates and `run()` keep seeing `greaterThan`.
+ *
+ * The fallback is the raw value, deliberately: most enums on a node are already the right words
+ * (`GET`, `POST`, a model id), and humanising them would turn `GET` into "Get".
+ */
+export function optionLabel(value: string, schema?: LabelledSchema): string {
+  const declared = record(schema?.options)?.[value];
+  if (typeof declared === "string" && declared.trim().length > 0) return declared.trim();
+  return value;
+}
+
+/** Every choice of an enum field, in the schema's own order, paired with its display words. */
+export function enumOptions(values: readonly string[], schema?: LabelledSchema): EnumOption[] {
+  return values.map((value) => ({ value, label: optionLabel(value, schema) }));
+}
+
+/**
+ * Whether a field applies to the configuration in front of you.
+ *
+ * `.meta({ showWhen: { mode: "duration" } })` says "only ask this when `mode` is `duration`" — the
+ * Wait node's two mutually exclusive fields, where showing both is the confusing part. Every entry
+ * has to match, a value may be a list of acceptable ones, and a field with no `showWhen` is always
+ * shown. `values` must be the *effective* inputs (the node's schema defaults filled in), or a node
+ * nobody has touched yet would hide both halves of its own form.
+ */
+export function fieldVisible(schema: LabelledSchema, values: Record<string, unknown>): boolean {
+  const when = record(schema?.showWhen);
+  if (!when) return true;
+
+  return Object.entries(when).every(([name, expected]) => {
+    const actual = values[name];
+    return Array.isArray(expected) ? expected.includes(actual) : actual === expected;
+  });
 }

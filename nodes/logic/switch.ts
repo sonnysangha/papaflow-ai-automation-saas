@@ -17,16 +17,31 @@ const DEFAULT_CASE = "default";
  */
 export const switchNode = defineNode({
   type: "logic.switch",
-  name: "Switch",
-  description: "Route the run down one branch per matching value, or default.",
+  name: "Route by value",
+  description: "Send the run down a different path for each value you list.",
   category: "logic",
+  guide: {
+    summary:
+      "Look at one value and pick a path from it. Each case you add becomes its own arrow out of " +
+      "this node, and a value that matches none of them leaves through “otherwise”. Matching is " +
+      "exact, so “Gold” and “gold” are different cases.",
+    outputs: { [DEFAULT_CASE]: "otherwise" },
+  },
   icon: "Split",
   credential: null,
   requiresFeature: null,
   version: "v1",
   inputs: z.object({
-    value: z.coerce.string().default("").describe("Value to route on, usually a {{ template }}"),
-    cases: z.array(z.string().min(1)).default([]).describe("One branch handle per case"),
+    value: z.coerce
+      .string()
+      .default("")
+      .describe("The value that decides the path, e.g. {{ form_1.plan }}")
+      .meta({ label: "Route on this value" }),
+    cases: z
+      .array(z.string().min(1))
+      .default([])
+      .describe("Each case becomes an arrow out of this node; anything else goes to “otherwise”.")
+      .meta({ label: "Cases" }),
   }),
   outputs: z.object({ matched: z.string(), value: z.any() }),
   handles: (inputs) => [...inputs.cases, DEFAULT_CASE],

@@ -17,9 +17,30 @@ const OPERATORS = [
   "matchesRegex",
 ] as const;
 
-const operator = z.enum(OPERATORS);
+type Operator = (typeof OPERATORS)[number];
 
-type Operator = z.infer<typeof operator>;
+/**
+ * Each comparison as the sentence it makes when you read the form out loud: "Check this
+ * `{{ form.score }}` … is greater than … `10`". The stored value never changes — `greaterThan` is
+ * in every saved graph — so this is display only, handed to the config panel through
+ * `.meta({ options })` and reused by the panel's "Last time:" line so both read the same way.
+ */
+export const OPERATOR_LABELS: Record<Operator, string> = {
+  equals: "is equal to",
+  notEquals: "is not equal to",
+  contains: "contains",
+  notContains: "does not contain",
+  greaterThan: "is greater than",
+  lessThan: "is less than",
+  isEmpty: "is empty",
+  isNotEmpty: "is not empty",
+  matchesRegex: "matches pattern (regex)",
+};
+
+/** The two comparisons that ignore the right-hand side, so the panel can stop showing it. */
+export const UNARY_OPERATORS: readonly Operator[] = ["isEmpty", "isNotEmpty"];
+
+const operator = z.enum(OPERATORS);
 
 /**
  * Both sides as numbers, or null when either one is not a finite number. `Number("")` is 0 and
@@ -84,9 +105,16 @@ function evaluate(left: string, op: Operator, right: string): boolean {
  */
 export const conditionNode = defineNode({
   type: "logic.condition",
-  name: "Condition",
-  description: "Compare two values and branch: true one way, false the other.",
+  name: "If… then",
+  description: "Send the run one way if a check passes, the other way if it fails.",
   category: "logic",
+  guide: {
+    summary:
+      "Compare two values. If the check passes the run carries on down the “yes” arrow; if it " +
+      "fails it takes the “no” arrow instead. Only one side ever runs — everything on the other " +
+      "arrow is skipped.",
+    outputs: { true: "yes", false: "no" },
+  },
   icon: "GitBranch",
   credential: null,
   requiresFeature: null,
@@ -95,14 +123,24 @@ export const conditionNode = defineNode({
     left: z.coerce
       .string()
       .default("")
-      .describe("Value to test, usually a {{ template }}")
-      .meta({ label: "Value" }),
-    operator: operator.default("equals"),
+      .describe("The value to test, e.g. {{ form_1.score }}")
+      .meta({ label: "Check this" }),
+    operator: operator
+      .default("equals")
+      .describe("How the two values are compared.")
+      .meta({ label: "Test", options: OPERATOR_LABELS }),
     right: z.coerce
       .string()
       .default("")
-      .describe("Value to compare against, or the pattern")
-      .meta({ label: "Compare with" }),
+      .describe("What to compare it against, e.g. 10, another {{ template }}, or a regex pattern.")
+      .meta({
+        label: "Compare with",
+        // "is empty" and "is not empty" only look at the left-hand side, so asking for a second
+        // value there is a question with no answer.
+        showWhen: {
+          operator: OPERATORS.filter((entry) => !UNARY_OPERATORS.includes(entry)),
+        },
+      }),
   }),
   outputs: z.object({ result: z.boolean(), left: z.any(), right: z.any() }),
   handles: () => ["true", "false"],

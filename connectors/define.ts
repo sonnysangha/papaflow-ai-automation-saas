@@ -11,6 +11,44 @@ export type FieldSpec = { name: string; label: string; kind: "secret" | "text" |
 
 export type ConnectorTestResult = { ok: true; label: string; hint: string; meta: Record<string, unknown> } | { ok: false; error: string };
 
+/**
+ * One remote object a config field can offer: a Slack channel, an Airtable base, a Notion property.
+ *
+ * `id` is what the node stores and sends back to the provider, `label` is what the dropdown shows.
+ * Everything past those two is *description* of the object, for pickers whose answer shapes a second
+ * field: a column's `type` says what may be written into it, and `choices` lists the values an
+ * enum-like column accepts (an Airtable `singleSelect`, a Notion `status`). They are optional
+ * because most lists — channels, chats, bases — are just names.
+ *
+ * Whatever a connector puts here crosses to the browser as-is (`/api/connections/:id/pick` returns
+ * the array untouched), so a picker may only ever describe *remote objects*. No part of a
+ * credential belongs in one (CLAUDE.md rule 1).
+ */
+export type PickerOption = {
+  id: string;
+  label: string;
+  /** The provider's own type for this object — `singleSelect`, `multi_select`, `rich_text`. */
+  type?: string;
+  /** The values an enum-like object accepts, by name, in the order the provider lists them. */
+  choices?: string[];
+};
+
+/**
+ * How a user creates the third-party app a connector needs, as data the connections UI can render.
+ *
+ * Only Slack has one today: its bot token exists only after somebody has created a Slack app with
+ * the right scopes, and pasting a manifest is the one route that gets all of them right first time.
+ * The manifest is a plain JSON value so the catalogue stays serialisable — `connectorCatalogue`
+ * hands it to a Client Component, and nothing here is secret or per-org.
+ */
+export type ConnectorSetup = {
+  title: string;
+  /** Ordered, one instruction each, written for someone who has never made an app there. */
+  steps: string[];
+  /** Pasted into the provider verbatim. JSON-serialisable, with placeholders for per-org URLs. */
+  manifest: Record<string, unknown>;
+};
+
 export type ConnectorDef = {
   provider: string; name: string; category: "ai" | "chat" | "data" | "email" | "payments";
   kind: "apiKey" | "botToken" | "webhookUrl" | "signingSecret" | "oauth2";
@@ -18,7 +56,9 @@ export type ConnectorDef = {
   /** Validates the pasted credential and captures what the pickers need (`meta.models`, …). */
   test: (secret: Record<string, string>) => Promise<ConnectorTestResult>;
   /** Lists remote objects for a config field (channels, bases, voices) — never secrets. */
-  pick?: (kind: string, secret: Record<string, string>, meta: Record<string, unknown>) => Promise<{ id: string; label: string }[]>;
+  pick?: (kind: string, secret: Record<string, string>, meta: Record<string, unknown>) => Promise<PickerOption[]>;
+  /** How to create the provider-side app this connector needs, if it needs one (Slack). */
+  setup?: ConnectorSetup;
   /** Runs once the row exists and its id is known (registering a webhook, say). */
   afterCreate?: (args: { connectionId: string; secret: Record<string, string>; appOrigin: string }) => Promise<{ secret?: Record<string, string>; meta?: Record<string, unknown> }>;
 };
@@ -26,6 +66,55 @@ export type ConnectorDef = {
 /** Identity by design: it exists so every connector file is type-checked against one shape. */
 export function defineConnector(def: ConnectorDef): ConnectorDef {
   return def;
+}
+
+/** The field kinds a human types or pastes, and so the ones worth cleaning up before they are used. */
+const TYPED_KINDS: readonly FieldSpec["kind"][] = ["secret", "text", "url"];
+
+/**
+ * What a paste drags in with a credential, removed.
+ *
+ * Copying an API key out of a provider's console, a `.env` file or a terminal routinely carries a
+ * trailing newline, a leading space, or the quotation marks around a shell variable — and every
+ * one of them turns a perfectly good key into a 401 the user cannot see, because the field renders
+ * as dots. `trim()` covers the whitespace (ECMAScript's WhiteSpace set includes NBSP and the BOM,
+ * which is what a copy out of a web page tends to pick up); the loop covers `"sk-…"`, `'sk-…'` and
+ * `` `sk-…` ``, matched pairs only, so a value that merely *starts* with a quote is left alone.
+ */
+export function normalizeFieldValue(value: string): string {
+  let cleaned = value.trim();
+
+  while (cleaned.length >= 2) {
+    const first = cleaned[0];
+    if (first !== '"' && first !== "'" && first !== "`") break;
+    if (cleaned[cleaned.length - 1] !== first) break;
+    cleaned = cleaned.slice(1, -1).trim();
+  }
+
+  return cleaned;
+}
+
+/**
+ * A connector's form values with every typed field normalised (`normalizeFieldValue`).
+ *
+ * Only fields the connector actually declares are touched, and only the kinds a person types: a
+ * blob that has grown provider-issued values (an OAuth refresh token, the signing secret a
+ * `afterCreate` handed back) keeps them byte for byte. Applied once, where a credential enters the
+ * system, so `test()` and the sealed row can never disagree about what the key is.
+ */
+export function normalizeSecretInput(
+  def: ConnectorDef,
+  secret: Record<string, string>,
+): Record<string, string> {
+  const typed = new Set(
+    def.fields.filter((field) => TYPED_KINDS.includes(field.kind)).map((field) => field.name),
+  );
+
+  const cleaned: Record<string, string> = {};
+  for (const [name, value] of Object.entries(secret)) {
+    cleaned[name] = typed.has(name) ? normalizeFieldValue(value) : value;
+  }
+  return cleaned;
 }
 
 /**

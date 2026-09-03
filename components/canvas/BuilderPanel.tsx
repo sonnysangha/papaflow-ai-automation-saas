@@ -210,8 +210,8 @@ function AskBlock({
   const [text, setText] = useState("");
 
   return (
-    <div className="rounded-lg border border-border bg-muted/40 p-3">
-      <p className="whitespace-pre-wrap text-sm">{prompt}</p>
+    <div className="min-w-0 rounded-lg border border-border bg-muted/40 p-3">
+      <p className="text-sm break-words whitespace-pre-wrap">{prompt}</p>
       <div className="mt-2 flex flex-wrap gap-2">
         {options.map((option) => (
           <Button
@@ -255,18 +255,21 @@ function MessageBubble({ message }: { message: EveMessage }) {
   const isUser = message.role === "user";
 
   return (
-    <div className={cn("space-y-1.5", isUser && "pl-6")}>
+    <div className={cn("min-w-0 space-y-1.5", isUser && "pl-6")}>
       {message.parts.map((part, index) => {
         const key = `${message.id}-${index}`;
 
         if (part.type === "text" && part.text.trim().length > 0) {
           // The user's own words are shown exactly as typed; only the agent's are Markdown.
           return isUser ? (
-            <p key={key} className="whitespace-pre-wrap rounded-lg bg-primary/10 px-3 py-2 text-sm">
+            <p
+              key={key}
+              className="rounded-lg bg-primary/10 px-3 py-2 text-sm break-words whitespace-pre-wrap"
+            >
               {part.text}
             </p>
           ) : (
-            <MessageMarkdown key={key} className="rounded-lg bg-muted/40 px-3 py-2">
+            <MessageMarkdown key={key} className="min-w-0 rounded-lg bg-muted/40 px-3 py-2">
               {part.text}
             </MessageMarkdown>
           );
@@ -420,8 +423,10 @@ function BuilderChat({
       {/* `relative` so the pill can hang over the bottom of the transcript; the flex column keeps
           the scroll area's height resolving exactly as it did before the wrapper existed. */}
       <div className="relative flex min-h-0 flex-1 flex-col">
-        <ScrollArea viewportRef={viewportRef} className="min-h-0 flex-1">
-          <div className="space-y-3 p-3">
+        <ScrollArea viewportRef={viewportRef} className="min-h-0 min-w-0 flex-1">
+          {/* `min-w-0` so a long token in a reply scrolls inside its own code block rather than
+              widening the 384px panel and pushing the canvas over. */}
+          <div className="min-w-0 space-y-3 p-3">
             {messages.length === 0 ? (
               <p className="text-sm text-muted-foreground">
                 Describe the workflow you want and I will build it on the canvas — one node at a time,
@@ -454,7 +459,7 @@ function BuilderChat({
             ))}
 
             {agent.error ? (
-              <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm break-words text-destructive">
                 {agent.error.message}
               </p>
             ) : null}

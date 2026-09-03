@@ -9,6 +9,8 @@ const USER_AGENT = RESEND_USER_AGENT;
 // Until the org verifies its own domain, Resend only allows this sender (and only to the
 // account owner's address); anything else is a 400 validation_error.
 const SANDBOX_FROM = "PapaFlow <onboarding@resend.dev>";
+/** Appended to Resend's own refusal when the sandbox sender ran into its one-recipient rule. */
+const VERIFY_HINT = "Verify a domain in Resend to send to anyone.";
 
 /**
  * The org's own Resend key when a connection is chosen, the platform's otherwise.
@@ -35,6 +37,12 @@ function domainsOf(credential: Record<string, unknown> | undefined): ResendDomai
 /**
  * The sender for a connected account: Resend refuses anything that is not on a domain the account
  * has verified, so refusing here turns a remote 400 into a message that names the alternatives.
+ *
+ * The exception is an account with *no* verified domain at all, which is where every new Resend
+ * account starts. Refusing there made "connect Resend, send an email" impossible on a test account,
+ * so it falls back to Resend's own sandbox sender instead — the same address the platform key uses.
+ * Resend then allows one recipient (the account owner), and `refusalMessage` explains that in
+ * Resend's own words if the user tries to reach anybody else.
  */
 function connectedSender(from: string | undefined, credential: Record<string, unknown> | undefined): string {
   const domains = domainsOf(credential);
@@ -46,9 +54,9 @@ function connectedSender(from: string | undefined, credential: Record<string, un
   }
 
   const verified = verifiedDomains(domains);
-  if (verified.length === 0) {
-    throw new ConnectorError("This Resend account has no verified domain to send from yet", 400);
-  }
+  // Nothing verified yet: Resend's sandbox sender is the only address this key may use, so a
+  // configured `from` is ignored rather than sent into a certain 400.
+  if (verified.length === 0) return SANDBOX_FROM;
 
   if (!from) {
     throw new ConnectorError(`Set a from address on one of: ${verified.join(", ")}`, 400);
@@ -63,6 +71,29 @@ function connectedSender(from: string | undefined, credential: Record<string, un
   }
 
   return from;
+}
+
+/**
+ * How a refused send reads.
+ *
+ * Resend answers the sandbox sender's one-recipient rule with a 403 whose `message` says exactly
+ * what went wrong and to whom ("You can only send testing emails to your own email address
+ * (you@example.com). …"), so that sentence is repeated verbatim rather than paraphrased, with the
+ * way out appended. Every other failure keeps the raw body, which is what the runs drawer showed
+ * before.
+ */
+function refusalMessage(status: number, body: string, from: string): string {
+  const raw = body || `Resend returned ${status}`;
+  if (status !== 403 || from !== SANDBOX_FROM) return raw;
+
+  let message: unknown;
+  try {
+    message = (JSON.parse(body) as { message?: unknown }).message;
+  } catch {
+    message = undefined;
+  }
+
+  return `${typeof message === "string" && message.length > 0 ? message : raw} ${VERIFY_HINT}`;
 }
 
 export const emailSend = defineNode({
@@ -111,7 +142,7 @@ export const emailSend = defineNode({
     const text = await response.text();
     if (!response.ok) {
       throw new ConnectorError(
-        text || `Resend returned ${response.status}`,
+        refusalMessage(response.status, text, from),
         response.status,
         response.headers.get("retry-after") ?? undefined,
       );

@@ -8,7 +8,15 @@ export const openrouterConnector = defineConnector({
   category: "ai",
   kind: "apiKey",
   requiresFeature: null,
-  fields: [{ name: "apiKey", label: "API key", kind: "secret", placeholder: "sk-or-v1-…" }],
+  fields: [
+    {
+      name: "apiKey",
+      label: "API key",
+      kind: "secret",
+      placeholder: "sk-or-v1-…",
+      help: "An API key from openrouter.ai → Settings → Keys, starting sk-or-v1-. Not a provisioning key.",
+    },
+  ],
   docsUrl: "https://openrouter.ai/settings/keys",
   icon: "Route",
   test: (secret) => validateAndDiscover("openrouter", secret.apiKey),

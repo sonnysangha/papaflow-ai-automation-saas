@@ -22,16 +22,22 @@ import { defineNode } from "../define";
  */
 export const waitForWebhookNode = defineNode({
   type: "logic.waitForWebhook",
-  name: "Wait for webhook",
-  description: "Pause the run until something POSTs to this run's resume URL.",
+  name: "Wait for a callback",
+  description: "Hold the run until another system calls back with an answer.",
   category: "logic",
+  guide: {
+    summary:
+      "Stop here until something on the outside says carry on. Every run that reaches this node " +
+      "gets its own web address; whatever is sent to it wakes that one run and becomes this " +
+      "node's output. There is nothing to fill in — the address is the setup.",
+  },
   icon: "Webhook",
   credential: null,
   requiresFeature: null,
   version: "v1",
   inputs: z
     .object({})
-    .describe("Nothing to configure: the run's resume URL appears once it reaches this node."),
+    .describe("Nothing to fill in: the address that wakes the run appears once a run reaches here."),
   outputs: z.object({
     /** Parsed JSON when the caller said JSON, the raw text otherwise, null for an empty body. */
     body: z.any(),

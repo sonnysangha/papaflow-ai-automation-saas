@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
+import { useMutation } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import { HistoryIcon, KeyboardIcon, PlayIcon, SparklesIcon } from "lucide-react";
 import { toast } from "sonner";
@@ -18,8 +19,9 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { formatAbsoluteTime, formatRelativeTime } from "@/components/workflows/relative-time";
-import type { api } from "@/convex/_generated/api";
-import type { Id } from "@/convex/_generated/dataModel";
+import { api } from "@/convex/_generated/api";
+import type { Doc, Id } from "@/convex/_generated/dataModel";
+import { cn } from "@/lib/utils";
 import { NODES } from "@/nodes/registry";
 
 import { NodeIcon } from "./node-icon";
@@ -89,6 +91,92 @@ function LastRun({ latest }: { latest: LatestExecution | undefined }) {
   );
 }
 
+type WorkflowStatus = Doc<"workflows">["status"];
+
+/** Plain words, not the stored enum: nobody outside this codebase knows what "active" means. */
+const STATUS_LABEL: Record<WorkflowStatus, string> = {
+  draft: "Draft",
+  active: "Published",
+  paused: "Paused",
+};
+
+const STATUS_TONE: Record<WorkflowStatus, string> = {
+  draft: "bg-muted-foreground",
+  active: "bg-emerald-500",
+  paused: "bg-amber-500",
+};
+
+/** The one sentence that answers "how do I trigger this?" — the question this control exists for. */
+const PUBLISH_EXPLANATION =
+  "Published workflows respond to their triggers — webhooks, forms, schedules and chat messages. Drafts only run when you press Run.";
+
+/**
+ * The publish switch: a pill saying where this workflow stands and the button that moves it.
+ *
+ * Publishing is the whole of what `api.workflows.setStatus` does, and it is what every trigger
+ * checks — the webhook route, the form submit route, the inbound event routes and the scheduler
+ * all refuse a workflow that is not `active`. Run is deliberately exempt, so the pill is never a
+ * reason the canvas stops working; it only decides whether the outside world can start a run.
+ *
+ * "Unpublish" writes `paused` rather than `draft`: `draft` means "never published", and losing that
+ * distinction would make the workflows list less honest than it is now.
+ */
+function PublishControl({
+  workflowId,
+  status,
+}: {
+  workflowId: Id<"workflows">;
+  status: WorkflowStatus;
+}) {
+  const setStatus = useMutation(api.workflows.setStatus);
+  const [pending, setPending] = useState(false);
+  const published = status === "active";
+
+  const toggle = useCallback(() => {
+    if (pending) return;
+    setPending(true);
+    void setStatus({ id: workflowId, status: published ? "paused" : "active" }).then(
+      () => {
+        setPending(false);
+        toast.success(
+          published ? "Unpublished — its triggers are off" : "Published — its triggers are live",
+        );
+      },
+      () => {
+        setPending(false);
+        toast.error("Could not change the publish status");
+      },
+    );
+  }, [pending, published, setStatus, workflowId]);
+
+  return (
+    <>
+      <Popover>
+        <PopoverTrigger render={<Button variant="ghost" size="sm" />}>
+          <span aria-hidden className={cn("size-2 shrink-0 rounded-full", STATUS_TONE[status])} />
+          {STATUS_LABEL[status]}
+        </PopoverTrigger>
+        <PopoverContent align="start" className="w-72">
+          <PopoverTitle className="text-sm font-medium">
+            {published ? "Its triggers are live" : "Its triggers are off"}
+          </PopoverTitle>
+          <p className="mt-1.5 text-sm text-muted-foreground">{PUBLISH_EXPLANATION}</p>
+        </PopoverContent>
+      </Popover>
+
+      <Button
+        size="sm"
+        variant={published ? "outline" : "secondary"}
+        disabled={pending}
+        onClick={toggle}
+        title={PUBLISH_EXPLANATION}
+      >
+        {published ? "Unpublish" : "Publish"}
+      </Button>
+    </>
+  );
+}
+
 /** The `?` popover: the four bindings the canvas listens for, and nothing else. */
 function ShortcutsPopover() {
   // ⌘ and Ctrl are shown together rather than sniffed from `navigator`: the handler accepts both,
@@ -127,6 +215,8 @@ function ShortcutsPopover() {
 
 type RunBarProps = {
   workflowId: Id<"workflows">;
+  /** Whether the outside world may start this workflow. Run works in every status. */
+  status: WorkflowStatus;
   /** The trigger node's type on the *saved* graph — the graph a run actually interprets. */
   triggerType: string | undefined;
   /** The Manual trigger's configured sample, shown in the payload box until the user edits it. */
@@ -145,6 +235,7 @@ type RunBarProps = {
  */
 export function RunBar({
   workflowId,
+  status,
   triggerType,
   latest,
   runWorkflow,
@@ -256,6 +347,8 @@ export function RunBar({
           <PlayIcon />
           {pending ? "Starting…" : "Run"}
         </Button>
+
+        <PublishControl workflowId={workflowId} status={status} />
 
         <div className="ml-auto flex items-center gap-2">
           {/*

@@ -15,9 +15,15 @@ import { defineNode } from "../define";
  */
 export const setNode = defineNode({
   type: "logic.set",
-  name: "Set",
-  description: "Build an object from key/value pairs to pass down the workflow.",
+  name: "Set values",
+  description: "Give a few values a name here so later steps can reuse them.",
   category: "logic",
+  guide: {
+    summary:
+      "Name the values you want to carry forward. Every row you add becomes one named value, and " +
+      "anything after this node reads it as {{ <this node's key>.<name> }} — the key is the mono " +
+      "text at the top of this panel. Nothing is sent anywhere; this node only tidies up.",
+  },
   icon: "Braces",
   credential: null,
   requiresFeature: null,
@@ -26,7 +32,8 @@ export const setNode = defineNode({
     fields: z
       .array(z.object({ key: z.string().min(1), value: z.any() }))
       .default([])
-      .describe("Field names and their values or {{ templates }}"),
+      .describe("One row per value. Later nodes read a row as {{ <key>.<name> }}, e.g. {{ set_1.email }}.")
+      .meta({ label: "Values" }),
   }),
   outputs: z.record(z.string(), z.any()),
   async run({ inputs }) {

@@ -91,8 +91,8 @@ export function JsonField({ id, value, onChange, groups, placeholder }: JsonFiel
   );
 
   return (
-    <div className="space-y-1">
-      <div className="flex items-start gap-1.5">
+    <div className="min-w-0 space-y-1">
+      <div className="flex min-w-0 items-start gap-1.5">
         <Textarea
           id={id}
           ref={fieldRef}
@@ -101,12 +101,12 @@ export function JsonField({ id, value, onChange, groups, placeholder }: JsonFiel
           spellCheck={false}
           placeholder={placeholder ?? "{ }"}
           aria-invalid={error !== null || undefined}
-          className="min-h-20 font-mono text-xs"
+          className="min-h-20 min-w-0 font-mono text-xs"
           onChange={(event) => edit(event.target.value)}
         />
         <VariablePicker groups={groups} onInsert={insert} finalFocus={fieldRef} />
       </div>
-      {error !== null && <p className="text-xs text-destructive">{error}</p>}
+      {error !== null && <p className="text-xs break-words text-destructive">{error}</p>}
     </div>
   );
 }

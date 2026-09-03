@@ -143,6 +143,10 @@ export type FanOutArgs = {
  * A workflow that refuses to start (the org is out of runs, a graph that no longer parses) is
  * logged and skipped rather than thrown: one broken workflow must not cost a provider the 200 that
  * stops it retrying the delivery into the workflows that *did* start.
+ *
+ * Unpublished workflows never appear here at all: `listWorkflowsByTrigger` returns `active` rows
+ * only. There is nobody to explain a refusal to on this path — the provider gets its 200 either
+ * way — so a draft is simply not listening.
  */
 export async function fanOut({
   orgId,

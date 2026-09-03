@@ -8,7 +8,15 @@ export const groqConnector = defineConnector({
   category: "ai",
   kind: "apiKey",
   requiresFeature: null,
-  fields: [{ name: "apiKey", label: "API key", kind: "secret", placeholder: "gsk_…" }],
+  fields: [
+    {
+      name: "apiKey",
+      label: "API key",
+      kind: "secret",
+      placeholder: "gsk_…",
+      help: "An API key from console.groq.com → API keys, starting gsk_. It is shown once, when you create it.",
+    },
+  ],
   docsUrl: "https://console.groq.com/keys",
   icon: "Zap",
   test: (secret) => validateAndDiscover("groq", secret.apiKey),

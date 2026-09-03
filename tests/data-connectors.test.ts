@@ -85,6 +85,48 @@ afterEach(() => {
 const NOTION_KEY = "ntn_secret_0123456789abcdef";
 const NOTION_ME = "https://api.notion.com/v1/users/me";
 const NOTION_SEARCH = "https://api.notion.com/v1/search";
+const NOTION_DATA_SOURCE = "https://api.notion.com/v1/data_sources/ds_1";
+
+/**
+ * One data source's schema, with a column of every kind the properties picker has to judge: the
+ * title (the node writes it from its own field), the three enum-like types that carry choices,
+ * plain text, and one of each read-only type Notion computes for itself.
+ */
+const NOTION_SCHEMA = {
+  id: "ds_1",
+  properties: {
+    Name: { id: "title", name: "Name", type: "title", title: {} },
+    Notes: { id: "abcd", name: "Notes", type: "rich_text", rich_text: {} },
+    Stage: {
+      id: "efgh",
+      name: "Stage",
+      type: "select",
+      select: { options: [{ id: "s1", name: "New", color: "blue" }, { id: "s2", name: "Won" }] },
+    },
+    Tags: {
+      id: "ijkl",
+      name: "Tags",
+      type: "multi_select",
+      multi_select: { options: [{ id: "t1", name: "urgent", color: "red" }] },
+    },
+    Status: {
+      id: "mnop",
+      name: "Status",
+      type: "status",
+      status: {
+        options: [{ id: "o1", name: "In progress" }],
+        groups: [{ id: "g1", name: "To-do", option_ids: ["o1"] }],
+      },
+    },
+    Score: { id: "qrst", name: "Score", type: "formula", formula: { expression: "1" } },
+    Total: { id: "uvwx", name: "Total", type: "rollup", rollup: {} },
+    Added: { id: "yzab", name: "Added", type: "created_time", created_time: {} },
+    By: { id: "cdef", name: "By", type: "created_by", created_by: {} },
+    Touched: { id: "ghij", name: "Touched", type: "last_edited_time", last_edited_time: {} },
+    TouchedBy: { id: "klmn", name: "TouchedBy", type: "last_edited_by", last_edited_by: {} },
+    Ref: { id: "opqr", name: "Ref", type: "unique_id", unique_id: { prefix: null } },
+  },
+};
 
 describe("notion connector", () => {
   it("is a Pro data connector with one secret field", () => {
@@ -173,6 +215,75 @@ describe("notion connector", () => {
     ]);
   });
 
+  it("picks the writable properties of one data source, with each column's type", async () => {
+    const calls = stubFetch({ [NOTION_DATA_SOURCE]: { body: NOTION_SCHEMA } });
+
+    const options = await notionConnector.pick!("properties:ds_1", { apiKey: NOTION_KEY }, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ url: NOTION_DATA_SOURCE, method: "GET" });
+    expect(calls[0].headers["Notion-Version"]).toBe("2026-03-11");
+
+    // The value is the property *name*, because that is what `POST /v1/pages` is keyed by. Every
+    // computed type is gone, and so is the title — `notion.createPage` writes that from its own
+    // field and drops a property row that names it.
+    expect(options).toEqual([
+      { id: "Notes", label: "Notes", type: "rich_text" },
+      { id: "Stage", label: "Stage", type: "select", choices: ["New", "Won"] },
+      { id: "Tags", label: "Tags", type: "multi_select", choices: ["urgent"] },
+      { id: "Status", label: "Status", type: "status", choices: ["In progress"] },
+    ]);
+  });
+
+  it("carries no choices for a column that has none, and survives a schema it cannot read", async () => {
+    stubFetch({
+      [NOTION_DATA_SOURCE]: {
+        body: {
+          properties: {
+            Empty: { name: "Empty", type: "select", select: { options: [] } },
+            Broken: { name: "Broken", type: "multi_select" },
+            Untyped: { name: "Untyped" },
+            Ok: { name: "Ok", type: "url", url: {} },
+          },
+        },
+      },
+    });
+
+    expect(await notionConnector.pick!("properties:ds_1", { apiKey: NOTION_KEY }, {})).toEqual([
+      { id: "Empty", label: "Empty", type: "select" },
+      { id: "Broken", label: "Broken", type: "multi_select" },
+      { id: "Ok", label: "Ok", type: "url" },
+    ]);
+
+    vi.unstubAllGlobals();
+    stubFetch({ [NOTION_DATA_SOURCE]: { body: { id: "ds_1" } } });
+    expect(await notionConnector.pick!("properties:ds_1", { apiKey: NOTION_KEY }, {})).toEqual([]);
+  });
+
+  it("maps a rejected token and a missing data source to the connector's own words", async () => {
+    stubFetch({ [NOTION_DATA_SOURCE]: { status: 401, body: { message: "API token is invalid." } } });
+    await expect(
+      notionConnector.pick!("properties:ds_1", { apiKey: NOTION_KEY }, {}),
+    ).rejects.toThrow(/rejected that integration secret/i);
+
+    vi.unstubAllGlobals();
+    stubFetch({
+      [NOTION_DATA_SOURCE]: {
+        status: 404,
+        body: { code: "object_not_found", message: "Could not find data source with ID: ds_1." },
+      },
+    });
+    await expect(
+      notionConnector.pick!("properties:ds_1", { apiKey: NOTION_KEY }, {}),
+    ).rejects.toThrow(/Could not find data source/);
+  });
+
+  it("asks Notion for nothing when the properties kind carries no data source", async () => {
+    const calls = forbidFetch();
+    await expect(notionConnector.pick!("properties:", { apiKey: NOTION_KEY }, {})).resolves.toEqual([]);
+    expect(calls).toHaveLength(0);
+  });
+
   it("throws from a failed pick and ignores an unknown kind", async () => {
     stubFetch({ [NOTION_SEARCH]: { status: 403, body: { message: "no access" } } });
     await expect(notionConnector.pick!("dataSources", { apiKey: NOTION_KEY }, {})).rejects.toThrow(/no access/);
@@ -192,6 +303,58 @@ const AIRTABLE_KEY = "patAbc123.0123456789abcdef";
 const WHOAMI = "https://api.airtable.com/v0/meta/whoami";
 const BASES = "https://api.airtable.com/v0/meta/bases";
 const TABLES = "https://api.airtable.com/v0/meta/bases/appBase1/tables";
+
+/**
+ * A base schema with one writable column of each interesting kind and one of every type Airtable
+ * computes — the field picker's whole job is telling those two groups apart, because a write to a
+ * computed column is a 422 nobody can fix from the config panel.
+ */
+const BASE_SCHEMA = {
+  tables: [
+    {
+      id: "tbl1",
+      name: "Leads",
+      fields: [
+        { id: "fld1", name: "Name", type: "singleLineText" },
+        {
+          id: "fld2",
+          name: "Stage",
+          type: "singleSelect",
+          options: { choices: [{ id: "sel1", name: "New", color: "blueLight2" }, { id: "sel2", name: "Won" }] },
+        },
+        {
+          id: "fld3",
+          name: "Tags",
+          type: "multipleSelects",
+          options: { choices: [{ id: "sel3", name: "urgent" }] },
+        },
+        { id: "fld4", name: "Total", type: "formula", options: { isValid: true } },
+        { id: "fld5", name: "Created", type: "createdTime" },
+        { id: "fld6", name: "Row", type: "autoNumber" },
+        { id: "fld7", name: "Editor", type: "lastModifiedBy" },
+        { id: "fld8", name: "Author", type: "createdBy" },
+        { id: "fld9", name: "Edited", type: "lastModifiedTime" },
+        { id: "fld10", name: "Linked names", type: "multipleLookupValues" },
+        { id: "fld11", name: "Legacy lookup", type: "lookup" },
+        { id: "fld12", name: "Open", type: "button" },
+        { id: "fld13", name: "Items", type: "count" },
+        { id: "fld14", name: "Summary", type: "aiText" },
+        { id: "fld15", name: "Synced", type: "externalSyncSource" },
+        { id: "fld16", name: "Rolled up", type: "rollup" },
+        { id: "fld17", name: "Notes", type: "multilineText" },
+      ],
+    },
+    { id: "tbl2", name: "Other", fields: [{ id: "fld20", name: "Elsewhere", type: "singleLineText" }] },
+  ],
+};
+
+/** What `fields:appBase1:tbl1` must answer with, in the base schema's own column order. */
+const WRITABLE_FIELDS = [
+  { id: "Name", label: "Name", type: "singleLineText" },
+  { id: "Stage", label: "Stage", type: "singleSelect", choices: ["New", "Won"] },
+  { id: "Tags", label: "Tags", type: "multipleSelects", choices: ["urgent"] },
+  { id: "Notes", label: "Notes", type: "multilineText" },
+];
 
 describe("airtable connector", () => {
   it("is a Pro data connector with one secret field", () => {
@@ -255,10 +418,59 @@ describe("airtable connector", () => {
     expect(calls.map((call) => call.url)).toEqual([BASES, TABLES]);
   });
 
-  it("returns nothing for an unknown kind or a base-less tables kind", async () => {
+  it("picks a table's writable fields, with the choices a select column accepts", async () => {
+    const calls = stubFetch({ [TABLES]: { body: BASE_SCHEMA } });
+
+    const options = await airtableConnector.pick!(
+      "fields:appBase1:tbl1",
+      { apiKey: AIRTABLE_KEY },
+      {},
+    );
+
+    // One call, to the base schema — tables and their fields arrive together.
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ url: TABLES, method: "GET" });
+    expect(calls[0].headers.Authorization).toBe(`Bearer ${AIRTABLE_KEY}`);
+
+    // Names, not ids: `airtable.createRecord` posts `fields: { "<name>": … }`.
+    expect(options).toEqual(WRITABLE_FIELDS);
+  });
+
+  it("finds the table by name as well as by id, and answers nothing for one that is not there", async () => {
+    stubFetch({ [TABLES]: { body: BASE_SCHEMA } });
+
+    // The table picker stores ids, but `Leads` is equally valid in the records URL.
+    await expect(
+      airtableConnector.pick!("fields:appBase1:Leads", { apiKey: AIRTABLE_KEY }, {}),
+    ).resolves.toEqual(WRITABLE_FIELDS);
+
+    await expect(
+      airtableConnector.pick!("fields:appBase1:tblGone", { apiKey: AIRTABLE_KEY }, {}),
+    ).resolves.toEqual([]);
+  });
+
+  it("maps a rejected token and a missing base to the connector's own words", async () => {
+    stubFetch({ [TABLES]: { status: 401, body: {} } });
+    await expect(
+      airtableConnector.pick!("fields:appBase1:tbl1", { apiKey: AIRTABLE_KEY }, {}),
+    ).rejects.toThrow(/personal access token/i);
+
+    vi.unstubAllGlobals();
+    stubFetch({ [TABLES]: { status: 404, body: { error: "NOT_FOUND" } } });
+    await expect(
+      airtableConnector.pick!("fields:appBase1:tbl1", { apiKey: AIRTABLE_KEY }, {}),
+    ).rejects.toThrow(/NOT_FOUND/);
+  });
+
+  it("returns nothing for an unknown kind or a half-written fields kind", async () => {
     const calls = forbidFetch();
     await expect(airtableConnector.pick!("teams", { apiKey: AIRTABLE_KEY }, {})).resolves.toEqual([]);
     await expect(airtableConnector.pick!("tables:", { apiKey: AIRTABLE_KEY }, {})).resolves.toEqual([]);
+
+    // A table that has not been chosen yet, a base that has not, and a kind with a part too many.
+    for (const kind of ["fields:appBase1:", "fields::tbl1", "fields:", "fields:a:b:c"]) {
+      await expect(airtableConnector.pick!(kind, { apiKey: AIRTABLE_KEY }, {})).resolves.toEqual([]);
+    }
     expect(calls).toHaveLength(0);
   });
 });

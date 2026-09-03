@@ -5,7 +5,6 @@ import { ChevronRightIcon, CopyIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 
 import { relativeTime, type LastRunStep } from "./last-run";
@@ -44,19 +43,31 @@ function asJson(value: unknown): string {
 /**
  * One half of the last run: what went in, or what came out. Copy is the point of the button — the
  * usual next move is pasting the shape into a prompt or a JSON field.
+ *
+ * A plain scrolling box rather than a `ScrollArea`: `ScrollArea`'s viewport is `height: 100%` of a
+ * root whose own height is `auto`, so `max-h-*` on the root capped the *box* at ten rems while the
+ * viewport kept growing to fit its content and spilled out the bottom — an HTTP response body wrote
+ * itself straight over the Name and Key fields underneath. `overflow-auto` on the element that has
+ * the `max-height` is the whole fix, and it is one element rather than four.
+ *
+ * `break-all` rather than `break-words`: the thing that overflows a 360px panel is a 400-character
+ * URL or a base64 blob, and `overflow-wrap` only breaks a word when there is nowhere else to break
+ * the *line* — inside `whitespace-pre-wrap` there frequently is. `min-w-0` on every ancestor up to
+ * the panel is the other half: without it a flex or grid child sizes to its content's minimum and
+ * pushes the whole panel wider rather than scrolling inside it.
  */
 function JsonBlock({ label, value }: { label: string; value: unknown }) {
   const text = asJson(value);
 
   return (
-    <div className="space-y-1">
-      <div className="flex items-center gap-1">
-        <span className="text-xs font-medium text-muted-foreground">{label}</span>
+    <div className="min-w-0 space-y-1">
+      <div className="flex min-w-0 items-center gap-1">
+        <span className="min-w-0 truncate text-xs font-medium text-muted-foreground">{label}</span>
         <Button
           type="button"
           variant="ghost"
           size="icon-xs"
-          className="ml-auto"
+          className="ml-auto shrink-0"
           aria-label={`Copy ${label.toLowerCase()}`}
           disabled={value === undefined}
           onClick={() => {
@@ -69,9 +80,9 @@ function JsonBlock({ label, value }: { label: string; value: unknown }) {
           <CopyIcon />
         </Button>
       </div>
-      <ScrollArea className="max-h-40 rounded-md border border-border bg-muted/40">
-        <pre className="p-2 font-mono text-xs break-words whitespace-pre-wrap">{text}</pre>
-      </ScrollArea>
+      <div className="max-h-56 min-w-0 overflow-auto overscroll-contain rounded-md border border-border bg-muted/40">
+        <pre className="p-2 font-mono text-xs break-all whitespace-pre-wrap">{text}</pre>
+      </div>
     </div>
   );
 }
@@ -113,7 +124,7 @@ export function LastRunSection({ nodeId, run, hasSources }: LastRunSectionProps)
   const now = useNow();
 
   return (
-    <section className="rounded-lg border border-border">
+    <section className="min-w-0 rounded-lg border border-border">
       <button
         type="button"
         aria-expanded={open}
@@ -137,7 +148,7 @@ export function LastRunSection({ nodeId, run, hasSources }: LastRunSectionProps)
       </button>
 
       {open ? (
-        <div id={bodyId} className="space-y-2 border-t border-border p-2.5">
+        <div id={bodyId} className="min-w-0 space-y-2 border-t border-border p-2.5">
           {run ? (
             <>
               <p className="text-xs text-muted-foreground">
@@ -147,7 +158,9 @@ export function LastRunSection({ nodeId, run, hasSources }: LastRunSectionProps)
               <JsonBlock label="Input" value={run.input} />
               <JsonBlock label="Output" value={run.output} />
               {run.error ? (
-                <p className="font-mono text-xs whitespace-pre-wrap text-destructive">{run.error}</p>
+                <p className="max-h-40 overflow-auto font-mono text-xs break-all whitespace-pre-wrap text-destructive">
+                  {run.error}
+                </p>
               ) : null}
             </>
           ) : (

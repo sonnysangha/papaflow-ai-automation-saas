@@ -73,11 +73,13 @@ export function TemplateInput({
     placeholder,
     spellCheck: false,
     onChange: (event: { target: { value: string } }) => onChange(event.target.value),
-    className: cn("font-mono text-xs", multiline && "min-h-20"),
+    // `min-w-0`: `Textarea` has no automatic minimum of its own the way `Input` does, so in a flex
+    // row a long unbroken value can size the field past the 360px panel instead of scrolling in it.
+    className: cn("min-w-0 font-mono text-xs", multiline && "min-h-20"),
   };
 
   return (
-    <div className="flex items-start gap-1.5">
+    <div className="flex min-w-0 items-start gap-1.5">
       {multiline ? <Textarea {...shared} rows={4} /> : <Input {...shared} />}
       <VariablePicker groups={groups} onInsert={insert} finalFocus={fieldRef} />
     </div>

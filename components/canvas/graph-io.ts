@@ -57,6 +57,9 @@ export type StoredNode = {
   id: string;
   type: typeof PAPAFLOW_NODE_TYPE;
   position: { x: number; y: number };
+  /** Present only once someone has resized this node; React Flow measures the rest. */
+  width?: number;
+  height?: number;
   data: StoredNodeData;
 };
 
@@ -104,6 +107,16 @@ function toOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+/**
+ * A saved node size, or undefined for one that was never resized.
+ *
+ * Zero and negative are rejected rather than clamped: a `width: 0` written by something else would
+ * render an invisible node, and React Flow measuring the card is the better answer.
+ */
+function toSize(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
 function toNode(raw: unknown): WorkflowNodeType | null {
   if (!isRecord(raw) || typeof raw.id !== "string" || raw.id.length === 0) return null;
 
@@ -112,11 +125,17 @@ function toNode(raw: unknown): WorkflowNodeType | null {
   if (nodeType.length === 0) return null;
 
   const position = isRecord(raw.position) ? raw.position : {};
+  // `width`/`height` are exactly the fields `NodeResizer` writes onto a node (through
+  // `applyNodeChanges`), so a graph round-trips its sizes without a translation step.
+  const width = toSize(raw.width);
+  const height = toSize(raw.height);
 
   return {
     id: raw.id,
     type: PAPAFLOW_NODE_TYPE,
     position: { x: toFinite(position.x, 0), y: toFinite(position.y, 0) },
+    ...(width === undefined ? {} : { width }),
+    ...(height === undefined ? {} : { height }),
     data: {
       nodeType,
       // Empty for a graph saved before Phase 3; `migrateKeys` fills it in on load.
@@ -205,6 +224,34 @@ export function sourceHandles(nodeType: string, inputs: Record<string, unknown>)
 }
 
 /**
+ * The words a source handle is drawn under, as opposed to the id it is addressed by.
+ *
+ * The id is load-bearing — it is on every stored edge and in `steps.handle` — so it never changes,
+ * and `guide.outputs` on the node definition maps it to something a reader recognises: `true` is
+ * shown as "yes", `each` as "each item", `default` as "otherwise". A handle the node did not name
+ * is shown as itself, which is exactly right for a Switch, where the handle id *is* the case the
+ * user typed.
+ */
+export function handleLabel(nodeType: string, handle: string): string {
+  const declared = NODES[nodeType]?.guide?.outputs?.[handle];
+  return typeof declared === "string" && declared.trim().length > 0 ? declared.trim() : handle;
+}
+
+/** One source handle, ready to draw: the id the graph stores and the words beside it. */
+export type HandleDisplay = { handle: string; label: string };
+
+/** Every source handle of a node, in the order it is drawn, with its display words. */
+export function handleDisplays(
+  nodeType: string,
+  inputs: Record<string, unknown>,
+): HandleDisplay[] {
+  return sourceHandles(nodeType, inputs).map((handle) => ({
+    handle,
+    label: handleLabel(nodeType, handle),
+  }));
+}
+
+/**
  * Every node that can reach `nodeId`, nearest first — the nodes whose outputs are in scope for a
  * template. Walks the edges backwards; a cycle the canvas allowed cannot loop it.
  */
@@ -277,9 +324,15 @@ export function fromStoredGraph(graph: StoredGraphInput | undefined): LoadedGrap
 }
 
 /**
- * Canvas state → stored graph. Every React Flow runtime field (`selected`, `dragging`,
- * `measured`, `width`, `height`) and the runtime-only `data.status` is dropped, so a save is
- * only ever triggered by a change the user actually made.
+ * Canvas state → stored graph. Every React Flow runtime field (`selected`, `dragging`, `measured`,
+ * `resizing`) and the runtime-only `data.status` is dropped, so a save is only ever triggered by a
+ * change the user actually made.
+ *
+ * `width`/`height` are the exception, and are kept: React Flow only ever writes them from an
+ * explicit `NodeResizer` drag (measurement goes to `measured`, which is dropped), so they are a
+ * user's decision about how big this node should be — and one that has to survive a reload. They
+ * ride through the Builder's mutations untouched, which edit the stored node objects in place
+ * (`convex/builder.ts`) rather than rebuilding them, and `workflows.graph.nodes` is `v.any()`.
  */
 export function toStoredGraph(
   nodes: WorkflowNodeType[],
@@ -287,17 +340,23 @@ export function toStoredGraph(
   viewport?: Viewport,
 ): StoredGraph {
   const graph: StoredGraph = {
-    nodes: nodes.map((node) => ({
-      id: node.id,
-      type: PAPAFLOW_NODE_TYPE,
-      position: { x: node.position.x, y: node.position.y },
-      data: {
-        nodeType: node.data.nodeType,
-        key: node.data.key,
-        label: node.data.label,
-        inputs: node.data.inputs,
-      },
-    })),
+    nodes: nodes.map((node) => {
+      const width = toSize(node.width);
+      const height = toSize(node.height);
+      return {
+        id: node.id,
+        type: PAPAFLOW_NODE_TYPE,
+        position: { x: node.position.x, y: node.position.y },
+        ...(width === undefined ? {} : { width }),
+        ...(height === undefined ? {} : { height }),
+        data: {
+          nodeType: node.data.nodeType,
+          key: node.data.key,
+          label: node.data.label,
+          inputs: node.data.inputs,
+        },
+      };
+    }),
     edges: edges.map((edge) => ({
       id: edge.id,
       source: edge.source,

@@ -76,6 +76,18 @@ function pickerOf(node: { inputs: Parameters<typeof toJsonSchema>[0] }, field: s
   return schema.properties?.[field]?.picker;
 }
 
+/**
+ * The same trick one level in: a `{ key, value }` list whose *keys* are a remote list. `.meta()`
+ * survives `z.toJSONSchema()` here exactly as `picker` does on a plain string field, which is the
+ * only reason the panel can find it.
+ */
+function keyPickerOf(node: { inputs: Parameters<typeof toJsonSchema>[0] }, field: string): unknown {
+  const schema = toJsonSchema(node.inputs) as {
+    properties?: Record<string, { keyPicker?: unknown }>;
+  };
+  return schema.properties?.[field]?.keyPicker;
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -109,6 +121,8 @@ describe("notion.createPage", () => {
       icon: "FileText",
     });
     expect(pickerOf(notionCreatePageNode, "dataSourceId")).toBe("dataSources");
+    // The Properties rows name columns of whichever data source was chosen above.
+    expect(keyPickerOf(notionCreatePageNode, "properties")).toBe("properties:{dataSourceId}");
   });
 
   it("discovers the title property, then creates the page under the data source", async () => {
@@ -239,6 +253,8 @@ describe("airtable.createRecord", () => {
     });
     expect(pickerOf(airtableCreateRecordNode, "baseId")).toBe("bases");
     expect(pickerOf(airtableCreateRecordNode, "tableId")).toBe("tables:{baseId}");
+    // The Fields rows name columns, which only exist relative to *both* choices above.
+    expect(keyPickerOf(airtableCreateRecordNode, "fields")).toBe("fields:{baseId}:{tableId}");
   });
 
   it("posts one record with typecast so template strings land in typed columns", async () => {

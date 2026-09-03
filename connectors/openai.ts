@@ -8,7 +8,15 @@ export const openaiConnector = defineConnector({
   category: "ai",
   kind: "apiKey",
   requiresFeature: null,
-  fields: [{ name: "apiKey", label: "API key", kind: "secret", placeholder: "sk-…" }],
+  fields: [
+    {
+      name: "apiKey",
+      label: "API key",
+      kind: "secret",
+      placeholder: "sk-…",
+      help: "A secret key from platform.openai.com → API keys, starting sk- (project keys start sk-proj-). Not an organisation id or a session token.",
+    },
+  ],
   docsUrl: "https://platform.openai.com/api-keys",
   icon: "Sparkles",
   test: (secret) => validateAndDiscover("openai", secret.apiKey),

@@ -152,7 +152,18 @@ export async function POST(request: Request, { params }: RouteContext): Promise<
   // One answer for "no such workflow" and "that workflow has no form": this endpoint must not tell
   // a stranger which workflow ids exist.
   const spec = form ? parseFormSpec(form.form) : null;
-  if (!spec) return fail(404, "not_found", "No form is published at this URL.");
+  if (!form || !spec) return fail(404, "not_found", "No form is published at this URL.");
+
+  // Refused before the body is even read: the page renders a draft form (its owner has to be able
+  // to look at their own work) with a banner saying exactly this, so a submission that gets here is
+  // either that owner testing the button or a stale tab.
+  if (form.status !== "active") {
+    return fail(
+      409,
+      "not_published",
+      "This form is not published yet — submissions will not start a run.",
+    );
+  }
 
   let body: unknown;
   try {

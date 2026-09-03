@@ -11,14 +11,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * the tick before it starts anything, so a retry — which the SDK will do on any thrown error —
  * cannot start the workflow a second time for the same tick.
  */
-const { getSchedule, markScheduleFired, setScheduleRunId, startRun } = vi.hoisted(() => ({
-  getSchedule: vi.fn(),
-  markScheduleFired: vi.fn(),
-  setScheduleRunId: vi.fn(),
-  startRun: vi.fn(),
-}));
+const { getSchedule, getWorkflowForRun, markScheduleFired, setScheduleRunId, startRun } =
+  vi.hoisted(() => ({
+    getSchedule: vi.fn(),
+    getWorkflowForRun: vi.fn(),
+    markScheduleFired: vi.fn(),
+    setScheduleRunId: vi.fn(),
+    startRun: vi.fn(),
+  }));
 vi.mock("@/lib/engine-client", () => ({
   getSchedule,
+  getWorkflowForRun,
   markScheduleFired,
   setScheduleRunId,
   startRun,
@@ -51,10 +54,23 @@ function scheduleRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/** The workflow the schedule points at, as `getWorkflowForRun` projects it. */
+function workflowRow(overrides: Record<string, unknown> = {}) {
+  return {
+    graph: { nodes: [], edges: [] },
+    version: 1,
+    name: "Nightly digest",
+    status: "active",
+    webhookSecret: "s".repeat(32),
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
 
   getSchedule.mockResolvedValue(scheduleRow());
+  getWorkflowForRun.mockResolvedValue(workflowRow());
   getOrgPlan.mockResolvedValue("free_org");
   startRun.mockResolvedValue({ executionId: "ex_1", runId: "wrun_graph" });
   markScheduleFired.mockResolvedValue(undefined);
@@ -139,6 +155,32 @@ describe("fireSchedule", () => {
     ).toBe(false);
     expect(startRun).not.toHaveBeenCalled();
     expect(markScheduleFired).not.toHaveBeenCalled();
+  });
+
+  it.each(["draft", "paused"] as const)(
+    "spends the tick but starts nothing while the workflow is %s",
+    async (status) => {
+      getWorkflowForRun.mockResolvedValue(workflowRow({ status }));
+
+      // True, not false: unpublishing is reversible, so the scheduler has to stay asleep on this
+      // schedule and pick up again the moment somebody presses Publish.
+      expect(
+        await fireSchedule({ scheduleId: SCHEDULE_ID, cron: HOURLY, timezone: "UTC", firedAt: TICK }),
+      ).toBe(true);
+
+      expect(startRun).not.toHaveBeenCalled();
+      // The tick is still consumed, so `nextAt` on the row does not go stale behind the clock.
+      expect(markScheduleFired).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("returns false when the workflow behind the schedule is gone", async () => {
+    getWorkflowForRun.mockResolvedValue(null);
+
+    expect(
+      await fireSchedule({ scheduleId: SCHEDULE_ID, cron: HOURLY, timezone: "UTC", firedAt: TICK }),
+    ).toBe(false);
+    expect(startRun).not.toHaveBeenCalled();
   });
 
   it("returns false when the schedule (or its workflow) has been deleted", async () => {

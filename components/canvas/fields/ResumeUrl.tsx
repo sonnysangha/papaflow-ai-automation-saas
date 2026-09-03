@@ -20,9 +20,10 @@ export function ResumeUrlPattern({ id, nodeId }: { id: string; nodeId: string })
         {`${appOrigin()}/api/wait/<executionId>:${nodeId}`}
       </p>
       <p className="text-xs text-muted-foreground">
-        The run pauses here until something POSTs to this URL. The execution id only exists once a
-        run reaches this node, so open the run in the runs drawer to copy the real URL. A JSON body
-        arrives as <code className="font-mono">{"{{ key.body }}"}</code>.
+        Every run gets its own address, so this is the shape rather than a link you can use yet.
+        Once a run stops here, open it in the runs drawer and copy the real one — anything POSTed to
+        it wakes that run. What was sent arrives as{" "}
+        <code className="font-mono">{"{{ <this node's key>.body }}"}</code>.
       </p>
     </div>
   );

@@ -68,10 +68,26 @@ const approvalInputs = z.object({
     .string()
     .min(1)
     .meta({ picker: TARGETS_PICKER, label: "Ask in" })
-    .describe("The Slack or Discord channel, or the Telegram chat, to ask in"),
-  message: z.string().min(1).describe("What the approver sees above the buttons"),
-  approveLabel: z.string().min(1).max(75).default("Approve"),
-  rejectLabel: z.string().min(1).max(75).default("Reject"),
+    .describe("Where the question is posted — a Slack or Discord channel, or a Telegram chat."),
+  message: z
+    .string()
+    .min(1)
+    .describe("What the person reads above the two buttons, e.g. “Approve {{ start.amount }}?”")
+    .meta({ label: "Question" }),
+  approveLabel: z
+    .string()
+    .min(1)
+    .max(75)
+    .default("Approve")
+    .describe("The wording on the yes button, e.g. Approve.")
+    .meta({ label: "Yes button" }),
+  rejectLabel: z
+    .string()
+    .min(1)
+    .max(75)
+    .default("Reject")
+    .describe("The wording on the no button, e.g. Reject.")
+    .meta({ label: "No button" }),
 });
 
 type ApprovalInputs = z.infer<typeof approvalInputs>;
@@ -251,10 +267,16 @@ async function postTelegram(inputs: ApprovalInputs, token: string, stepId: strin
 
 export const approvalNode = defineNode({
   type: "logic.approval",
-  name: "Approval",
-  description:
-    "Ask someone in Slack, Discord or Telegram to approve, and pause the run until they answer.",
+  name: "Ask for approval",
+  description: "Ask a person in Slack, Discord or Telegram to say yes or no before the run goes on.",
   category: "logic",
+  guide: {
+    summary:
+      "Post a question with two buttons into the channel or chat you pick, and hold the run until " +
+      "someone presses one. Everyone in that channel can answer, and the first press wins. Press " +
+      "yes and the run takes the “approved” arrow; press no and it takes “rejected”.",
+    outputs: { [APPROVED_HANDLE]: "approved", [REJECTED_HANDLE]: "rejected" },
+  },
   icon: "ShieldCheck",
   credential: CHAT_CREDENTIAL,
   requiresFeature: null,

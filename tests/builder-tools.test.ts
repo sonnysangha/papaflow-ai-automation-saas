@@ -134,6 +134,17 @@ describe("the node catalogue a tool hands the model", () => {
     expect(nodes[0]).toHaveProperty("outputs");
   });
 
+  it("carries a Logic node's own explanation of its handles, at that depth only", () => {
+    const { nodes } = catalogue(["core_connectors"], { types: ["logic.loop"] });
+    // `handles` says a Loop has `each` and `done`; the guide says which one the body hangs off.
+    expect(nodes[0]).toMatchObject({
+      handles: ["each", "done"],
+      guide: { outputs: { each: "each item", done: "when done" } },
+    });
+    // The browse listing stays one line per node: twenty-eight paragraphs is not a summary.
+    expect(catalogue(["core_connectors"]).nodes[0]).not.toHaveProperty("guide");
+  });
+
   it("says so when every requested type is imaginary", () => {
     expect(() => catalogue(["pro_connectors"], { types: ["slack.postMesage"] })).toThrow(
       /No such node type/,

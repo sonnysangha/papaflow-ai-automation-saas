@@ -87,10 +87,14 @@ export const notionCreatePageNode = defineNode({
       .meta({ picker: "dataSources" })
       .describe("The database's data source, from the connection's own list"),
     title: z.string().min(1),
+    // Same idea as the data-source picker above, one level down: `keyPicker` turns the key half of
+    // each row into a dropdown of that data source's writable columns. The title column is not
+    // among them — it has its own field, and a row naming it is dropped below.
     properties: z
       .array(PROPERTY_ROW)
       .default([])
-      .describe("Extra columns, written as text"),
+      .describe("Extra columns, written as text")
+      .meta({ keyPicker: "properties:{dataSourceId}" }),
   }),
   outputs: z.object({ id: z.string(), url: z.string() }),
   async run({ inputs, credential }) {

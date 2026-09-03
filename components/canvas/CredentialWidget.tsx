@@ -38,10 +38,10 @@ export function CredentialWidget({
   const providerName = connector?.name ?? request.provider;
 
   return (
-    <div className="rounded-lg border border-border bg-muted/40 p-3">
-      <p className="flex items-start gap-2 text-sm">
+    <div className="min-w-0 rounded-lg border border-border bg-muted/40 p-3">
+      <p className="flex min-w-0 items-start gap-2 text-sm">
         <KeyRoundIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
-        <span className="whitespace-pre-wrap">{request.prompt}</span>
+        <span className="min-w-0 break-words whitespace-pre-wrap">{request.prompt}</span>
       </p>
 
       <div className="mt-3 flex flex-wrap gap-2">

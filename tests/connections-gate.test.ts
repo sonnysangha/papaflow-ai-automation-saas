@@ -92,6 +92,27 @@ describe("POST /api/connections feature gate", () => {
     test.mockRestore();
   });
 
+  it("cleans a pasted key before the connector ever sees it", async () => {
+    // The 401-on-a-valid-key report: a key copied out of a console or a .env file arrives with a
+    // trailing newline and sometimes its quotation marks, and the field renders as dots so nobody
+    // can see it. One normalised value feeds both `test()` and the seal, so asserting the argument
+    // asserts what is stored.
+    const test = vi
+      .spyOn(CONNECTORS.anthropic, "test")
+      .mockResolvedValue({ ok: false, error: "stopped after the trim" });
+
+    await createConnectionFromInput({
+      orgId: "org_1",
+      userId: "user_1",
+      provider: "anthropic",
+      secret: { apiKey: '  "sk-ant-api03-pasted-with-quotes"\n' },
+      has: hasFor([]),
+    }).catch(() => undefined);
+
+    expect(test).toHaveBeenCalledWith({ apiKey: "sk-ant-api03-pasted-with-quotes" });
+    test.mockRestore();
+  });
+
   it("leaves an unknown provider a 400, not an upgrade prompt", async () => {
     const thrown = await createConnectionFromInput(input("not-a-provider", [])).catch(
       (error: unknown) => error,

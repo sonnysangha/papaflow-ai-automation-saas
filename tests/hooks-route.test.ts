@@ -42,6 +42,7 @@ beforeEach(() => {
 
   getWorkflowPublic.mockResolvedValue({
     orgId: "org_1",
+    status: "active",
     webhookSecret: SECRET,
     hasTrigger: { webhook: true, form: false },
   });
@@ -97,6 +98,7 @@ describe("POST /api/hooks/[workflowId]/[secret]", () => {
   it("refuses a workflow whose graph has no webhook trigger", async () => {
     getWorkflowPublic.mockResolvedValue({
       orgId: "org_1",
+      status: "active",
       webhookSecret: SECRET,
       hasTrigger: { webhook: false, form: true },
     });
@@ -105,6 +107,26 @@ describe("POST /api/hooks/[workflowId]/[secret]", () => {
 
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({ code: "no_webhook_trigger" });
+    expect(startRun).not.toHaveBeenCalled();
+  });
+
+  it.each(["draft", "paused"] as const)("refuses a %s workflow and starts nothing", async (status) => {
+    // The URL is right and the trigger is there — the workflow just has not been published, which
+    // is a state the sender can wait out, so 409 rather than the 404 a wrong secret gets.
+    getWorkflowPublic.mockResolvedValue({
+      orgId: "org_1",
+      status,
+      webhookSecret: SECRET,
+      hasTrigger: { webhook: true, form: false },
+    });
+
+    const response = await POST(post({ hello: "world" }), context());
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      code: "not_published",
+      error: "This workflow is not published yet.",
+    });
     expect(startRun).not.toHaveBeenCalled();
   });
 

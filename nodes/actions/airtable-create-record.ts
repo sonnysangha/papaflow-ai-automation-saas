@@ -43,7 +43,14 @@ export const airtableCreateRecordNode = defineNode({
     baseId: z.string().min(1).meta({ picker: "bases" }),
     // The kind carries the chosen base: the table list only exists relative to one.
     tableId: z.string().min(1).meta({ picker: "tables:{baseId}" }),
-    fields: z.array(FIELD_ROW).default([]).describe("Column names and their values"),
+    // The key half of each row is a column of the chosen table, so it gets a dropdown of its own:
+    // `keyPicker` names the list, with the same `{sibling}` placeholders `picker` uses. The kind
+    // needs both ids because a table only exists inside a base.
+    fields: z
+      .array(FIELD_ROW)
+      .default([])
+      .describe("Column names and their values")
+      .meta({ keyPicker: "fields:{baseId}:{tableId}" }),
   }),
   outputs: z.object({ id: z.string() }),
   async run({ inputs, credential }) {

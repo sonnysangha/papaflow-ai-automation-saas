@@ -32,8 +32,10 @@ function VariableRow({ entry, onSelect }: { entry: VariableEntry; onSelect: () =
       className="flex-col items-start gap-0.5 py-1.5"
       onSelect={onSelect}
     >
-      <div className="flex w-full items-center gap-1.5">
-        <span className="truncate font-mono text-xs">{entry.path}</span>
+      <div className="flex w-full min-w-0 items-center gap-1.5">
+        <span className="min-w-0 flex-1 truncate font-mono text-xs" title={entry.path}>
+          {entry.path}
+        </span>
         {entry.observed ? (
           <span
             className="shrink-0 rounded-sm border border-border px-1 text-[10px] leading-4 text-muted-foreground"
@@ -49,7 +51,12 @@ function VariableRow({ entry, onSelect }: { entry: VariableEntry; onSelect: () =
         </CommandShortcut>
       </div>
       {entry.preview ? (
-        <span className="w-full truncate font-mono text-[11px] text-muted-foreground">
+        // One line, always: `previewOf` already caps the length, but a 40-character token still has
+        // to be cut rather than allowed to widen the 320px popover.
+        <span
+          className="w-full min-w-0 truncate font-mono text-[11px] text-muted-foreground"
+          title={entry.preview}
+        >
           {entry.preview}
         </span>
       ) : null}
@@ -109,8 +116,8 @@ export function VariablePicker({
                 key={group.key}
                 value={group.key}
                 heading={
-                  <span className="flex items-center gap-1.5">
-                    <span className="truncate">{group.label}</span>
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <span className="min-w-0 flex-1 truncate">{group.label}</span>
                     {group.ran ? (
                       <span className="shrink-0 font-normal text-muted-foreground/70">
                         · last run

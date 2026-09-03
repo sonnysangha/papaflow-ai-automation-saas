@@ -198,6 +198,52 @@ describe("pickConnectionOptions({ kind: 'models' })", () => {
     expect(open).toHaveBeenCalledTimes(1);
   });
 
+  it("passes a picker's extra description keys through to the browser untouched", async () => {
+    // Airtable's field picker answers with more than a name: the column's `type` and, for a select
+    // column, its `choices`. That is what lets the panel offer the right *values* for the column
+    // the user just chose — so this route must not flatten an option down to `{ id, label }`.
+    getConnectionSealed.mockResolvedValue(row("airtable", {}));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              tables: [
+                {
+                  id: "tbl1",
+                  name: "Leads",
+                  fields: [
+                    { id: "fld1", name: "Name", type: "singleLineText" },
+                    {
+                      id: "fld2",
+                      name: "Stage",
+                      type: "singleSelect",
+                      options: { choices: [{ id: "c1", name: "New" }] },
+                    },
+                    { id: "fld3", name: "Total", type: "formula" },
+                  ],
+                },
+              ],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+      ),
+    );
+
+    const options = await pick("fields:appBase1:tbl1");
+
+    expect(options).toEqual([
+      { id: "Name", label: "Name", type: "singleLineText" },
+      { id: "Stage", label: "Stage", type: "singleSelect", choices: ["New"] },
+    ]);
+
+    // Extra keys, still no credential: the option describes a remote column, nothing else.
+    const answer = JSON.stringify(options);
+    expect(answer).not.toContain(SECRET.apiKey);
+    expect(answer).not.toContain("apiKey");
+  });
+
   it("answers an empty list for a connection stored before its models were captured", async () => {
     // The config panel turns this into a text box with "re-test it on the Connections page".
     getConnectionSealed.mockResolvedValue(row("anthropic", {}));

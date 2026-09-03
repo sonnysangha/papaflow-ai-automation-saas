@@ -107,6 +107,14 @@ async function handle(request: Request, { params }: RouteContext): Promise<Respo
     return fail(400, "no_webhook_trigger", "This workflow does not start with a Webhook trigger.");
   }
 
+  // Publishing is what turns a trigger on (`api.workflows.setStatus`). A draft has a URL — it is on
+  // screen in the config panel, and it has to be, or there would be nothing to paste into the
+  // sending system — but nothing behind it yet. 409 rather than 404: the URL is right, the workflow
+  // is not ready, and the same call works once it is published.
+  if (workflow.status !== "active") {
+    return fail(409, "not_published", "This workflow is not published yet.");
+  }
+
   const url = new URL(request.url);
   const payload: WebhookPayload = {
     method: request.method,

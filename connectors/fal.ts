@@ -8,7 +8,15 @@ export const falConnector = defineConnector({
   category: "ai",
   kind: "apiKey",
   requiresFeature: null,
-  fields: [{ name: "apiKey", label: "API key", kind: "secret", placeholder: "Your fal API key" }],
+  fields: [
+    {
+      name: "apiKey",
+      label: "API key",
+      kind: "secret",
+      placeholder: "Your fal API key",
+      help: "A key from fal.ai → Dashboard → Keys, in the form <key-id>:<key-secret>. Paste both halves including the colon.",
+    },
+  ],
   docsUrl: "https://fal.ai/dashboard/keys",
   icon: "Image",
   test: (secret) => validateAndDiscover("fal", secret.apiKey),

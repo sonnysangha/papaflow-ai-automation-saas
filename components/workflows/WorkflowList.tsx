@@ -73,6 +73,18 @@ const STATUS_VARIANT: Record<
 };
 
 /**
+ * The stored enum in the words the rest of the app uses. `active` is the one that had to change:
+ * the canvas' button says "Publish", so the badge has to say "Published" or the two are describing
+ * different things. `paused` keeps its own word — it means published once and switched off, which
+ * is not the same as a draft.
+ */
+const STATUS_LABEL: Record<Workflow["status"], string> = {
+  draft: "Draft",
+  active: "Published",
+  paused: "Paused",
+};
+
+/**
  * The organisation's workflows, live from Convex. Switching organisations re-runs the query with new
  * token claims, so the list swaps itself; nothing here filters by org on the client.
  */
@@ -152,11 +164,8 @@ export function WorkflowList() {
                 </TableCell>
                 <TableCell>
                   <div className="flex flex-wrap items-center gap-1.5">
-                    <Badge
-                      variant={STATUS_VARIANT[workflow.status]}
-                      className="capitalize"
-                    >
-                      {workflow.status}
+                    <Badge variant={STATUS_VARIANT[workflow.status]}>
+                      {STATUS_LABEL[workflow.status]}
                     </Badge>
                     {/* Only enabled schedules appear: a paused one is not something to claim. */}
                     {workflow.schedule ? (

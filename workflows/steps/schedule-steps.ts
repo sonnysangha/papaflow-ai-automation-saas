@@ -1,6 +1,7 @@
 import { getOrgPlan } from "@/lib/billing";
 import {
   getSchedule,
+  getWorkflowForRun,
   markScheduleFired,
   setScheduleRunId,
   startRun,
@@ -51,6 +52,10 @@ export async function computeNext(cron: string, timezone?: string): Promise<numb
  * without anyone having to cancel it. `enabled` is re-read here rather than carried in the
  * workflow's arguments precisely because a run can be days into a sleep by the time it matters.
  *
+ * A workflow that is not published is skipped rather than stopped (it returns true): unpublishing
+ * is reversible and the schedule is meant to pick up again the moment it is published, which is
+ * the difference between "paused" and "deleted".
+ *
  * Re-runnable, which a step must be (CLAUDE.md rule 7): the tick is claimed with `markScheduleFired`
  * *before* the run is started, and a retry whose `lastFiredAt` already covers `firedAt` returns
  * without starting anything. Claiming first means a crash in the window between the two loses one
@@ -90,6 +95,23 @@ export async function fireSchedule({
     firedAt,
     nextAt: next?.getTime(),
   });
+
+  // The tick is spent either way — `nextAt` has to keep moving so the canvas does not show a fire
+  // time in the past — but a workflow that is not published does not run. `true` keeps the
+  // scheduler alive: publishing later resumes firing without rebuilding the schedule.
+  const workflow = await getWorkflowForRun(schedule.workflowId, schedule.orgId);
+  if (!workflow) {
+    console.log("fireSchedule:workflow-gone", { scheduleId, workflowId: schedule.workflowId });
+    return false;
+  }
+  if (workflow.status !== "active") {
+    console.log("fireSchedule:not-published", {
+      scheduleId,
+      workflowId: schedule.workflowId,
+      status: workflow.status,
+    });
+    return true;
+  }
 
   try {
     // No session out here, so the plan comes from the Clerk Backend API and is snapshotted onto the

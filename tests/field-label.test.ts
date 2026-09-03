@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { fieldLabel, humaniseFieldName } from "@/components/canvas/field-label";
+import {
+  enumOptions,
+  fieldLabel,
+  fieldVisible,
+  humaniseFieldName,
+  optionLabel,
+} from "@/components/canvas/field-label";
 import { NODES } from "@/nodes/registry";
 import { toJsonSchema } from "@/nodes/schema";
 
@@ -74,5 +80,102 @@ describe("declared labels", () => {
 
     expect(fieldLabel("everyMinutes", properties.everyMinutes)).toBe("Every (minutes)");
     expect(fieldLabel("mode", properties.mode)).toBe("Repeat");
+  });
+});
+
+/**
+ * The other half of the same problem: a `z.enum` field asks its question in the *values* the graph
+ * stores, and `greaterThan` is not a thing anyone says out loud. `.meta({ options })` relabels them
+ * for display only — the stored value is untouched, which is what keeps saved graphs, the Builder's
+ * tool calls and `run()` working.
+ */
+describe("optionLabel", () => {
+  it("prefers the words the node declared for a value", () => {
+    const schema = { options: { greaterThan: "is greater than", isEmpty: "is empty" } };
+    expect(optionLabel("greaterThan", schema)).toBe("is greater than");
+    expect(optionLabel("isEmpty", schema)).toBe("is empty");
+  });
+
+  it("shows an undeclared value as itself, so GET never becomes Get", () => {
+    expect(optionLabel("GET")).toBe("GET");
+    expect(optionLabel("GET", {})).toBe("GET");
+    expect(optionLabel("gpt-5", { options: { "gpt-4": "GPT-4" } })).toBe("gpt-5");
+  });
+
+  it("ignores a blank, non-string or non-object declaration", () => {
+    expect(optionLabel("equals", { options: { equals: "  " } })).toBe("equals");
+    expect(optionLabel("equals", { options: { equals: 7 } })).toBe("equals");
+    expect(optionLabel("equals", { options: ["is equal to"] })).toBe("equals");
+    expect(optionLabel("equals", { options: null })).toBe("equals");
+  });
+});
+
+describe("enumOptions", () => {
+  it("keeps the schema's order and pairs every value with its words", () => {
+    expect(enumOptions(["duration", "until"], { options: { until: "until a date and time" } })).toEqual([
+      { value: "duration", label: "duration" },
+      { value: "until", label: "until a date and time" },
+    ]);
+  });
+});
+
+/**
+ * `.meta({ showWhen })` is the Wait node's answer to asking the same question twice: "Seconds" and
+ * "Date and time" are alternatives, and showing both is most of what made the node confusing.
+ */
+describe("fieldVisible", () => {
+  const values = { mode: "duration", operator: "isEmpty" };
+
+  it("shows a field that declared nothing", () => {
+    expect(fieldVisible(undefined, values)).toBe(true);
+    expect(fieldVisible({}, values)).toBe(true);
+    expect(fieldVisible({ showWhen: null }, values)).toBe(true);
+  });
+
+  it("matches a single value", () => {
+    expect(fieldVisible({ showWhen: { mode: "duration" } }, values)).toBe(true);
+    expect(fieldVisible({ showWhen: { mode: "until" } }, values)).toBe(false);
+  });
+
+  it("matches any value in a list", () => {
+    expect(fieldVisible({ showWhen: { operator: ["equals", "isEmpty"] } }, values)).toBe(true);
+    expect(fieldVisible({ showWhen: { operator: ["equals", "contains"] } }, values)).toBe(false);
+  });
+
+  it("requires every entry to match, and treats a missing value as no match", () => {
+    expect(fieldVisible({ showWhen: { mode: "duration", operator: "isEmpty" } }, values)).toBe(true);
+    expect(fieldVisible({ showWhen: { mode: "duration", operator: "equals" } }, values)).toBe(false);
+    expect(fieldVisible({ showWhen: { missing: "anything" } }, values)).toBe(false);
+  });
+});
+
+describe("declared options and visibility", () => {
+  it("reach the panel through the generated JSON Schema", () => {
+    const condition = toJsonSchema(NODES["logic.condition"].inputs).properties as Record<
+      string,
+      { label?: unknown; options?: unknown; showWhen?: unknown; enum?: unknown[] }
+    >;
+
+    expect(fieldLabel("left", condition.left)).toBe("Check this");
+    expect(optionLabel("greaterThan", condition.operator)).toBe("is greater than");
+    expect(optionLabel("matchesRegex", condition.operator)).toBe("matches pattern (regex)");
+    // The stored values are untouched: the enum the graph is validated against is unchanged.
+    expect(condition.operator.enum).toContain("greaterThan");
+
+    // "is empty" only looks at the left-hand side, so the panel stops asking for a right one.
+    expect(fieldVisible(condition.right, { operator: "greaterThan" })).toBe(true);
+    expect(fieldVisible(condition.right, { operator: "isEmpty" })).toBe(false);
+    expect(fieldVisible(condition.right, { operator: "isNotEmpty" })).toBe(false);
+
+    const wait = toJsonSchema(NODES["logic.wait"].inputs).properties as Record<
+      string,
+      { options?: unknown; showWhen?: unknown }
+    >;
+
+    expect(optionLabel("duration", wait.mode)).toBe("for a length of time");
+    expect(fieldVisible(wait.seconds, { mode: "duration" })).toBe(true);
+    expect(fieldVisible(wait.seconds, { mode: "until" })).toBe(false);
+    expect(fieldVisible(wait.until, { mode: "until" })).toBe(true);
+    expect(fieldVisible(wait.until, { mode: "duration" })).toBe(false);
   });
 });

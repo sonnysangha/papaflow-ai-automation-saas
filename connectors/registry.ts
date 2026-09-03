@@ -1,7 +1,7 @@
 import { airtableConnector } from "./airtable";
 import { anthropicConnector } from "./anthropic";
 import { deepseekConnector } from "./deepseek";
-import type { ConnectorDef, FieldSpec } from "./define";
+import type { ConnectorDef, ConnectorSetup, FieldSpec } from "./define";
 import { discordBotConnector } from "./discord-bot";
 import { discordWebhookConnector } from "./discord-webhook";
 import { elevenlabsConnector } from "./elevenlabs";
@@ -75,6 +75,18 @@ export interface ConnectorCatalogueEntry {
   requiresFeature: string | null;
   /** Whether the org's plan features cover this connector. */
   allowed: boolean;
+  /** How to create the provider-side app first, for the one connector that needs one (Slack). */
+  setup?: ConnectorSetup;
+}
+
+/**
+ * A connector's setup instructions, copied — the field specs are copied for the same reason: the
+ * catalogue must not be a handle on a definition. The JSON round-trip doubles as the guarantee the
+ * entry is serialisable, which is the contract this whole value is under: it crosses to a Client
+ * Component, and a manifest is only useful if it survives `JSON.stringify` unchanged.
+ */
+function cloneSetup(setup: ConnectorSetup): ConnectorSetup {
+  return JSON.parse(JSON.stringify(setup)) as ConnectorSetup;
 }
 
 /**
@@ -97,6 +109,9 @@ export function connectorCatalogue(features: readonly string[]): ConnectorCatalo
       fields: definition.fields.map((field) => ({ ...field })),
       requiresFeature: definition.requiresFeature,
       allowed: !definition.requiresFeature || features.includes(definition.requiresFeature),
+      // Spread rather than `setup: definition.setup`: an explicit `undefined` would be a key that
+      // `JSON.stringify` drops, and the entry has to round-trip identically.
+      ...(definition.setup ? { setup: cloneSetup(definition.setup) } : {}),
     }))
     .sort(
       (a, b) =>

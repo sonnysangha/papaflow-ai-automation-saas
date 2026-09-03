@@ -8,7 +8,15 @@ export const xaiConnector = defineConnector({
   category: "ai",
   kind: "apiKey",
   requiresFeature: null,
-  fields: [{ name: "apiKey", label: "API key", kind: "secret", placeholder: "xai-…" }],
+  fields: [
+    {
+      name: "apiKey",
+      label: "API key",
+      kind: "secret",
+      placeholder: "xai-…",
+      help: "An API key from console.x.ai → API keys, starting xai-. A blocked or disabled key is refused here rather than at run time.",
+    },
+  ],
   docsUrl: "https://console.x.ai",
   icon: "Sparkles",
   test: (secret) => validateAndDiscover("xai", secret.apiKey),

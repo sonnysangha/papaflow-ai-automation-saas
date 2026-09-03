@@ -10,10 +10,13 @@ import schema from "../schema";
 export const executionStatusValidator = schema.tables.executions.validator.fields.status;
 export const stepStatusValidator = schema.tables.steps.validator.fields.status;
 export const triggerValidator = schema.tables.executions.validator.fields.trigger;
+/** `draft` | `active` | `paused` — only `active` responds to a trigger. */
+export const workflowStatusValidator = schema.tables.workflows.validator.fields.status;
 
 export type ExecutionStatus = typeof executionStatusValidator.type;
 export type StepStatus = typeof stepStatusValidator.type;
 export type Trigger = typeof triggerValidator.type;
+export type WorkflowStatus = typeof workflowStatusValidator.type;
 
 /**
  * The AES-256-GCM envelope `lib/vault.ts` produces (`{ v, keyId, iv, tag, ct }`, all base64), as

@@ -56,7 +56,7 @@ function graphOf(
 describe("logic.loop", () => {
   it("is a logic node with two handles, no credential and no feature gate", () => {
     expect(loopNode.type).toBe("logic.loop");
-    expect(loopNode.name).toBe("Loop");
+    expect(loopNode.name).toBe("For each item");
     expect(loopNode.category).toBe("logic");
     expect(loopNode.icon).toBe("Repeat");
     expect(loopNode.credential).toBeNull();

@@ -8,7 +8,15 @@ export const mistralConnector = defineConnector({
   category: "ai",
   kind: "apiKey",
   requiresFeature: null,
-  fields: [{ name: "apiKey", label: "API key", kind: "secret", placeholder: "Your Mistral API key" }],
+  fields: [
+    {
+      name: "apiKey",
+      label: "API key",
+      kind: "secret",
+      placeholder: "Your Mistral API key",
+      help: "An API key from console.mistral.ai → API keys. A workspace needs a billing method before its keys work.",
+    },
+  ],
   docsUrl: "https://console.mistral.ai/api-keys",
   icon: "Sparkles",
   test: (secret) => validateAndDiscover("mistral", secret.apiKey),

@@ -51,6 +51,7 @@ import {
 } from "@/components/ui/table";
 import { formatAbsoluteTime, formatRelativeTime } from "@/components/workflows/relative-time";
 import { CONNECTORS } from "@/connectors/registry";
+import { RESEND_SANDBOX_NOTE, resendDomains, verifiedDomains } from "@/connectors/resend";
 import { api } from "@/convex/_generated/api";
 import { appOrigin } from "@/lib/app-origin";
 import { cn } from "@/lib/utils";
@@ -126,6 +127,34 @@ function inboundFor(connection: Connection): { url: string; hint: string } | nul
   }
 
   return null;
+}
+
+/**
+ * A standing caveat about what this connection can do — not a failure, and not something a re-test
+ * would clear.
+ *
+ * Resend is the only one so far, and it is the one people hit five minutes in: a brand-new account
+ * has a working key and no verified domain, so `email.send` falls back to Resend's sandbox sender
+ * and Resend allows exactly one recipient. Saying so on the row is the difference between "Send
+ * email failed" and "of course it did".
+ */
+function noticeFor(connection: Connection): string | null {
+  if (connection.provider !== "resend") return null;
+
+  const meta = typeof connection.meta === "object" && connection.meta !== null ? connection.meta : {};
+  const domains = resendDomains({ data: (meta as { domains?: unknown }).domains });
+  return verifiedDomains(domains).length > 0 ? null : RESEND_SANDBOX_NOTE;
+}
+
+/** A caveat as its own full-width row, under the connection it belongs to. */
+function NoticeRow({ text }: { text: string }) {
+  return (
+    <TableRow className="hover:bg-transparent">
+      <TableCell colSpan={7} className="px-4 pt-0">
+        <p className="text-xs text-muted-foreground">{text}</p>
+      </TableCell>
+    </TableRow>
+  );
 }
 
 /** The inbound URL as its own full-width row: read-only, copyable, and long enough to need one. */
@@ -297,11 +326,14 @@ export function ConnectionList() {
               const definition = CONNECTORS[connection.provider];
               const models = modelCount(connection.meta);
               const inbound = inboundFor(connection);
+              const notice = noticeFor(connection);
               const busy = busyId === connection._id;
 
               return (
                 <Fragment key={connection._id}>
-                  <TableRow className={cn(busy && "opacity-60", inbound && "border-b-0")}>
+                  <TableRow
+                    className={cn(busy && "opacity-60", (inbound || notice) && "border-b-0")}
+                  >
                     <TableCell className="px-4 font-medium">
                       <span className="flex items-center gap-2">
                         <NodeIcon
@@ -368,6 +400,8 @@ export function ConnectionList() {
                   {inbound ? (
                     <InboundUrlRow connection={connection} url={inbound.url} hint={inbound.hint} />
                   ) : null}
+
+                  {notice ? <NoticeRow text={notice} /> : null}
                 </Fragment>
               );
             })}

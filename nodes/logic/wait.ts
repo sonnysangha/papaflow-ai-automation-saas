@@ -13,12 +13,22 @@ const waitInputs = z.object({
   mode: z
     .enum(["duration", "until"])
     .default("duration")
-    .describe("Wait for a number of seconds, or until a specific moment"),
-  seconds: z.number().min(1).default(30).describe("How long to wait, in seconds (duration mode)"),
+    .describe("Wait for a length of time, or hold until a moment you name.")
+    .meta({
+      label: "Wait",
+      options: { duration: "for a length of time", until: "until a date and time" },
+    }),
+  seconds: z
+    .number()
+    .min(1)
+    .default(30)
+    .describe("How long to hold here, e.g. 30. Minutes are 60s, an hour is 3600s.")
+    .meta({ label: "Seconds", showWhen: { mode: "duration" } }),
   until: z
     .string()
     .optional()
-    .describe("ISO 8601 date and time to wait for, e.g. 2026-09-02T17:30:00Z (until mode)"),
+    .describe("The moment to carry on, e.g. 2026-09-02T17:30:00Z. A moment already past waits 0s.")
+    .meta({ label: "Date and time", showWhen: { mode: "until" } }),
 });
 
 export type WaitInputs = z.infer<typeof waitInputs>;
@@ -65,9 +75,15 @@ export function waitMs(inputs: WaitInputs, now: number): number {
  */
 export const waitNode = defineNode({
   type: "logic.wait",
-  name: "Wait",
-  description: "Pause the run for a number of seconds, or until a date and time.",
+  name: "Pause",
+  description: "Hold the run for a while, then carry on down the same path.",
   category: "logic",
+  guide: {
+    summary:
+      "Stop here for a bit, then keep going. The run is put to sleep rather than left spinning, " +
+      "so waiting seven days costs no more than waiting thirty seconds. Nothing branches: the run " +
+      "picks up exactly where it left off.",
+  },
   icon: "Clock",
   credential: null,
   requiresFeature: null,

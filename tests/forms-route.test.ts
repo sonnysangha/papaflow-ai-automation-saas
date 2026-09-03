@@ -56,9 +56,10 @@ beforeEach(() => {
   startRun.mockReset();
   getOrgPlan.mockReset();
 
-  getPublicForm.mockResolvedValue({ name: "Contact form", form: FORM });
+  getPublicForm.mockResolvedValue({ name: "Contact form", form: FORM, status: "active" });
   getWorkflowPublic.mockResolvedValue({
     orgId: "org_1",
+    status: "active",
     webhookSecret: "s".repeat(32),
     hasTrigger: { webhook: false, form: true },
   });
@@ -76,6 +77,25 @@ describe("POST /api/forms/[workflowId]", () => {
     expect(await response.json()).toMatchObject({ code: "not_found" });
     expect(startRun).not.toHaveBeenCalled();
   });
+
+  it.each(["draft", "paused"] as const)(
+    "refuses a submission to a %s workflow, before it even reads the body",
+    async (status) => {
+      getPublicForm.mockResolvedValue({ name: "Contact form", form: FORM, status });
+
+      const response = await POST(
+        submit({ email: "a@b.com", message: "hi" }, "203.0.113.9"),
+        context(),
+      );
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        code: "not_published",
+        error: "This form is not published yet — submissions will not start a run.",
+      });
+      expect(startRun).not.toHaveBeenCalled();
+    },
+  );
 
   it("refuses a value the form's own schema rejects, naming the field", async () => {
     const response = await POST(
@@ -131,6 +151,7 @@ describe("POST /api/forms/[workflowId]", () => {
   it("keeps only the configured fields, and coerces the ones the spec types", async () => {
     getPublicForm.mockResolvedValue({
       name: "Signup",
+      status: "active",
       form: {
         title: "Sign up",
         fields: [{ name: "seats", label: "Seats", type: "number", required: true }],

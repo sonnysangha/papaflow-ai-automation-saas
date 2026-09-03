@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { TriangleAlertIcon } from "lucide-react";
 
 import { PublicForm } from "@/components/forms/PublicForm";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -27,14 +28,19 @@ type PageParams = { params: Promise<{ workflowId: string }> };
 /**
  * The form's own configuration, or null for "there is nothing to show here". Never throws: a
  * malformed id reaches Convex's `v.id()` validator as an error, and that is a 404 like any other.
+ *
+ * A draft still renders, with `published: false`: the person who just built the form needs to open
+ * this URL and look at it, and a 404 would be a worse answer than a form that says so.
  */
-async function loadForm(workflowId: string): Promise<{ spec: FormSpec } | null> {
+async function loadForm(
+  workflowId: string,
+): Promise<{ spec: FormSpec; published: boolean } | null> {
   try {
     const form = await getPublicForm(workflowId);
     if (!form) return null;
 
     const spec = parseFormSpec(form.form);
-    return spec ? { spec } : null;
+    return spec ? { spec, published: form.status === "active" } : null;
   } catch (cause) {
     console.error("form page: could not load the form", cause);
     return null;
@@ -58,7 +64,7 @@ export default async function PublicFormPage({ params }: PageParams) {
   const loaded = await loadForm(workflowId);
   if (!loaded) notFound();
 
-  const { spec } = loaded;
+  const { spec, published } = loaded;
 
   return (
     <main className="flex flex-1 items-center justify-center bg-background px-6 py-16 text-foreground">
@@ -67,7 +73,18 @@ export default async function PublicFormPage({ params }: PageParams) {
           <CardTitle className="text-xl">{spec.title}</CardTitle>
           {spec.description && <CardDescription>{spec.description}</CardDescription>}
         </CardHeader>
-        <CardContent>
+        <CardContent className="grid gap-4">
+          {published ? null : (
+            // The submit route refuses this too (409 `not_published`), so the banner is a warning
+            // rather than the check — it exists so the owner previewing their own form knows why.
+            <p
+              role="status"
+              className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-foreground"
+            >
+              <TriangleAlertIcon aria-hidden className="mt-0.5 size-4 shrink-0 text-amber-600" />
+              This form is not published yet — submissions will not start a run.
+            </p>
+          )}
           <PublicForm workflowId={workflowId} spec={spec} />
         </CardContent>
       </Card>

@@ -16,6 +16,9 @@ export type KeyValueProps = {
   onChange: (value: KeyValuePair[]) => void;
   groups: VariableGroup[];
   addLabel?: string;
+  /** What the two columns are called. "Name"/"Value" reads for both a Set field and a header. */
+  keyLabel?: string;
+  valueLabel?: string;
 };
 
 /**
@@ -29,12 +32,25 @@ export function KeyValueList({
   onChange,
   groups,
   addLabel = "Add field",
+  keyLabel = "Name",
+  valueLabel = "Value",
 }: KeyValueProps) {
   const replace = (index: number, pair: KeyValuePair) =>
     onChange(value.map((current, at) => (at === index ? pair : current)));
 
   return (
     <div className="space-y-1.5">
+      {/* Which box is which, once there is a box to mislabel. The row's own `aria-label` already
+          says it; this is the same answer for someone reading rather than tabbing. */}
+      {value.length > 0 ? (
+        <div aria-hidden className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <span className="w-28 shrink-0">{keyLabel}</span>
+          <span className="min-w-0 flex-1">{valueLabel}</span>
+          {/* Keeps the two captions over their columns rather than under the remove button. */}
+          <span className="size-8 shrink-0" />
+        </div>
+      ) : null}
+
       {/* Index keys: rows are positional, and editing one rewrites that position in place. */}
       {value.map((pair, index) => (
         <div key={index} className="flex items-start gap-1.5">

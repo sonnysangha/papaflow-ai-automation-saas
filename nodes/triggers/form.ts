@@ -19,6 +19,10 @@ export const formTriggerNode = defineNode({
   type: "form.trigger",
   name: "Form",
   description: "Starts the workflow when someone submits your hosted form.",
+  guide: {
+    summary:
+      "PapaFlow hosts this form at /f/<workflow id>. Open this link to fill in the form. On localhost it works in your browser; publish the workflow so submissions start runs — a draft form still renders, with a banner saying the submit button goes nowhere yet.",
+  },
   category: "trigger",
   icon: "ClipboardList",
   credential: null,

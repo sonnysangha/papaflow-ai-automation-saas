@@ -25,14 +25,14 @@ export type CopyableUrlProps = {
  */
 export function CopyableUrl({ id, value, label, copiedMessage }: CopyableUrlProps) {
   return (
-    <div className="flex items-center gap-1.5">
+    <div className="flex min-w-0 items-center gap-1.5">
       <Input
         id={id}
         value={value}
         readOnly
         spellCheck={false}
         aria-label={label}
-        className="font-mono text-xs"
+        className="min-w-0 font-mono text-xs"
         onFocus={(event) => event.currentTarget.select()}
       />
       <Button

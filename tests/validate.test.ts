@@ -347,12 +347,22 @@ describe("validateAndDiscover", () => {
     ["openrouter", "https://openrouter.ai/api/v1/key", "OpenRouter"],
     ["elevenlabs", "https://api.elevenlabs.io/v1/user", "ElevenLabs"],
     ["fal", "https://fal.run/fal-ai/flux/schnell", "fal.ai"],
-  ])("reports a rejected %s key", async (provider, url, name) => {
+  ])("reports a rejected %s key in the provider's own words", async (provider, url, name) => {
     stubFetch({ [url]: { status: 401, body: { error: "invalid api key" } } });
 
     const result = expectFailed(await validateAndDiscover(provider, "bad-key-0000"));
 
-    expect(result.error).toBe(`${name} rejected the key (HTTP 401)`);
+    // A bare `HTTP 401` cannot tell a typo from an expired key from a key for the wrong product,
+    // and the field is rendered as dots, so the provider's sentence is the only clue there is.
+    expect(result.error).toBe(`${name} rejected the key (401: invalid api key)`);
+  });
+
+  it("falls back to the bare status when the provider's body explains nothing", async () => {
+    stubFetch({ "https://api.openai.com/v1/models": { status: 500, body: {} } });
+
+    const result = expectFailed(await validateAndDiscover("openai", "sk-live-abcd"));
+
+    expect(result.error).toBe("OpenAI rejected the key (HTTP 500)");
   });
 
   it("sends papaflow's user agent and an abort signal on every request", async () => {

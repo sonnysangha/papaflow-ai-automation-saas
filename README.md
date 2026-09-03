@@ -26,6 +26,40 @@ pnpm test           # vitest: `unit` (node) + `convex` (edge-runtime, convex-tes
 pnpm workflow:web   # local workflow run inspector (Phase 2+)
 ```
 
+## How runs start
+
+Two different things start a run, and only one of them is on by default.
+
+**Run** (the button above the canvas) starts the workflow there and then, whatever state it is in.
+That is how you test: a draft runs from Run exactly like a published workflow does, with the Manual
+trigger's sample payload as the trigger output.
+
+**Triggers** — webhook, form, schedule, and inbound chat and payment events — only fire for a
+**published** workflow. A new workflow is a `Draft`; press **Publish** in the run bar to turn its
+triggers on, and **Unpublish** to switch them off again (the badge then reads `Paused`). Until then:
+
+| Trigger | Unpublished behaviour |
+| --- | --- |
+| Webhook (`/api/hooks/<id>/<secret>`) | `409 not_published` |
+| Form (`/f/<id>`) | the page renders with a banner; a submit gets `409 not_published` |
+| Schedule | the tick is spent and logged (`fireSchedule:not-published`), nothing runs |
+| Telegram / Stripe events | not listed as a listener; the provider still gets its `200` |
+
+The URLs themselves work before publishing — they have to, or there would be nothing to paste into
+the sending system.
+
+**On localhost**, the form page and the webhook URL work straight from your browser or `curl`, because
+your machine is the one calling them:
+
+```bash
+curl -X POST http://localhost:3000/api/hooks/<workflowId>/<secret> \
+  -H 'content-type: application/json' -d '{"hello":"world"}'
+```
+
+Telegram, Stripe, Slack and Discord are the other way round — *they* call *you*, so they need an
+origin they can reach: the Vercel deployment, or a tunnel (`ngrok http 3000`, `cloudflared tunnel`)
+with `APP_ORIGIN` set to it. Telegram additionally refuses to register a webhook that is not `https`.
+
 ## Runtime agent
 
 The **AI Agent** node (`ai.agent`) does not call a model itself. It opens a session on the eve agent

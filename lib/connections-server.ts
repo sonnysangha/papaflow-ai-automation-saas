@@ -4,7 +4,12 @@
 // Client Component or any browser bundle.
 import { FatalError } from "workflow";
 
-import { MODELS_PICKER, type ConnectorDef } from "@/connectors/define";
+import {
+  MODELS_PICKER,
+  normalizeSecretInput,
+  type ConnectorDef,
+  type PickerOption,
+} from "@/connectors/define";
 import { CONNECTORS } from "@/connectors/registry";
 import { isTextGenerationModel } from "@/lib/ai/model-list";
 import * as engine from "@/lib/engine-client";
@@ -179,11 +184,11 @@ async function withConnectionSecret<T>(
  * everything the key can reach — offering `text-embedding-3-small` in the Model field is a run-time
  * 400 nobody could have typed themselves back when it was a text box (`lib/ai/model-list.ts`).
  */
-export function modelOptions(meta: Record<string, unknown>): { id: string; label: string }[] {
+export function modelOptions(meta: Record<string, unknown>): PickerOption[] {
   if (!Array.isArray(meta.models)) return [];
 
   const seen = new Set<string>();
-  const options: { id: string; label: string }[] = [];
+  const options: PickerOption[] = [];
   for (const entry of meta.models) {
     if (typeof entry !== "string") continue;
     const id = entry.trim();
@@ -202,6 +207,12 @@ export function modelOptions(meta: Record<string, unknown>): { id: string; label
  * labels come back, which is the whole reason the picker is a server round-trip rather than a
  * client fetch with a token.
  *
+ * A connector's options are returned exactly as it built them, extra keys and all: Airtable's and
+ * Notion's column pickers describe each column with a `type` and, for an enum-like one, its
+ * `choices`, so the panel can offer the right values for a column the user just chose. Nothing is
+ * filtered out here because nothing may be put in that is not already a public property of a remote
+ * object — a `PickerOption` is a description, never a credential (CLAUDE.md rule 1).
+ *
  * `models` is the exception that needs no call at all: every AI connector's `test()` already wrote
  * the provider's list into `meta.models` (CLAUDE.md rule 11), so the AI nodes' model dropdown is
  * answered from the stored row. That is why an AI connector implements no `pick` — and why one
@@ -218,7 +229,7 @@ export async function pickConnectionOptions(args: {
   connectionId: string;
   orgId: string;
   kind: string;
-}): Promise<{ id: string; label: string }[]> {
+}): Promise<PickerOption[]> {
   const row = await connectionInOrg(args.connectionId, args.orgId);
   const def = connectorFor(row.provider);
   const meta = (row.meta ?? {}) as Record<string, unknown>;
@@ -289,7 +300,11 @@ export async function createConnectionFromInput(
     );
   }
 
-  const result = await def.test(input.secret);
+  // Cleaned once, before the test *and* before the seal: a key tested with its trailing newline
+  // trimmed but stored with it intact would pass here and then 401 on every run.
+  const normalized = normalizeSecretInput(def, input.secret);
+
+  const result = await def.test(normalized);
   if (!result.ok) throw new ConnectionRequestError(400, "test_failed", result.error);
 
   const label = input.label?.trim() || result.label;
@@ -305,7 +320,7 @@ export async function createConnectionFromInput(
   });
 
   try {
-    let secret = input.secret;
+    let secret = normalized;
     let meta = result.meta;
 
     // Some connectors can only finish once the row has an id: registering a webhook whose URL

@@ -8,7 +8,15 @@ export const googleConnector = defineConnector({
   category: "ai",
   kind: "apiKey",
   requiresFeature: null,
-  fields: [{ name: "apiKey", label: "API key", kind: "secret", placeholder: "AIza…" }],
+  fields: [
+    {
+      name: "apiKey",
+      label: "API key",
+      kind: "secret",
+      placeholder: "AIza…",
+      help: "A Gemini API key from aistudio.google.com → Get API key, starting AIza. Not a Google Cloud service-account JSON or an OAuth token.",
+    },
+  ],
   docsUrl: "https://aistudio.google.com/apikey",
   icon: "Sparkles",
   test: (secret) => validateAndDiscover("google", secret.apiKey),

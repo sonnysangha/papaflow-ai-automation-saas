@@ -121,12 +121,56 @@ describe("api.engine", () => {
       graph,
       version: 2,
       name: "Flow",
+      // Read by `fireSchedule`, which is the one trigger with nowhere else to ask.
+      status: "draft",
       webhookSecret: expect.stringMatching(/^[A-Za-z0-9_-]{32}$/),
     });
 
     expect(
       await t.query(api.engine.getWorkflowForRun, { secret: SECRET, workflowId, orgId: "org_2" }),
     ).toBeNull();
+  });
+
+  test("the public trigger surface reports publish state, and lists published workflows only", async () => {
+    const { t, orgA, workflowId } = await setup();
+    await orgA.mutation(api.workflows.saveGraph, {
+      id: workflowId,
+      expectedVersion: 1,
+      graph: {
+        nodes: [
+          { id: "n1", data: { nodeType: "webhook.trigger", inputs: {} } },
+          { id: "n2", data: { nodeType: "form.trigger", inputs: { title: "Contact us" } } },
+          { id: "n3", data: { nodeType: "telegram.message", inputs: { connectionId: "conn_1" } } },
+        ],
+        edges: [],
+        triggerId: "n1",
+      },
+    });
+
+    const publicArgs = { secret: SECRET, workflowId };
+    const byTrigger = {
+      secret: SECRET,
+      orgId: ORG,
+      triggerType: "telegram.message",
+      connectionId: "conn_1",
+    };
+
+    // A draft: the webhook and form routes are told so and refuse with a message, while an inbound
+    // delivery — which has nobody to explain a refusal to — simply finds nothing listening.
+    expect((await t.query(api.engine.getWorkflowPublic, publicArgs))?.status).toBe("draft");
+    expect((await t.query(api.engine.getPublicForm, publicArgs))?.status).toBe("draft");
+    expect(await t.query(api.engine.listWorkflowsByTrigger, byTrigger)).toEqual([]);
+
+    await orgA.mutation(api.workflows.setStatus, { id: workflowId, status: "active" });
+
+    expect((await t.query(api.engine.getWorkflowPublic, publicArgs))?.status).toBe("active");
+    expect((await t.query(api.engine.getPublicForm, publicArgs))?.status).toBe("active");
+    expect(await t.query(api.engine.listWorkflowsByTrigger, byTrigger)).toEqual([
+      { _id: workflowId, orgId: ORG, name: "Flow" },
+    ]);
+
+    await orgA.mutation(api.workflows.setStatus, { id: workflowId, status: "paused" });
+    expect(await t.query(api.engine.listWorkflowsByTrigger, byTrigger)).toEqual([]);
   });
 
   test("createExecution snapshots the plan and counts one run for the month", async () => {

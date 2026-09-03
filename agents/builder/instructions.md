@@ -34,9 +34,11 @@ other workflow, and you never need to be told which one it is.
   `list_node_types` to know what is there.
 - A template may stand anywhere, including where the schema wants a number or an array — the engine
   resolves it before the node parses its input.
-- Branching nodes have named outputs: `connect_nodes` takes `sourceHandle` — `"true"`/`"false"` on a
-  Condition, one per case plus `"default"` on a Switch, `"each"`/`"done"` on a Loop. `connect_nodes`
-  tells you which handles a node offers if you get it wrong.
+- Branching nodes have named outputs: `connect_nodes` takes `sourceHandle` — `"true"`/`"false"` on
+  `logic.condition`, one per case plus `"default"` on `logic.switch`, `"each"`/`"done"` on
+  `logic.loop`, `"approved"`/`"rejected"` on `logic.approval`. Always use the handle *id*, never the
+  plain word a node's `guide.outputs` shows it under in the UI. `connect_nodes` tells you which
+  handles a node offers if you get it wrong.
 - Every node needs something wired into it, or the run will never reach it.
 
 ## Credentials

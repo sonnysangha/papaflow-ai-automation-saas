@@ -5,6 +5,7 @@ import {
   connectorCatalogue,
   hintFor,
 } from "@/connectors/registry";
+import { slackAppManifest } from "@/connectors/slack";
 import { featuresForPlan } from "@/lib/plans";
 
 /** The four connectors Phase 11 put behind `pro_connectors`. Sorted, for direct comparison. */
@@ -34,6 +35,11 @@ const CATALOGUE_KEYS = [
   "provider",
   "requiresFeature",
 ];
+
+/** Only a connector with a `setup` block carries the extra key, and only Slack has one. */
+const SETUP_PROVIDERS = ["slack"];
+
+const CATALOGUE_KEYS_WITH_SETUP = [...CATALOGUE_KEYS, "setup"].sort();
 
 function findFunctions(value: unknown, path = "$"): string[] {
   if (typeof value === "function") return [path];
@@ -91,9 +97,35 @@ describe("connector registry", () => {
     expect(JSON.parse(JSON.stringify(catalogue))).toEqual(catalogue);
 
     for (const entry of catalogue) {
-      expect(Object.keys(entry).sort()).toEqual(CATALOGUE_KEYS);
+      expect(Object.keys(entry).sort()).toEqual(
+        SETUP_PROVIDERS.includes(entry.provider) ? CATALOGUE_KEYS_WITH_SETUP : CATALOGUE_KEYS,
+      );
       if (entry.category === "ai") expect(entry.fields[0].name).toBe("apiKey");
     }
+  });
+
+  it("carries Slack's setup steps and app manifest, and nobody else's", () => {
+    const catalogue = connectorCatalogue(featuresForPlan("pro"));
+    const slack = catalogue.find((entry) => entry.provider === "slack");
+
+    expect(slack?.setup?.title).toBeTruthy();
+    expect(slack?.setup?.steps.length).toBeGreaterThan(0);
+    expect(slack?.setup?.manifest).toEqual(slackAppManifest());
+
+    for (const entry of catalogue.filter((e) => !SETUP_PROVIDERS.includes(e.provider))) {
+      expect(entry.setup).toBeUndefined();
+    }
+  });
+
+  it("copies the setup block so the catalogue cannot mutate the connector", () => {
+    const slack = connectorCatalogue([]).find((entry) => entry.provider === "slack");
+    slack!.setup!.steps[0] = "tampered";
+    (slack!.setup!.manifest as { display_information: { name: string } }).display_information.name =
+      "tampered";
+
+    const fresh = connectorCatalogue([]).find((entry) => entry.provider === "slack");
+    expect(fresh?.setup?.steps[0]).not.toBe("tampered");
+    expect(fresh?.setup?.manifest).toEqual(slackAppManifest());
   });
 
   it("dims exactly the Pro connectors for an org with no paid features", () => {

@@ -26,7 +26,10 @@ const items = z
     (value) => (typeof value === "string" ? value : JSON.stringify(value ?? null)),
     z.string(),
   )
-  .describe("A template that resolves to an array, e.g. {{ http_request_2.body }}")
+  .describe(
+    "Point at a list, e.g. {{ http_request_1.body.items }} — the nodes wired to “each item” run " +
+      "once per entry, then “when done” continues.",
+  )
   .meta({ label: "List to loop over" });
 
 /**
@@ -71,10 +74,16 @@ export function loopItems(value: unknown): unknown[] {
  */
 export const loopNode = defineNode({
   type: LOOP_TYPE,
-  name: "Loop",
-  description:
-    "Run the nodes wired to each once per item, then continue from done. One chain after each.",
+  name: "For each item",
+  description: "Run the same steps once for every item in a list.",
   category: "logic",
+  guide: {
+    summary:
+      "Take a list and work through it one entry at a time. The nodes wired to “each item” run " +
+      "once per entry and read the current one as {{ $item }}; when the list runs out the run " +
+      "carries on from “when done”, where {{ <this node's key>.results }} holds every answer.",
+    outputs: { [EACH_HANDLE]: "each item", [DONE_HANDLE]: "when done" },
+  },
   icon: "Repeat",
   credential: null,
   requiresFeature: null,

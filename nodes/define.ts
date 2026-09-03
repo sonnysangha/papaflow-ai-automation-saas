@@ -47,12 +47,38 @@ export interface RunContext<I> {
   stepId?: string;
 }
 
+/**
+ * The plain-language explainer a node carries for the people configuring it.
+ *
+ * A node's `description` is one line in a list; this is the paragraph you want in front of you once
+ * you have dropped the node on the canvas and the form is asking you questions. The config panel
+ * renders it above the fields, and the Builder's catalogue may pass it through as read-only text.
+ *
+ * `outputs` is the other half of the same problem. A branching node's handle ids are the names the
+ * *engine* uses — `true`, `each`, `default` — and they are stored in every saved graph, so they can
+ * never change. This maps each one to the words a reader should see instead: the canvas draws the
+ * handle under them, the edge leaving it is labelled with them, and the id stays underneath as the
+ * thing templates and stored edges address. A handle with no entry is shown as its own id, which is
+ * what a Switch case wants — the case string the user typed is already the right label.
+ */
+export type NodeGuide = {
+  /** Two or three short sentences, written for someone who has never used an automation tool. */
+  summary: string;
+  /** Handle id → the words it is shown under, e.g. `{ true: "yes", false: "no" }`. */
+  outputs?: Record<string, string>;
+};
+
 export interface NodeDef<I extends z.ZodType = z.ZodType, O extends z.ZodType = z.ZodType> {
   /** `namespace.name`, e.g. `http.request`. Stable: graphs store it. */
   type: string;
   name: string;
   description: string;
   category: NodeCategory;
+  /**
+   * How this node works, in plain words, for the config panel. Optional: a node whose one line
+   * says everything (Send email, HTTP request) does not need a paragraph.
+   */
+  guide?: NodeGuide;
   /** lucide icon name, resolved by the sidebar/canvas at render time. */
   icon: string;
   /**

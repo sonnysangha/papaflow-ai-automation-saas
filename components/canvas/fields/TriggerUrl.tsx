@@ -64,6 +64,9 @@ export function TriggerUrl({ id, workflowId, webhookSecret }: TriggerUrlProps) {
         GET or POST to this URL to start a run. A JSON body arrives as{" "}
         <code className="font-mono">{"{{ trigger.body }}"}</code>.
       </p>
+      <p className="text-xs text-muted-foreground">
+        On localhost the URL works from your own machine; publish the workflow so calls start runs.
+      </p>
     </div>
   );
 }

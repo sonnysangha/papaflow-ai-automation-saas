@@ -26,7 +26,7 @@ function ms(raw: unknown, now = NOW): number {
 describe("logic.wait", () => {
   it("is a logic node with no credential and no feature gate", () => {
     expect(waitNode.type).toBe("logic.wait");
-    expect(waitNode.name).toBe("Wait");
+    expect(waitNode.name).toBe("Pause");
     expect(waitNode.category).toBe("logic");
     expect(waitNode.icon).toBe("Clock");
     expect(waitNode.credential).toBeNull();
@@ -99,7 +99,7 @@ describe("logic.wait", () => {
 describe("logic.waitForWebhook", () => {
   it("is a logic node whose configuration is the URL, not a form", () => {
     expect(waitForWebhookNode.type).toBe("logic.waitForWebhook");
-    expect(waitForWebhookNode.name).toBe("Wait for webhook");
+    expect(waitForWebhookNode.name).toBe("Wait for a callback");
     expect(waitForWebhookNode.category).toBe("logic");
     expect(waitForWebhookNode.icon).toBe("Webhook");
     expect(waitForWebhookNode.credential).toBeNull();

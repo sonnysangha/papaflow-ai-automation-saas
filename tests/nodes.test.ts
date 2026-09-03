@@ -326,25 +326,91 @@ describe("email.send", () => {
     expect((error as ConnectorError).message).toContain("mail.acme.com");
   });
 
-  it("refuses a connection with no verified domain, and one whose domains were never recorded", async () => {
-    const inputs = emailSend.inputs.parse({
-      connectionId: "conn_1",
-      to: "a@example.com",
-      subject: "Hi",
-      text: "There",
-      from: "hello@mail.acme.com",
-    });
-
-    const unverified = await caught(
-      emailSend.run(ctx(inputs, resendConnection([{ name: "mail.acme.com", status: "pending" }]))),
+  it("falls back to Resend's sandbox sender when the account has verified nothing yet", async () => {
+    // A brand-new Resend account: a working key, no domain. This used to refuse outright, which
+    // made "connect Resend, send an email" impossible on a test account.
+    const fetchMock = mockFetch(async () =>
+      new Response('{"id":"msg_sandbox"}', {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
     );
-    expect((unverified as ConnectorError).message).toMatch(/no verified domain/);
 
-    // An older row, connected before `meta.domains` existed: re-testing it fills them in.
+    const out = await emailSend.run(
+      ctx(
+        emailSend.inputs.parse({
+          connectionId: "conn_1",
+          to: "owner@example.com",
+          subject: "Hi",
+          text: "There",
+          // Ignored: this address is on no verified domain, so sending it would be a certain 400.
+          from: "hello@mail.acme.com",
+        }),
+        resendConnection([{ name: "mail.acme.com", status: "pending" }]),
+      ),
+    );
+
+    expect(out).toEqual({ id: "msg_sandbox" });
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(String(init?.body)) as { from: string };
+    expect(body.from).toBe("PapaFlow <onboarding@resend.dev>");
+    // The account's own key, not the platform's.
+    expect(headersOf(init).Authorization).toBe("Bearer re_credential_key");
+  });
+
+  it("repeats Resend's own words when the sandbox sender may not reach that recipient", async () => {
+    const message =
+      "You can only send testing emails to your own email address (owner@example.com). To send emails to other recipients, please verify a domain at resend.com/domains, and change the `from` address to an email using this domain.";
+    mockFetch(async () =>
+      new Response(JSON.stringify({ statusCode: 403, message, name: "validation_error" }), {
+        status: 403,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    const error = await caught(
+      emailSend.run(
+        ctx(
+          emailSend.inputs.parse({
+            connectionId: "conn_1",
+            to: "someone.else@example.com",
+            subject: "Hi",
+            text: "There",
+          }),
+          resendConnection([{ name: "mail.acme.com", status: "pending" }]),
+        ),
+      ),
+    );
+
+    expect(error).toBeInstanceOf(ConnectorError);
+    expect((error as ConnectorError).status).toBe(403);
+    expect((error as ConnectorError).message).toBe(
+      `${message} Verify a domain in Resend to send to anyone.`,
+    );
+  });
+
+  it("still asks for a re-test when the connection never recorded its domains", async () => {
+    // An older row, connected before `meta.domains` existed: re-testing it fills them in. Without
+    // them there is nothing to decide sandbox-or-verified from, so this is not a send.
+    const fetchMock = mockFetch(async () => new Response("{}", { status: 200 }));
+
     const unknown = await caught(
-      emailSend.run(ctx(inputs, { provider: "resend", kind: "apiKey", apiKey: "re_credential_key" })),
+      emailSend.run(
+        ctx(
+          emailSend.inputs.parse({
+            connectionId: "conn_1",
+            to: "a@example.com",
+            subject: "Hi",
+            text: "There",
+            from: "hello@mail.acme.com",
+          }),
+          { provider: "resend", kind: "apiKey", apiKey: "re_credential_key" },
+        ),
+      ),
     );
+
     expect((unknown as ConnectorError).message).toMatch(/Re-test/);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("throws a ConnectorError with the response text on a non-2xx", async () => {

@@ -14,6 +14,7 @@ import {
   sealedValidator,
   stepMarkArgs,
   stepStatusValidator,
+  workflowStatusValidator,
 } from "./lib/validators";
 import schema from "./schema";
 import { scheduleRow } from "./schedules";
@@ -44,15 +45,24 @@ type WorkflowForRun = {
   graph: Doc<"workflows">["graph"];
   version: number;
   name: string;
+  status: Doc<"workflows">["status"];
   webhookSecret: string;
 } | null;
 
-/** What a run needs to interpret a workflow. `graph` and `version` are pinned for the whole run. */
+/**
+ * What a run needs to interpret a workflow. `graph` and `version` are pinned for the whole run.
+ *
+ * `status` is here for the scheduler, which is the one trigger with nowhere else to ask: a webhook
+ * or a form route already holds the workflow, and an inbound event never sees an unpublished one
+ * (`workflowsByTrigger` filters them out). It is deliberately *not* consulted by `runGraph` — a run
+ * that has started runs to the end, whatever happens to the switch while it is in flight.
+ */
 const workflowForRunResult = v.union(
   v.object({
     graph: graphValidator,
     version: v.number(),
     name: v.string(),
+    status: workflowStatusValidator,
     webhookSecret: v.string(),
   }),
   v.null(),
@@ -73,6 +83,7 @@ export const workflowForRun = internalQuery({
       graph: workflow.graph,
       version: workflow.version,
       name: workflow.name,
+      status: workflow.status,
       webhookSecret: workflow.webhookSecret,
     };
   },
@@ -491,6 +502,8 @@ function hasTriggerNode(
 const workflowPublicResult = v.union(
   v.object({
     orgId: v.string(),
+    /** `active` or the delivery is refused: an unpublished workflow has no live triggers. */
+    status: workflowStatusValidator,
     webhookSecret: v.string(),
     hasTrigger: v.object({ webhook: v.boolean(), form: v.boolean() }),
   }),
@@ -501,8 +514,15 @@ const workflowsByTriggerResult = v.array(
   v.object({ _id: v.id("workflows"), orgId: v.string(), name: v.string() }),
 );
 
-/** The form trigger's own `inputs` (title, fields, submitLabel) plus the workflow's name. */
-const publicFormResult = v.union(v.object({ name: v.string(), form: v.any() }), v.null());
+/**
+ * The form trigger's own `inputs` (title, fields, submitLabel) plus the workflow's name and whether
+ * it is published — the page renders a draft form so its owner can see their work, with a banner
+ * saying the submit button goes nowhere yet.
+ */
+const publicFormResult = v.union(
+  v.object({ name: v.string(), form: v.any(), status: workflowStatusValidator }),
+  v.null(),
+);
 
 /** Internal half of `getWorkflowPublic`. */
 export const workflowPublic = internalQuery({
@@ -514,6 +534,7 @@ export const workflowPublic = internalQuery({
 
     return {
       orgId: workflow.orgId,
+      status: workflow.status,
       webhookSecret: workflow.webhookSecret,
       hasTrigger: {
         webhook: hasTriggerNode(workflow, WEBHOOK_TRIGGER),
@@ -541,6 +562,9 @@ export const workflowsByTrigger = internalQuery({
             .collect();
 
     return workflows
+      // Published only: an inbound delivery has no user to explain a refusal to, so a draft is
+      // simply not listening. The provider still gets its 200 from the route either way.
+      .filter((workflow) => workflow.status === "active")
       .filter((workflow) => hasTriggerNode(workflow, triggerType, connectionId))
       .map((workflow) => ({ _id: workflow._id, orgId: workflow.orgId, name: workflow.name }));
   },
@@ -562,6 +586,7 @@ export const publicForm = internalQuery({
     const inputs = node.data?.inputs;
     return {
       name: workflow.name,
+      status: workflow.status,
       form: typeof inputs === "object" && inputs !== null ? inputs : {},
     };
   },

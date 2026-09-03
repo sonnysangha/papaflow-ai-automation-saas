@@ -38,6 +38,7 @@ import { EdgeWithLabel, LABELLED_EDGE_TYPE, type LabelledEdgeData } from "./Edge
 import {
   DEFAULT_HANDLE,
   fromStoredGraph,
+  handleLabel,
   nextKey,
   NODE_DRAG_MIME,
   PAPAFLOW_NODE_TYPE,
@@ -72,7 +73,14 @@ type CanvasProps = {
   runByNode: Record<string, RunNodeState>;
   /** The latest run's step rows, which the config panel reads real input and output data off. */
   steps: readonly RunStepRow[];
+  /**
+   * "Select this node", asked for from outside — the run timeline clicking a bar. The nonce is
+   * what makes asking twice for the same node a second request rather than a no-op.
+   */
+  focusNode?: { nodeId: string; nonce: number } | null;
   onSaveStateChange: (state: SaveState) => void;
+  /** Reports which single node is selected, so a panel outside the canvas can follow along. */
+  onSelectedNodeChange?: (nodeId: string | null) => void;
 };
 
 /** The `ConvexError({ code, ... })` payload, or null for a transport or unexpected error. */
@@ -88,9 +96,16 @@ function convexErrorData(error: unknown): Record<string, unknown> | null {
  * `workflows.saveGraph` with the version we last saw, so a Builder agent or a second tab
  * writing at the same time is detected instead of silently overwritten.
  */
-export function Canvas({ workflow, runByNode, steps, onSaveStateChange }: CanvasProps) {
+export function Canvas({
+  workflow,
+  runByNode,
+  steps,
+  focusNode,
+  onSaveStateChange,
+  onSelectedNodeChange,
+}: CanvasProps) {
   const saveGraph = useMutation(api.workflows.saveGraph);
-  const { screenToFlowPosition, setViewport } = useReactFlow<WorkflowNodeType, Edge>();
+  const { fitView, screenToFlowPosition, setViewport } = useReactFlow<WorkflowNodeType, Edge>();
 
   // Seeded once. `serialized` is the normalised form of what the server holds, so the first
   // render never counts as an edit and selection or drag noise never triggers a save.
@@ -296,6 +311,35 @@ export function Canvas({ workflow, runByNode, steps, onSaveStateChange }: Canvas
     );
   }, [setNodes]);
 
+  // Selection out. An effect rather than a call inside the memo above, because reporting is a
+  // side effect and `selected` is derived state.
+  useEffect(() => {
+    onSelectedNodeChange?.(selected?.id ?? null);
+  }, [onSelectedNodeChange, selected]);
+
+  // …and selection in: the run timeline clicking a bar. Selecting is what opens the config panel,
+  // and `fitView` on that one node is what makes the click land somewhere you can see when the bar
+  // belongs to a node three screens to the right. `maxZoom` keeps a lone node from filling the
+  // canvas at 4×. Keyed on the request, so re-clicking the same bar re-centres.
+  useEffect(() => {
+    if (!focusNode) return;
+    const { nodeId } = focusNode;
+    setNodes((current) => {
+      if (!current.some((node) => node.id === nodeId)) return current;
+      // The same array back when nothing moved. `map` would hand out a fresh one every time, which
+      // re-renders, which re-runs this effect — and the debounced save would wake for a selection.
+      let changed = false;
+      const next = current.map((node) => {
+        const selected = node.id === nodeId;
+        if (node.selected === selected) return node;
+        changed = true;
+        return { ...node, selected };
+      });
+      return changed ? next : current;
+    });
+    void fitView({ nodes: [{ id: nodeId }], padding: 0.6, maxZoom: 1.2, duration: 250 });
+  }, [fitView, focusNode, setNodes]);
+
   /**
    * Branch feedback: once a node has finished, the edge leaving the handle its step recorded is
    * drawn in the primary colour and the rest are dimmed, which is what makes an untaken Condition
@@ -304,18 +348,31 @@ export function Canvas({ workflow, runByNode, steps, onSaveStateChange }: Canvas
    */
   const styledEdges = useMemo(() => {
     // One lookup per edge instead of a scan per edge, and the branch names come from the same
-    // `sourceHandles()` the node itself draws its handles from.
-    const branching = new Map<string, boolean>();
+    // `sourceHandles()` the node itself draws its handles from. The value carries the node type and
+    // its handles, because placing a branch label takes all three: which node, which of its
+    // handles, and how many there are — the last two are what keep two labels off each other.
+    const branching = new Map<string, { nodeType: string; handles: string[] }>();
     for (const node of nodes) {
-      branching.set(node.id, sourceHandles(node.data.nodeType, node.data.inputs).length > 1);
+      const handles = sourceHandles(node.data.nodeType, node.data.inputs);
+      if (handles.length > 1) branching.set(node.id, { nodeType: node.data.nodeType, handles });
     }
 
     return edges.map((edge) => {
       const handle = edge.sourceHandle ?? DEFAULT_HANDLE;
       // Only a node with more than one way out has anything to say: "out" would be noise.
-      const labelled = branching.get(edge.source) === true;
-      const typed: Edge = labelled
-        ? { ...edge, type: LABELLED_EDGE_TYPE, data: { label: handle } satisfies LabelledEdgeData }
+      const branch = branching.get(edge.source);
+      // The plain word rather than the handle id: the wire leaving a Condition reads "no", not
+      // "false". The id is still what the edge is stored and matched by — only the chip changes.
+      const typed: Edge = branch
+        ? {
+            ...edge,
+            type: LABELLED_EDGE_TYPE,
+            data: {
+              label: handleLabel(branch.nodeType, handle),
+              handleIndex: Math.max(branch.handles.indexOf(handle), 0),
+              handleCount: branch.handles.length,
+            } satisfies LabelledEdgeData,
+          }
         : edge;
 
       const source = runByNode[edge.source];

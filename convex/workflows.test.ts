@@ -196,6 +196,39 @@ describe("api.workflows", () => {
     });
   });
 
+  test("setStatus publishes and unpublishes without touching the graph version", async () => {
+    const { orgA } = setup();
+    const id = await orgA.mutation(api.workflows.create, { name: "Contact form" });
+    expect((await orgA.query(api.workflows.get, { id })).status).toBe("draft");
+
+    await orgA.mutation(api.workflows.setStatus, { id, status: "active" });
+    const published = await orgA.query(api.workflows.get, { id });
+    expect(published.status).toBe("active");
+    // Publishing is not a graph edit: no canvas has a conflict to resolve.
+    expect(published.version).toBe(1);
+    expect(published.updatedAt).toBeGreaterThan(0);
+
+    // "Unpublish" is `paused`, never back to `draft`: the list still shows it was published once.
+    await orgA.mutation(api.workflows.setStatus, { id, status: "paused" });
+    expect((await orgA.query(api.workflows.get, { id })).status).toBe("paused");
+
+    // And the summary the list renders reports it.
+    const [summary] = await orgA.query(api.workflows.list, {});
+    expect(summary.status).toBe("paused");
+  });
+
+  test("a second organisation cannot publish org_1's workflow", async () => {
+    const { orgA, orgB } = setup();
+    const id = await orgA.mutation(api.workflows.create, { name: "Private" });
+
+    expect(
+      await convexErrorData(orgB.mutation(api.workflows.setStatus, { id, status: "active" })),
+    ).toEqual({ code: "not_found" });
+
+    // It is still a draft, so none of its triggers are listening.
+    expect((await orgA.query(api.workflows.get, { id })).status).toBe("draft");
+  });
+
   test("a second organisation cannot read or write org_1's workflow", async () => {
     const { orgA, orgB } = setup();
     const id = await orgA.mutation(api.workflows.create, { name: "Private" });

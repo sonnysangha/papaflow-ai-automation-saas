@@ -194,6 +194,32 @@ export const saveGraph = mutation({
   },
 });
 
+/**
+ * Publishes a workflow, or takes it back off the air.
+ *
+ * This is the switch every trigger reads: a webhook delivery, a form submission, an inbound chat
+ * message and a scheduled tick all refuse unless `status` is `active`. Manual "Run" from the canvas
+ * deliberately does not — testing a workflow is how you decide it is ready to publish.
+ *
+ * `draft` is not a destination: it is where `create` starts a workflow and the one state it can
+ * never be put back into, so "unpublish" means `paused` and the list can say which workflows were
+ * published once. Like `rename`, this is not a graph edit and does not bump `version`.
+ */
+export const setStatus = mutation({
+  args: {
+    id: v.id("workflows"),
+    status: v.union(v.literal("active"), v.literal("paused")),
+  },
+  returns: v.null(),
+  handler: async (ctx, { id, status }) => {
+    const { orgId } = await requireOrg(ctx);
+    await workflowInOrg(ctx, id, orgId);
+
+    await ctx.db.patch(id, { status, updatedAt: Date.now() });
+    return null;
+  },
+});
+
 /** Renames a workflow. Does not touch the graph version — only `saveGraph` moves that. */
 export const rename = mutation({
   args: { id: v.id("workflows"), name: v.string() },

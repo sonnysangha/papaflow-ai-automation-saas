@@ -13,6 +13,17 @@ export const RESEND_API = "https://api.resend.com";
 /** Resend blocks requests with no User-Agent. Exported so the node sends the same one. */
 export const RESEND_USER_AGENT = "papaflow/0.1";
 
+/**
+ * What a Resend account with no verified domain can still do, in the one sentence the connection
+ * list, the Add-connection dialog and `email.send`'s own error all use.
+ *
+ * A brand-new Resend account has a key and no domain, which is exactly the state somebody is in
+ * five minutes into a demo. `email.send` sends from Resend's sandbox address rather than refusing,
+ * and Resend then allows exactly one recipient: the address the account was signed up with.
+ */
+export const RESEND_SANDBOX_NOTE =
+  "Without a verified domain, emails go out from onboarding@resend.dev and can only reach the Resend account owner's address.";
+
 const TIMEOUT_MS = 15_000;
 
 /** A domain as the connection stores it: the name to send from and whether it is usable yet. */
@@ -47,7 +58,7 @@ export const resendConnector = defineConnector({
       label: "API key",
       kind: "secret",
       placeholder: "re_…",
-      help: "Sending access is enough",
+      help: `Sending access is enough. ${RESEND_SANDBOX_NOTE}`,
     },
   ],
   docsUrl: "https://resend.com/api-keys",

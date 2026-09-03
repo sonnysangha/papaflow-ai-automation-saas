@@ -12,9 +12,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ANY_CREDENTIAL, CHAT_CREDENTIAL, CHAT_PROVIDERS, isTokenKind } from "@/connectors/define";
+import { CHAT_CREDENTIAL } from "@/connectors/define";
 import { CONNECTORS } from "@/connectors/registry";
 import { api } from "@/convex/_generated/api";
+import { acceptsConnection } from "@/lib/connection-match";
 
 import { AddConnectionDialog } from "./AddConnectionDialog";
 
@@ -26,6 +27,10 @@ import { AddConnectionDialog } from "./AddConnectionDialog";
  * single token (the HTTP node sends it as a header), anything else names one provider exactly.
  * Only connection ids cross into `node.data.inputs` — the secret is opened inside the step
  * (CLAUDE.md rule 1).
+ *
+ * The matching rule itself lives in `lib/connection-match.ts`, because the node palette dims a node
+ * by the same question ("does this org hold anything this node accepts?") and the two answering it
+ * differently would be a node you can drag but not configure.
  */
 export type ConnectionPickerProps = {
   id?: string;
@@ -34,39 +39,6 @@ export type ConnectionPickerProps = {
   value: string | undefined;
   onChange: (connectionId: string | undefined) => void;
 };
-
-/** The providers a node with this `credential` accepts. */
-function providersFor(credential: string): string[] {
-  // `chat` is not a category and not a prefix: it is the three chat apps that can render buttons a
-  // person presses back. A Discord *webhook* and a Teams Workflows URL post messages and can never
-  // answer one, so an Approval node must not offer them.
-  if (credential === CHAT_CREDENTIAL) return [...CHAT_PROVIDERS];
-  if (credential === "ai") {
-    return Object.values(CONNECTORS)
-      .filter((definition) => definition.category === "ai")
-      .map((definition) => definition.provider);
-  }
-  if (CONNECTORS[credential]) return [credential];
-  // A node may name a family rather than one provider: `discord` covers `discord-webhook` and
-  // `discord-bot`, which are two ways of connecting the same app and post the same message.
-  return Object.keys(CONNECTORS).filter((provider) => provider.startsWith(`${credential}-`));
-}
-
-/**
- * Which of the org's connections this node may be pointed at.
- *
- * `"any"` is not a provider and cannot be answered by provider at all: the HTTP node sends
- * whatever single token a connection holds, so every API key and bot token qualifies — and a
- * webhook URL or a signing secret, which are not tokens to send, does not.
- */
-function acceptsConnection(
-  credential: string,
-): (connection: { provider: string; kind: string }) => boolean {
-  if (credential === ANY_CREDENTIAL) return (connection) => isTokenKind(connection.kind);
-
-  const providers = new Set(providersFor(credential));
-  return (connection) => providers.has(connection.provider);
-}
 
 export function ConnectionPicker({ id, credential, value, onChange }: ConnectionPickerProps) {
   const connections = useQuery(api.connections.list);

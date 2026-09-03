@@ -1,6 +1,7 @@
+import { Suspense } from "react";
 import type { Metadata } from "next";
 
-import { AddConnectionDialog } from "@/components/connections/AddConnectionDialog";
+import { AddConnectionButton } from "@/components/connections/AddConnectionButton";
 import { ConnectionList } from "@/components/connections/ConnectionList";
 
 export const metadata: Metadata = {
@@ -22,7 +23,12 @@ export default function ConnectionsPage() {
             before it is stored and only ever opened mid-run.
           </p>
         </div>
-        <AddConnectionDialog />
+        {/* `useSearchParams` inside, for the `?add=` link the node palette sends people here with
+            — so the button needs a boundary of its own rather than making the page bail out to the
+            client. */}
+        <Suspense fallback={null}>
+          <AddConnectionButton />
+        </Suspense>
       </div>
 
       <ConnectionList />

@@ -8,6 +8,91 @@
 // it now saves a second trip to the app's settings page.
 import { defineConnector, TARGETS_PICKER } from "./define";
 
+/**
+ * Every bot scope this app's Slack calls need, and nothing else.
+ *
+ * `chat:write` posts (`nodes/actions/slack-post.ts` and the Approval node's `chat.postMessage`);
+ * `chat:write.public` is what lets it post to a public channel nobody has invited it to — Slack
+ * documents that it "must also request chat:write". The two read scopes are the channel picker:
+ * `conversations.list?types=public_channel,private_channel` needs `channels:read` for the public
+ * half and `groups:read` for the private half, and a token missing the second answers
+ * `missing_scope` for the whole call rather than a shorter list.
+ *
+ * Interactivity needs no scope at all: `POST /api/events/slack/:connectionId` is verified with the
+ * signing secret, not with a token.
+ */
+export const SLACK_BOT_SCOPES: readonly string[] = [
+  "chat:write",
+  "chat:write.public",
+  "channels:read",
+  "groups:read",
+];
+
+/** Slack's own limits on the two names in a manifest (docs.slack.dev/reference/app-manifest). */
+const MAX_APP_NAME = 35;
+const MAX_BOT_NAME = 80;
+
+/** The app name the manifest carries unless the user asks for another. */
+const DEFAULT_APP_NAME = "PapaFlow";
+
+/**
+ * What `settings.interactivity.request_url` says until the connection exists.
+ *
+ * It cannot say anything truer: the real URL ends in the connection's own id
+ * (`/api/events/slack/:connectionId`, one signing secret per connection), and there is no
+ * connection until this manifest has produced a token to paste. So the manifest ships a valid
+ * HTTPS URL — Slack refuses a malformed one, and `example.com` is reserved for exactly this
+ * (RFC 2606) — and `setup.steps` tells the user to replace it with the URL their connection row
+ * shows once it is saved.
+ */
+export const SLACK_INTERACTIVITY_PLACEHOLDER =
+  "https://papaflow.example.com/api/events/slack/CONNECTION_ID";
+
+/** `display_name` allows letters, digits, `-`, `_` and `.` — a space in an app name is not one. */
+function botDisplayName(appName: string): string {
+  const cleaned = appName.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  return (cleaned || DEFAULT_APP_NAME).slice(0, MAX_BOT_NAME);
+}
+
+/**
+ * The Slack app manifest a user pastes into "Create New App → From a manifest".
+ *
+ * It exists because every field of a Slack app that this connector depends on is easy to get
+ * wrong by hand and invisible when you do: a missing `groups:read` makes the channel picker fail
+ * only for workspaces with private channels, and interactivity left off makes Approval buttons do
+ * nothing at all. One paste sets all of them.
+ *
+ * Plain data, no secrets, no per-org values — it is generated once for the connector catalogue and
+ * crosses to the browser with it. `token_rotation_enabled` is spelled out as `false` on purpose:
+ * Slack cannot turn rotation back off once it is on, and a rotating token would expire twelve
+ * hours after the user pasted it.
+ */
+export function slackAppManifest(appName: string = DEFAULT_APP_NAME): Record<string, unknown> {
+  const name = (appName.trim() || DEFAULT_APP_NAME).slice(0, MAX_APP_NAME);
+
+  return {
+    display_information: {
+      name,
+      description: "Runs your PapaFlow workflows: posts messages and asks for approvals.",
+    },
+    features: {
+      bot_user: { display_name: botDisplayName(name), always_online: true },
+    },
+    oauth_config: {
+      scopes: { bot: [...SLACK_BOT_SCOPES] },
+    },
+    settings: {
+      interactivity: {
+        is_enabled: true,
+        request_url: SLACK_INTERACTIVITY_PLACEHOLDER,
+      },
+      org_deploy_enabled: false,
+      socket_mode_enabled: false,
+      token_rotation_enabled: false,
+    },
+  };
+}
+
 const SLACK_API = "https://slack.com/api";
 const TIMEOUT_MS = 15_000;
 
@@ -106,6 +191,24 @@ export const slackConnector = defineConnector({
   ],
   docsUrl: "https://api.slack.com/apps",
   icon: "Hash",
+
+  /**
+   * Slack is the one connector whose credential does not exist yet when the user arrives: there is
+   * no token to paste until they have created an app with the right scopes. These are the steps
+   * for that, with the manifest that makes them one paste instead of a dozen checkboxes.
+   */
+  setup: {
+    title: "Create your Slack app from this manifest",
+    steps: [
+      "Open https://api.slack.com/apps and choose Create New App → From a manifest.",
+      "Pick the workspace this app should belong to, paste the JSON below, then create the app.",
+      "On Install App, install it to the workspace and copy the Bot User OAuth Token (xoxb-…) into the field above.",
+      "On Basic Information, copy the Signing Secret into the optional field — Approval buttons and Slack triggers are verified with it.",
+      "Save the connection, then copy the interactivity URL from its row on the Connections page into Interactivity & Shortcuts → Request URL, replacing the placeholder from the manifest. That URL contains the connection's own id, so it only exists once the connection does.",
+      "Invite the bot to any private channel you want to post in (/invite @PapaFlow). Public channels work without an invite.",
+    ],
+    manifest: slackAppManifest(),
+  },
 
   /** `auth.test` is the cheapest call that proves the token and names the workspace. */
   async test(secret) {

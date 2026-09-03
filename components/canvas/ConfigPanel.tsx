@@ -17,7 +17,8 @@ import { NODES } from "@/nodes/registry";
 import { toJsonSchema, type JsonSchema } from "@/nodes/schema";
 import { renameKeyInTemplates } from "@/nodes/templates";
 
-import { fieldLabel } from "./field-label";
+import { conditionPreview } from "./condition-preview";
+import { enumOptions, fieldLabel, fieldVisible } from "./field-label";
 import { BooleanSwitch } from "./fields/BooleanSwitch";
 import { ConnectionField } from "./fields/ConnectionField";
 import { EnumSelect } from "./fields/EnumSelect";
@@ -30,13 +31,14 @@ import { TagList } from "./fields/TagList";
 import { TemplateInput } from "./fields/TemplateInput";
 import { TriggerUrl } from "./fields/TriggerUrl";
 import {
+  handleDisplays,
   NODE_KEY_PATTERN,
-  sourceHandles,
   type WorkflowNodeData,
   type WorkflowNodeType,
 } from "./graph-io";
-import { lastRunFor, type RunStepRow } from "./last-run";
+import { lastRunFor, type LastRunStep, type RunStepRow } from "./last-run";
 import { LastRunSection } from "./LastRunSection";
+import { NodeGuide } from "./NodeGuide";
 import { NodeIcon } from "./node-icon";
 import { resolvePickerKind } from "./picker-kind";
 import { ScheduleConfig } from "./ScheduleConfig";
@@ -64,6 +66,9 @@ const WEBHOOK_TRIGGER = "webhook.trigger";
 
 /** …and the node whose configuration is the URL that resumes one paused run of this workflow. */
 const WAIT_FOR_WEBHOOK = "logic.waitForWebhook";
+
+/** …and the one whose last run is a sentence: "score is greater than 10 → yes". */
+const CONDITION = "logic.condition";
 
 /** …and the one whose fields are only half the story: the rest is a sleeping scheduler run. */
 const SCHEDULE_TRIGGER = "schedule.trigger";
@@ -153,8 +158,49 @@ function asPairs(value: unknown): KeyValuePair[] {
   }));
 }
 
-function enumOptions(schema: JsonSchema): string[] {
-  return (schema.enum ?? []).filter((entry): entry is string => typeof entry === "string");
+/** The choices of a `z.enum()` field, paired with the words `.meta({ options })` shows them as. */
+function choicesOf(schema: JsonSchema) {
+  const values = (schema.enum ?? []).filter((entry): entry is string => typeof entry === "string");
+  return enumOptions(values, schema as { options?: unknown });
+}
+
+/**
+ * The values a node's form is effectively configured with: the schema's defaults, overwritten by
+ * whatever is actually stored.
+ *
+ * `showWhen` compares against these rather than against `data.inputs`, because a field the user has
+ * never touched still *ran* with its default — a Wait node dropped a second ago has no `mode` in
+ * its inputs, and `{ mode: "duration" }` is exactly the configuration it would run.
+ */
+function effectiveInputs(
+  properties: Record<string, JsonSchema>,
+  inputs: Record<string, unknown>,
+): Record<string, unknown> {
+  const values: Record<string, unknown> = {};
+  for (const [name, property] of Object.entries(properties)) {
+    if (property.default !== undefined) values[name] = property.default;
+  }
+  return { ...values, ...inputs };
+}
+
+/** The Condition node's "Last time:" line — the one node whose branch is worth reading back. */
+function ConditionLastTime({ run }: { run: LastRunStep | null }) {
+  const preview = conditionPreview(run);
+  if (!preview) return null;
+
+  return (
+    <p className="text-xs break-words text-muted-foreground">
+      Last time:{" "}
+      <span className="font-mono text-foreground">{preview.left}</span> {preview.operator}
+      {preview.right === null ? null : (
+        <>
+          {" "}
+          <span className="font-mono text-foreground">{preview.right}</span>
+        </>
+      )}{" "}
+      → <span className="font-medium text-foreground">{preview.result ? "yes" : "no"}</span>
+    </p>
+  );
 }
 
 /** `z.toJSONSchema` throws on schemas it cannot express; an odd node must not blank the panel. */
@@ -272,7 +318,7 @@ function NodeField({
         <EnumSelect
           id={id}
           value={typeof value === "string" ? value : fallback}
-          options={enumOptions(schema)}
+          options={choicesOf(schema)}
           onChange={onChange}
         />
       );
@@ -324,10 +370,12 @@ function NodeFieldRow({
   const mandatory = required.includes(name) && schema.default === undefined;
 
   return (
-    <div className="space-y-1.5">
+    // `min-w-0` all the way down: a field's value can be a 400-character URL, and without it a
+    // flex or grid child sizes to its content and stretches the whole 360px panel.
+    <div className="min-w-0 space-y-1.5">
       {/* The property name is still the truth — it is what a Builder tool call and the stored
           graph use — so it stays reachable on hover without shouting from the form. */}
-      <Label htmlFor={fieldId} className="gap-1" title={name}>
+      <Label htmlFor={fieldId} className="min-w-0 gap-1" title={name}>
         {fieldLabel(name, schema as { label?: unknown })}
         {mandatory ? (
           <span aria-label="required" className="text-destructive">
@@ -346,7 +394,9 @@ function NodeFieldRow({
         connectionId={connectionId}
         onChange={onChange}
       />
-      {description ? <p className="text-xs text-muted-foreground">{description}</p> : null}
+      {description ? (
+        <p className="text-xs break-words text-muted-foreground">{description}</p>
+      ) : null}
     </div>
   );
 }
@@ -463,10 +513,17 @@ export function ConfigPanel({
   const required = Array.isArray(schema?.required) ? schema.required : [];
 
   // Declaration order is the node's own, so this keeps it and only cuts the list in two.
-  const fields = Object.entries(properties).flatMap(([name, raw]) => {
+  const declared = Object.entries(properties).flatMap(([name, raw]) => {
     const property = asSchema(raw);
     return property ? [[name, property] as const] : [];
   });
+  // A field the current configuration has no use for is not asked about: the Wait node's "Seconds"
+  // and "Date and time" are the same question twice, and showing both is most of what makes it
+  // confusing. `.meta({ showWhen })` on the node is what opts a field into this.
+  const effective = effectiveInputs(Object.fromEntries(declared), node.data.inputs);
+  const fields = declared.filter(([, property]) =>
+    fieldVisible(property as { showWhen?: unknown }, effective),
+  );
   const accountFields = fields.filter(([name]) => ACCOUNT_INPUTS.has(name));
   const settingFields = fields.filter(([name]) => !ACCOUNT_INPUTS.has(name));
   // The Webhook trigger has no inputs — its URL is the configuration — so the panel must not
@@ -476,7 +533,10 @@ export function ConfigPanel({
   // The Schedule trigger's fields describe the repeat; whether it is *running* is a separate piece
   // of state (a `schedules` row plus a durable run), so it gets a panel of its own below them.
   const showsSchedule = node.data.nodeType === SCHEDULE_TRIGGER;
-  const handles = sourceHandles(node.data.nodeType, node.data.inputs);
+  // …and the one whose branch is worth reading back: which way it actually went, last run.
+  const showsCondition = node.data.nodeType === CONDITION;
+  const handles = handleDisplays(node.data.nodeType, node.data.inputs);
+  const guide = definition?.guide;
   // Read here rather than inside `NodeField`: every picker field on this node reads the same
   // input, and choosing a different connection has to re-load all of them at once.
   const chosenConnection = node.data.inputs[CONNECTION_INPUT];
@@ -498,7 +558,7 @@ export function ConfigPanel({
               {definition ? categoryLabel(definition.category) : "Unknown"}
             </Badge>
           </div>
-          <p className="mt-1 text-xs text-muted-foreground">
+          <p className="mt-1 text-xs break-words text-muted-foreground">
             {definition?.description ?? `${node.data.nodeType} is not in the node registry.`}
           </p>
         </div>
@@ -507,8 +567,12 @@ export function ConfigPanel({
         </Button>
       </div>
 
-      <ScrollArea className="min-h-0 flex-1">
-        <div className="space-y-4 p-3">
+      <ScrollArea className="min-h-0 min-w-0 flex-1">
+        <div className="min-w-0 space-y-4 p-3">
+          {/* What the node *is*, before what it last did and what it will do next. A branching
+              node is unreadable until you know what its arrows mean, so that comes first. */}
+          {guide ? <NodeGuide guide={guide} handles={handles} /> : null}
+
           {/* What this node last ran with, before the form that changes what it runs with next. */}
           <LastRunSection
             nodeId={node.id}
@@ -549,7 +613,13 @@ export function ConfigPanel({
                 else if (event.key === "Escape") setKeyDraft(node.data.key);
               }}
             />
-            <p className={keyError ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>
+            <p
+              className={
+                keyError
+                  ? "text-xs break-all text-destructive"
+                  : "text-xs break-all text-muted-foreground"
+              }
+            >
               {keyError ?? `Referenced in templates as {{ ${node.data.key}.… }}`}
             </p>
           </div>
@@ -569,7 +639,8 @@ export function ConfigPanel({
 
           {showsResumeUrl && (
             <div className="space-y-1.5">
-              <Label htmlFor={`${node.id}-resume-url`}>Resume URL</Label>
+              {/* The node is called "Wait for a callback", so the field is the callback's address. */}
+              <Label htmlFor={`${node.id}-resume-url`}>Callback URL</Label>
               <ResumeUrlPattern id={`${node.id}-resume-url`} nodeId={node.id} />
             </div>
           )}
@@ -616,18 +687,23 @@ export function ConfigPanel({
                   onChange={(value) => setInput(name, value)}
                 />
               ))}
+
+              {/* Under the fields it explains: the same three values, as the run resolved them. */}
+              {showsCondition ? <ConditionLastTime run={lastRun.self} /> : null}
             </>
           )}
 
           {showsSchedule && <ScheduleConfig workflowId={workflowId} inputs={node.data.inputs} />}
 
-          {handles.length > 1 && (
+          {/* The guide above already draws the ways out in the words the canvas uses; this is the
+              fallback for a branching node that never wrote one. */}
+          {!guide && handles.length > 1 && (
             <div className="space-y-1.5">
               <p className="text-xs font-medium">Branches</p>
               <div className="flex flex-wrap gap-1.5">
-                {handles.map((handle) => (
-                  <Badge key={handle} variant="secondary" className="font-mono">
-                    {handle}
+                {handles.map(({ handle, label }) => (
+                  <Badge key={handle} variant="secondary" className="font-mono" title={handle}>
+                    {label}
                   </Badge>
                 ))}
               </div>

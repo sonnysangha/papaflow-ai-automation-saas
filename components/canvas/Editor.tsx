@@ -18,6 +18,7 @@ import { fromStoredGraph, type RunNodeState, type SaveState } from "./graph-io";
 import { carryOverSteps, latestStepByNode, type RunStepRow } from "./last-run";
 import { NodeSidebar } from "./NodeSidebar";
 import { RunBar, type RunWorkflowAction } from "./RunBar";
+import { RunTimeline } from "./RunTimeline";
 
 /** Stable identity for "no run yet", so the config panel does not re-memo on every render. */
 const EMPTY_STEPS: RunStepRow[] = [];
@@ -172,6 +173,16 @@ export function Editor({
   // the graph grow while the agent talks, which a dialog would cover up.
   const [builderOpen, setBuilderOpen] = useState(false);
 
+  // Selection, both ways round. The canvas owns it (`node.selected` inside `Canvas`), so the
+  // timeline reads it through `selectedNodeId` and asks for it through `focusNode` — a request
+  // rather than a value, carrying a nonce so clicking the same bar twice re-centres the canvas on a
+  // node that is already selected.
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [focusNode, setFocusNode] = useState<{ nodeId: string; nonce: number } | null>(null);
+  const focusOnNode = useCallback((nodeId: string) => {
+    setFocusNode((current) => ({ nodeId, nonce: (current?.nonce ?? 0) + 1 }));
+  }, []);
+
   // One entry per node the latest run touched: the status the ring shows, the branch handle the
   // canvas dims the other edges from, and the output the variable picker reads real paths off.
   //
@@ -230,6 +241,7 @@ export function Editor({
           <div className="flex min-w-0 flex-1 flex-col">
             <RunBar
               workflowId={workflow._id}
+              status={workflow.status}
               triggerType={triggerType}
               triggerSample={triggerSample}
               latest={latest}
@@ -243,9 +255,19 @@ export function Editor({
                 workflow={workflow}
                 runByNode={runByNode}
                 steps={panelSteps}
+                focusNode={focusNode}
                 onSaveStateChange={setSaveState}
+                onSelectedNodeChange={setSelectedNodeId}
               />
             </div>
+            {/* Under the canvas rather than in the run bar: it is a chart of one run, and the bar
+                above is about starting the next one. */}
+            <RunTimeline
+              workflowId={workflow._id}
+              graph={workflow.graph}
+              selectedNodeId={selectedNodeId ?? undefined}
+              onSelectNode={focusOnNode}
+            />
           </div>
 
           {builderOpen ? (

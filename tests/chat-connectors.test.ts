@@ -3,7 +3,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ConnectorTestResult } from "@/connectors/define";
 import { discordBotConnector, discordInviteUrl } from "@/connectors/discord-bot";
 import { discordWebhookConnector, parseDiscordWebhookUrl } from "@/connectors/discord-webhook";
-import { slackConnector } from "@/connectors/slack";
+import {
+  SLACK_BOT_SCOPES,
+  SLACK_INTERACTIVITY_PLACEHOLDER,
+  slackAppManifest,
+  slackConnector,
+} from "@/connectors/slack";
 import { telegramConnector } from "@/connectors/telegram";
 
 /**
@@ -399,5 +404,97 @@ describe("telegram pick, alongside the other chat connectors", () => {
     ]);
     await expect(telegramConnector.pick?.("channels", { botToken: "x" }, meta)).resolves.toEqual([]);
     expect(calls).toHaveLength(0);
+  });
+});
+
+/**
+ * The Slack app manifest, which is the one connector artefact a user has to paste *into* the
+ * provider before they have anything to paste back. Its scopes are load-bearing: a manifest missing
+ * `groups:read` produces a channel picker that works for every workspace without private channels
+ * and fails for the rest, which is the kind of bug that only shows up on someone else's laptop.
+ */
+describe("slack app manifest", () => {
+  type Manifest = {
+    display_information: { name: string; description?: string };
+    features: { bot_user: { display_name: string; always_online: boolean } };
+    oauth_config: { scopes: { bot: string[] } };
+    settings: {
+      interactivity: { is_enabled: boolean; request_url: string };
+      token_rotation_enabled: boolean;
+    };
+  };
+
+  const manifest = () => slackAppManifest() as unknown as Manifest;
+
+  it("asks for exactly the scopes chat.postMessage and conversations.list need", () => {
+    // `chat:write` posts, `chat:write.public` posts without an invite, and the channel picker asks
+    // for `types=public_channel,private_channel` — one read scope each.
+    expect(SLACK_BOT_SCOPES).toEqual([
+      "chat:write",
+      "chat:write.public",
+      "channels:read",
+      "groups:read",
+    ]);
+    expect(manifest().oauth_config.scopes.bot).toEqual([...SLACK_BOT_SCOPES]);
+  });
+
+  it("switches interactivity on and points it at a documented placeholder", () => {
+    const { interactivity } = manifest().settings;
+    expect(interactivity.is_enabled).toBe(true);
+
+    // The real URL ends in the connection's own id, which does not exist yet — so the manifest
+    // ships a valid HTTPS URL the user replaces, and the steps say where to find the real one.
+    expect(interactivity.request_url).toBe(SLACK_INTERACTIVITY_PLACEHOLDER);
+    expect(() => new URL(interactivity.request_url)).not.toThrow();
+    expect(new URL(interactivity.request_url).protocol).toBe("https:");
+    expect(interactivity.request_url).toMatch(/\/api\/events\/slack\//);
+  });
+
+  it("never enables token rotation, which cannot be turned off again", () => {
+    expect(manifest().settings.token_rotation_enabled).toBe(false);
+  });
+
+  it("names the app and derives a bot display name Slack will accept", () => {
+    expect(manifest().display_information.name).toBe("PapaFlow");
+    expect(manifest().features.bot_user.display_name).toBe("PapaFlow");
+
+    // `display_name` allows only letters, digits, `-`, `_` and `.`; a name with spaces is common.
+    const custom = slackAppManifest("Acme Ops Bot") as unknown as Manifest;
+    expect(custom.display_information.name).toBe("Acme Ops Bot");
+    expect(custom.features.bot_user.display_name).toBe("Acme-Ops-Bot");
+
+    // Slack's own limits: 35 characters for the app name, 140 for the description.
+    const long = slackAppManifest("x".repeat(80)) as unknown as Manifest;
+    expect(long.display_information.name).toHaveLength(35);
+    expect(long.display_information.description?.length).toBeLessThanOrEqual(140);
+
+    // A blank name is a mistake, not a request for a nameless app.
+    expect((slackAppManifest("   ") as unknown as Manifest).display_information.name).toBe("PapaFlow");
+  });
+
+  it("is plain JSON, and a fresh object every call", () => {
+    const first = slackAppManifest();
+    expect(JSON.parse(JSON.stringify(first))).toEqual(first);
+
+    (first.display_information as { name: string }).name = "tampered";
+    expect(manifest().display_information.name).toBe("PapaFlow");
+  });
+
+  it("reaches the UI through the connector's own setup block", () => {
+    const setup = slackConnector.setup;
+    expect(setup?.title).toBeTruthy();
+    expect(setup?.manifest).toEqual(slackAppManifest());
+    // Six steps, each a sentence somebody can follow without knowing what a manifest is.
+    expect(setup?.steps.length).toBeGreaterThanOrEqual(4);
+    expect(setup?.steps.every((step) => step.trim().length > 0)).toBe(true);
+    expect(setup?.steps.join(" ")).toMatch(/Signing Secret/);
+    expect(setup?.steps.join(" ")).toMatch(/Interactivity/);
+  });
+
+  it("is the only connector that needs a provider-side app", () => {
+    // Every other credential is pasted from something that already exists.
+    expect(discordBotConnector.setup).toBeUndefined();
+    expect(telegramConnector.setup).toBeUndefined();
+    expect(discordWebhookConnector.setup).toBeUndefined();
   });
 });

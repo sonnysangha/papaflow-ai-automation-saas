@@ -17,7 +17,7 @@ import { RUN_HISTORY_DAYS, RUN_HISTORY_FEATURE } from "@/lib/plans";
 import { cn } from "@/lib/utils";
 
 import { RunFiltersRow } from "./RunFilters";
-import { RunRow } from "./RunRow";
+import { RunCard, RunRow } from "./RunRow";
 import { RunStatsSkeleton, RunStatsStrip } from "./RunStats";
 import { StepsSheet } from "./StepsSheet";
 import {
@@ -220,36 +220,60 @@ function RunsView({
               </Button>
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow className="hover:bg-transparent">
-                  <TableHead className="pl-4">Status</TableHead>
-                  {showWorkflow ? <TableHead>Workflow</TableHead> : null}
-                  <TableHead className="hidden sm:table-cell">Trigger</TableHead>
-                  <TableHead>Started</TableHead>
-                  <TableHead>Duration</TableHead>
-                  <TableHead className="hidden md:table-cell">Error</TableHead>
-                  <TableHead className="w-12 pr-4">
-                    <span className="sr-only">Open</span>
-                  </TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
+            <>
+              {/* Below `md` the same runs are stacked blocks: six columns do not fit a phone, and a
+                  table that scrolls sideways hides the two things the page is for — how long it
+                  took, and what went wrong. Same rows, same clock, same `runRowView`. */}
+              <ul className="flex flex-col gap-2 p-2 md:hidden" aria-label="Runs">
                 {visible.map((run) => (
-                  <RunRow
-                    key={run._id}
-                    run={run}
-                    showWorkflow={showWorkflow}
-                    workflowName={workflowNames?.[run.workflowId]}
-                    now={now}
-                    onOpen={() => {
-                      setSelected(run);
-                      setOpen(true);
-                    }}
-                  />
+                  <li key={run._id}>
+                    <RunCard
+                      run={run}
+                      showWorkflow={showWorkflow}
+                      workflowName={workflowNames?.[run.workflowId]}
+                      now={now}
+                      onOpen={() => {
+                        setSelected(run);
+                        setOpen(true);
+                      }}
+                    />
+                  </li>
                 ))}
-              </TableBody>
-            </Table>
+              </ul>
+
+              <div className="hidden md:block">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="hover:bg-transparent">
+                      <TableHead className="pl-4">Status</TableHead>
+                      {showWorkflow ? <TableHead>Workflow</TableHead> : null}
+                      <TableHead className="hidden sm:table-cell">Trigger</TableHead>
+                      <TableHead>Started</TableHead>
+                      <TableHead>Duration</TableHead>
+                      <TableHead className="hidden md:table-cell">Error</TableHead>
+                      <TableHead className="w-12 pr-4">
+                        <span className="sr-only">Open</span>
+                      </TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {visible.map((run) => (
+                      <RunRow
+                        key={run._id}
+                        run={run}
+                        showWorkflow={showWorkflow}
+                        workflowName={workflowNames?.[run.workflowId]}
+                        now={now}
+                        onOpen={() => {
+                          setSelected(run);
+                          setOpen(true);
+                        }}
+                      />
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </>
           )}
 
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-3">

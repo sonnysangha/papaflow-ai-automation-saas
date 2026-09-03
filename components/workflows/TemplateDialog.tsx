@@ -26,6 +26,7 @@ import {
 import { cn } from "@/lib/utils";
 import { NODES } from "@/nodes/registry";
 
+import { FULL_SCREEN_DIALOG } from "./mobile-dialog";
 import {
   ALL_CATEGORIES,
   filterTemplates,
@@ -49,9 +50,10 @@ function TemplateFlow({ graph }: { graph: TemplateGraph }) {
   if (steps.length === 0) return null;
 
   return (
-    // Its own scroller: a long path may not fit a card, and the page must never be the thing that
-    // scrolls sideways.
-    <div className="-mx-0.5 flex items-center gap-1 overflow-x-auto px-0.5 pb-0.5">
+    // Two lines on a phone, one scrolling line from `sm` up. Wrapping matters for more than looks:
+    // a nowrap strip is the card's min-content width, and a grid item cannot shrink below that — so
+    // an unwrapped path would stretch the whole gallery column past the edge of the screen.
+    <div className="flex flex-wrap items-center gap-1 overflow-x-auto pb-0.5 sm:flex-nowrap">
       {steps.map((step, index) => (
         <Fragment key={`${step.nodeType}-${index}`}>
           {index > 0 ? (
@@ -108,7 +110,7 @@ function TemplateCard({
     <div
       onClick={pick}
       className={cn(
-        "group flex cursor-pointer flex-col gap-3 rounded-xl border border-border bg-card p-4 transition-colors",
+        "group flex min-w-0 cursor-pointer flex-col gap-3 rounded-xl border border-border bg-card p-4 transition-colors",
         "hover:border-ring hover:bg-muted/40 has-[button:focus-visible]:border-ring",
         disabled && "cursor-not-allowed opacity-60",
         pending && "border-ring bg-muted/40",
@@ -195,7 +197,13 @@ export function TemplateGallery({ onPick, pendingId, className }: TemplateGaller
           />
         </div>
 
-        <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Template categories">
+        {/* One scrolling line on a phone: eight categories wrapped would take three rows out of a
+            screen that has room for one card. */}
+        <div
+          className="flex items-center gap-1 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-x-visible sm:pb-0"
+          role="group"
+          aria-label="Template categories"
+        >
           {categories.map((entry) => {
             const active = entry.value === category;
             return (
@@ -203,6 +211,7 @@ export function TemplateGallery({ onPick, pendingId, className }: TemplateGaller
                 key={entry.value}
                 type="button"
                 size="xs"
+                className="h-7 sm:h-6"
                 variant={active ? "secondary" : "ghost"}
                 aria-pressed={active}
                 onClick={() => setCategory(entry.value)}
@@ -234,7 +243,7 @@ export function TemplateGallery({ onPick, pendingId, className }: TemplateGaller
         </div>
       ) : (
         <div className="min-h-0 flex-1 overflow-y-auto pr-0.5">
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid grid-cols-[minmax(0,1fr)] gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {shown.map((template) => (
               <TemplateCard
                 key={template.id}
@@ -268,8 +277,13 @@ export function TemplateDialog({ trigger, title, description, onPick }: Template
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger render={trigger} />
-      <DialogContent className="sm:max-w-4xl">
-        <DialogHeader>
+      <DialogContent
+        className={cn(
+          FULL_SCREEN_DIALOG,
+          "max-sm:grid-rows-[auto_minmax(0,1fr)] max-sm:overflow-hidden sm:max-w-4xl",
+        )}
+      >
+        <DialogHeader className="min-w-0 pr-8">
           <DialogTitle className="flex items-center gap-2">
             <LayoutTemplateIcon aria-hidden className="size-4 text-muted-foreground" />
             {title ?? "Start from a template"}
@@ -280,7 +294,7 @@ export function TemplateDialog({ trigger, title, description, onPick }: Template
         </DialogHeader>
 
         <TemplateGallery
-          className="max-h-[60vh]"
+          className="min-h-0 min-w-0 sm:max-h-[60vh]"
           onPick={(template) => {
             onPick(template);
             setOpen(false);

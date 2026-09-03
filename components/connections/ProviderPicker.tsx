@@ -82,7 +82,8 @@ export function ProviderPicker({ entries, onSelect }: ProviderPickerProps) {
         />
       </div>
 
-      <ScrollArea className="h-72">
+      {/* A fixed 288px list wastes two thirds of a phone screen inside a full-screen dialog. */}
+      <ScrollArea className="h-72 max-sm:h-[55dvh]">
         {groups.length === 0 ? (
           <p className="p-2 text-sm text-muted-foreground">No app matches “{search.trim()}”.</p>
         ) : (

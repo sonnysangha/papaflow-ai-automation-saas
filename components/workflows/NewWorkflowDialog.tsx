@@ -18,7 +18,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { UpgradeCard } from "@/components/billing/UpgradeCard";
+import { cn } from "@/lib/utils";
 
+import { FULL_SCREEN_DIALOG } from "./mobile-dialog";
 import { TemplateGallery } from "./TemplateDialog";
 import { useCreateWorkflow } from "./use-create-workflow";
 
@@ -84,15 +86,22 @@ export function NewWorkflowDialog({
         }
       />
 
-      <DialogContent className="sm:max-w-4xl">
-        <DialogHeader>
+      <DialogContent
+        className={cn(
+          FULL_SCREEN_DIALOG,
+          "max-sm:grid-rows-[auto_minmax(0,1fr)] max-sm:overflow-hidden sm:max-w-4xl",
+        )}
+      >
+        <DialogHeader className="min-w-0 pr-8">
           <DialogTitle>New workflow</DialogTitle>
           <DialogDescription>
             Start from nothing, or from a template that already runs.
           </DialogDescription>
         </DialogHeader>
 
-        <Tabs value={tab} onValueChange={(value) => setTab(value as Tab)}>
+        {/* `min-h-0` all the way down, so on a phone it is the gallery that scrolls inside the
+            full-screen dialog rather than the dialog growing past the bottom of the screen. */}
+        <Tabs value={tab} onValueChange={(value) => setTab(value as Tab)} className="min-h-0 min-w-0">
           <TabsList>
             <TabsTrigger value="blank">Blank</TabsTrigger>
             <TabsTrigger value="template">From template</TabsTrigger>
@@ -128,15 +137,13 @@ export function NewWorkflowDialog({
             </form>
           </TabsContent>
 
-          <TabsContent value="template" className="pt-2">
-            <div className="grid gap-4">
-              {atLimit ? <PlanWall limit={limit} /> : null}
-              <TemplateGallery
-                className="max-h-[55vh]"
-                onPick={createFromTemplate}
-                pendingId={atLimit ? undefined : pendingTemplate}
-              />
-            </div>
+          <TabsContent value="template" className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 pt-2">
+            {atLimit ? <PlanWall limit={limit} /> : null}
+            <TemplateGallery
+              className="min-h-0 min-w-0 flex-1 sm:max-h-[55vh]"
+              onPick={createFromTemplate}
+              pendingId={atLimit ? undefined : pendingTemplate}
+            />
           </TabsContent>
         </Tabs>
       </DialogContent>

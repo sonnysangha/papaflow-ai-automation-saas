@@ -49,165 +49,136 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { formatAbsoluteTime, formatRelativeTime } from "@/components/workflows/relative-time";
-import { CONNECTORS } from "@/connectors/registry";
-import { RESEND_SANDBOX_NOTE, resendDomains, verifiedDomains } from "@/connectors/resend";
-import { SLACK_EVENTS_PATH } from "@/connectors/slack";
 import { api } from "@/convex/_generated/api";
-import { appOrigin } from "@/lib/app-origin";
 import { cn } from "@/lib/utils";
 
+import { FULL_WIDTH_DIALOG } from "@/components/workflows/mobile-dialog";
+
 import { AddConnectionDialog } from "./AddConnectionDialog";
+import { connectionRowView, type ConnectionRowView } from "./connection-list";
 
 /** One row of `api.connections.list` — the projection, never the sealed secret (CLAUDE.md rule 1). */
 type Connection = FunctionReturnType<typeof api.connections.list>[number];
 
-/** The same colour language as the run statuses: green good, amber wants attention, red dead. */
-const STATUS_TONE: Record<Connection["status"], string> = {
-  active: "bg-emerald-500",
-  needs_reconnect: "bg-amber-500",
-  revoked: "bg-destructive",
-};
+/** The inbound URL: read-only, copyable, and long enough to need a line of its own. */
+function InboundUrl({ view, className }: { view: ConnectionRowView; className?: string }) {
+  if (!view.inbound) return null;
+  const { url, hint } = view.inbound;
 
-const STATUS_LABEL: Record<Connection["status"], string> = {
-  active: "Active",
-  needs_reconnect: "Needs reconnect",
-  revoked: "Revoked",
-};
-
-/** `meta.models` is `v.any()` on the wire, so it is counted rather than trusted. */
-function modelCount(meta: unknown): number | null {
-  if (typeof meta !== "object" || meta === null) return null;
-  const models = (meta as { models?: unknown }).models;
-  return Array.isArray(models) ? models.length : null;
-}
-
-/**
- * Where this connection's provider should send its events, and what the user has to do about it.
- *
- * Two ways a connection gets one. `meta.inboundUrl` is written by the connector's `afterCreate`
- * (`connectors/{telegram,stripe}.ts`), because the URL contains the connection id and so cannot
- * exist before the row does. Slack and Discord have nothing to register at connect time — their
- * URLs are pasted into an app's settings by hand — so those are derived here from the id the row
- * already has. Everything else has nothing inbound to offer and gets no row.
- */
-function inboundFor(connection: Connection): { url: string; hint: string } | null {
-  const meta = typeof connection.meta === "object" && connection.meta !== null ? connection.meta : {};
-  const registered = (meta as { inboundUrl?: unknown }).inboundUrl;
-
-  if (typeof registered === "string" && registered.length > 0) {
-    if (connection.provider === "telegram") {
-      const webhookSet = (meta as { webhookSet?: unknown }).webhookSet;
-      return {
-        url: registered,
-        hint:
-          webhookSet === false
-            ? "Telegram was not told about this URL — it only accepts https, so reconnect once this app has an https origin"
-            : "Telegram webhook registered",
-      };
-    }
-    if (connection.provider === "stripe") {
-      return { url: registered, hint: "Paste this URL into Stripe's webhook settings" };
-    }
-    return { url: registered, hint: "Send this provider's events to this URL" };
-  }
-
-  // Interactivity URLs: where an Approval node's buttons come back to. Nothing registers these, so
-  // the connection is only half-wired until the user pastes the URL where the hint says.
-  //
-  // Slack's is the same URL for every connection — presses are matched to a row by the workspace id
-  // Slack puts in them (`connections.externalId`), which is what lets the app manifest carry it —
-  // so this is the URL the setup dialog already put in the manifest, restated for a connection made
-  // before that existed. The per-connection URL still answers and is deliberately not shown: two
-  // URLs for one field is the confusion, not the fix.
-  if (connection.provider === "slack") {
-    return {
-      url: `${appOrigin()}${SLACK_EVENTS_PATH}`,
-      hint: "Already in the manifest — Slack app → Interactivity & Shortcuts → Request URL (needs the signing secret on this connection)",
-    };
-  }
-  if (connection.provider === "discord-bot") {
-    return {
-      url: `${appOrigin()}/api/events/discord/${connection._id}`,
-      hint: "Paste into your Discord app → General Information → Interactions Endpoint URL (needs the public key on this connection)",
-    };
-  }
-
-  return null;
-}
-
-/**
- * A standing caveat about what this connection can do — not a failure, and not something a re-test
- * would clear.
- *
- * Resend is the only one so far, and it is the one people hit five minutes in: a brand-new account
- * has a working key and no verified domain, so `email.send` falls back to Resend's sandbox sender
- * and Resend allows exactly one recipient. Saying so on the row is the difference between "Send
- * email failed" and "of course it did".
- */
-function noticeFor(connection: Connection): string | null {
-  if (connection.provider !== "resend") return null;
-
-  const meta = typeof connection.meta === "object" && connection.meta !== null ? connection.meta : {};
-  const domains = resendDomains({ data: (meta as { domains?: unknown }).domains });
-  return verifiedDomains(domains).length > 0 ? null : RESEND_SANDBOX_NOTE;
-}
-
-/** A caveat as its own full-width row, under the connection it belongs to. */
-function NoticeRow({ text }: { text: string }) {
   return (
-    <TableRow className="hover:bg-transparent">
-      <TableCell colSpan={7} className="px-4 pt-0">
-        <p className="text-xs text-muted-foreground">{text}</p>
-      </TableCell>
-    </TableRow>
+    <div className={cn("flex flex-wrap items-center gap-2", className)}>
+      <code className="min-w-0 flex-1 truncate rounded-md bg-muted px-2 py-1 font-mono text-xs text-muted-foreground">
+        {url}
+      </code>
+      <Button
+        type="button"
+        variant="outline"
+        size="icon-sm"
+        aria-label={view.copyLabel}
+        className="relative shrink-0 after:absolute after:-inset-2 after:content-[''] md:after:hidden"
+        onClick={() => {
+          void navigator.clipboard.writeText(url).then(
+            () => toast.success("Inbound URL copied"),
+            () => toast.error("Could not copy — select the URL and copy it yourself"),
+          );
+        }}
+      >
+        <CopyIcon />
+      </Button>
+      <p className="w-full text-xs text-muted-foreground sm:w-auto">{hint}</p>
+    </div>
   );
 }
 
-/** The inbound URL as its own full-width row: read-only, copyable, and long enough to need one. */
-function InboundUrlRow({
-  connection,
-  url,
-  hint,
-}: {
-  connection: Connection;
-  url: string;
-  hint: string;
-}) {
-  return (
-    <TableRow className="hover:bg-transparent">
-      <TableCell colSpan={7} className="px-4 pt-0">
-        <div className="flex flex-wrap items-center gap-2">
-          <code className="min-w-0 flex-1 truncate rounded-md bg-muted px-2 py-1 font-mono text-xs text-muted-foreground">
-            {url}
-          </code>
-          <Button
-            type="button"
-            variant="outline"
-            size="icon-sm"
-            aria-label={`Copy the inbound URL for ${connection.label}`}
-            onClick={() => {
-              void navigator.clipboard.writeText(url).then(
-                () => toast.success("Inbound URL copied"),
-                () => toast.error("Could not copy — select the URL and copy it yourself"),
-              );
-            }}
-          >
-            <CopyIcon />
-          </Button>
-          <p className="text-xs text-muted-foreground">{hint}</p>
-        </div>
-      </TableCell>
-    </TableRow>
-  );
-}
-
-function ConnectionStatusBadge({ status }: { status: Connection["status"] }) {
+function ConnectionStatusBadge({ view }: { view: ConnectionRowView }) {
   return (
     <Badge variant="outline" className="gap-1.5">
-      <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", STATUS_TONE[status])} />
-      {STATUS_LABEL[status]}
+      <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", view.statusTone)} />
+      {view.statusLabel}
     </Badge>
+  );
+}
+
+type RowActions = {
+  view: ConnectionRowView;
+  busy: boolean;
+  onRetest: () => void;
+  onRefresh: () => void;
+  onDelete: () => void;
+};
+
+/** Re-test / Refresh models / Delete. One menu, mounted by the table row and the phone card alike. */
+function ConnectionMenu({ view, busy, onRetest, onRefresh, onDelete, className }: RowActions & {
+  className?: string;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={<Button variant="ghost" size="icon-sm" className={className} />}
+      >
+        <MoreHorizontalIcon />
+        <span className="sr-only">{view.menuLabel}</span>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-44">
+        <DropdownMenuItem disabled={busy} onClick={onRetest}>
+          <RotateCwIcon />
+          Re-test
+        </DropdownMenuItem>
+        {view.isAi ? (
+          <DropdownMenuItem disabled={busy} onClick={onRefresh}>
+            <RefreshCwIcon />
+            Refresh models
+          </DropdownMenuItem>
+        ) : null}
+        <DropdownMenuItem variant="destructive" onClick={onDelete}>
+          <Trash2Icon />
+          Delete
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/**
+ * One connection as a block, for a phone: seven columns will not fit 390px, and the one column
+ * that must never be clipped is the inbound URL — the whole reason someone is on this page.
+ */
+export function ConnectionCard({
+  connection,
+  ...actions
+}: RowActions & { connection: Connection }) {
+  const { view, busy } = actions;
+
+  return (
+    <div className={cn("flex flex-col gap-2 rounded-lg border border-border bg-card p-3", busy && "opacity-60")}>
+      <div className="flex items-start gap-2">
+        <NodeIcon name={view.icon} className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-medium">{view.name}</p>
+          <p className="truncate text-xs text-muted-foreground">{connection.label}</p>
+        </div>
+        <ConnectionMenu
+          {...actions}
+          // A 28px button with a 44px reach, which is what a thumb actually needs.
+          className="relative -mt-1 shrink-0 after:absolute after:-inset-2 after:content-['']"
+        />
+      </div>
+
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-muted-foreground">
+        <ConnectionStatusBadge view={view} />
+        <span className="font-mono">{view.maskedKey}</span>
+        {view.models === null ? null : (
+          <span className="tabular-nums">
+            {view.models} model{view.models === 1 ? "" : "s"}
+          </span>
+        )}
+        <span title={view.updatedTitle}>{view.updated}</span>
+      </div>
+
+      <InboundUrl view={view} />
+
+      {view.notice ? <p className="text-xs text-muted-foreground">{view.notice}</p> : null}
+    </div>
   );
 }
 
@@ -310,9 +281,31 @@ export function ConnectionList() {
     );
   }
 
+  /** One place decides what a row says and what its menu does; the two layouts only arrange it. */
+  const rowProps = (connection: Connection) => ({
+    view: connectionRowView(connection),
+    busy: busyId === connection._id,
+    onRetest: () => void runAction(connection, "retest"),
+    onRefresh: () => void runAction(connection, "refresh"),
+    onDelete: () => {
+      setDeleteTarget(connection);
+      setDeleteOpen(true);
+    },
+  });
+
   return (
     <>
-      <div className="overflow-hidden rounded-xl ring-1 ring-foreground/10">
+      {/* Below `md`, stacked blocks: the inbound URL is the point of this page and a table that
+          scrolls sideways puts it off-screen. */}
+      <ul className="flex flex-col gap-2 md:hidden" aria-label="Connections">
+        {connections.map((connection) => (
+          <li key={connection._id}>
+            <ConnectionCard connection={connection} {...rowProps(connection)} />
+          </li>
+        ))}
+      </ul>
+
+      <div className="hidden overflow-hidden rounded-xl ring-1 ring-foreground/10 md:block">
         <Table>
           <TableHeader>
             <TableRow>
@@ -329,86 +322,56 @@ export function ConnectionList() {
           </TableHeader>
           <TableBody>
             {connections.map((connection) => {
-              // `CONNECTORS` is data here: the name, icon and category behind a stored provider.
-              const definition = CONNECTORS[connection.provider];
-              const models = modelCount(connection.meta);
-              const inbound = inboundFor(connection);
-              const notice = noticeFor(connection);
-              const busy = busyId === connection._id;
+              const props = rowProps(connection);
+              const { view, busy } = props;
 
               return (
                 <Fragment key={connection._id}>
                   <TableRow
-                    className={cn(busy && "opacity-60", (inbound || notice) && "border-b-0")}
+                    className={cn(busy && "opacity-60", (view.inbound || view.notice) && "border-b-0")}
                   >
                     <TableCell className="px-4 font-medium">
                       <span className="flex items-center gap-2">
                         <NodeIcon
-                          name={definition?.icon}
+                          name={view.icon}
                           className="size-4 shrink-0 text-muted-foreground"
                         />
-                        {definition?.name ?? connection.provider}
+                        {view.name}
                       </span>
                     </TableCell>
                     <TableCell className="text-muted-foreground">{connection.label}</TableCell>
                     <TableCell className="font-mono text-xs text-muted-foreground">
-                      ••••{connection.hint}
+                      {view.maskedKey}
                     </TableCell>
                     <TableCell>
-                      <ConnectionStatusBadge status={connection.status} />
+                      <ConnectionStatusBadge view={view} />
                     </TableCell>
                     <TableCell className="text-muted-foreground tabular-nums">
-                      {models === null ? "—" : models}
+                      {view.models === null ? "—" : view.models}
                     </TableCell>
-                    <TableCell
-                      className="text-muted-foreground"
-                      title={formatAbsoluteTime(connection.updatedAt)}
-                    >
-                      updated {formatRelativeTime(connection.updatedAt)}
+                    <TableCell className="text-muted-foreground" title={view.updatedTitle}>
+                      {view.updated}
                     </TableCell>
                     <TableCell className="px-4 text-right">
-                      <DropdownMenu>
-                        <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" />}>
-                          <MoreHorizontalIcon />
-                          <span className="sr-only">Actions for {connection.label}</span>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="min-w-44">
-                          <DropdownMenuItem
-                            disabled={busy}
-                            onClick={() => void runAction(connection, "retest")}
-                          >
-                            <RotateCwIcon />
-                            Re-test
-                          </DropdownMenuItem>
-                          {definition?.category === "ai" && (
-                            <DropdownMenuItem
-                              disabled={busy}
-                              onClick={() => void runAction(connection, "refresh")}
-                            >
-                              <RefreshCwIcon />
-                              Refresh models
-                            </DropdownMenuItem>
-                          )}
-                          <DropdownMenuItem
-                            variant="destructive"
-                            onClick={() => {
-                              setDeleteTarget(connection);
-                              setDeleteOpen(true);
-                            }}
-                          >
-                            <Trash2Icon />
-                            Delete
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
+                      <ConnectionMenu {...props} />
                     </TableCell>
                   </TableRow>
 
-                  {inbound ? (
-                    <InboundUrlRow connection={connection} url={inbound.url} hint={inbound.hint} />
+                  {view.inbound ? (
+                    <TableRow className="hover:bg-transparent">
+                      <TableCell colSpan={7} className="px-4 pt-0">
+                        <InboundUrl view={view} />
+                      </TableCell>
+                    </TableRow>
                   ) : null}
 
-                  {notice ? <NoticeRow text={notice} /> : null}
+                  {view.notice ? (
+                    <TableRow className="hover:bg-transparent">
+                      <TableCell colSpan={7} className="px-4 pt-0">
+                        <p className="text-xs text-muted-foreground">{view.notice}</p>
+                      </TableCell>
+                    </TableRow>
+                  ) : null}
                 </Fragment>
               );
             })}
@@ -470,7 +433,7 @@ function DeleteConnectionDialog({
         if (!isOpen) onClosed();
       }}
     >
-      <AlertDialogContent>
+      <AlertDialogContent className={FULL_WIDTH_DIALOG}>
         <AlertDialogHeader>
           <AlertDialogMedia>
             <Trash2Icon className="text-destructive" />

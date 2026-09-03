@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { RunRow } from "@/components/runs/RunRow";
+import { RunCard, RunRow } from "@/components/runs/RunRow";
 import { RunStatsSkeleton, RunStatsStrip } from "@/components/runs/RunStats";
 import { runStats } from "@/components/runs/run-stats";
 
@@ -130,5 +130,93 @@ describe("RunRow", () => {
 
     expect(html).toContain("Deleted workflow");
     expect(html).not.toContain("/w/gone");
+  });
+});
+
+/**
+ * The phone layout of the same run. It is a different arrangement, not a different set of facts —
+ * so the assertions are the row's, made against `RunCard`: both render `runRowView`, and a chip or
+ * a pill that appears on one has to appear on the other.
+ */
+describe("RunCard", () => {
+  const failed = {
+    _id: "e1",
+    workflowId: "w1",
+    status: "failed",
+    trigger: { type: "webhook" },
+    startedAt: NOW - 120_000,
+    finishedAt: NOW - 118_800,
+    error: "Slack said 429",
+  };
+
+  it("says everything the table row says", () => {
+    const card = renderToStaticMarkup(
+      <RunCard run={failed} showWorkflow workflowName="Invoice chaser" now={NOW} onOpen={() => {}} />,
+    );
+
+    expect(card).toContain("Failed");
+    expect(card).toContain("Webhook");
+    expect(card).toContain("2 minutes ago");
+    expect(card).toContain("1.2s");
+    expect(card).toContain("Slack said 429");
+    expect(card).toContain("Invoice chaser");
+    expect(card).toContain('href="/w/w1"');
+    // The whole block opens the drawer, and it is named the same way the row is.
+    expect(card).toContain("Run of Invoice chaser started 2 minutes ago");
+  });
+
+  it("carries the same status pill and trigger chip as the row it replaces", () => {
+    const row = renderRow(
+      <RunRow run={failed} showWorkflow workflowName="Invoice chaser" now={NOW} onOpen={() => {}} />,
+    );
+    const card = renderToStaticMarkup(
+      <RunCard run={failed} showWorkflow workflowName="Invoice chaser" now={NOW} onOpen={() => {}} />,
+    );
+
+    for (const claim of ["Failed", "Webhook", "2 minutes ago", "1.2s", "Slack said 429"]) {
+      expect(row).toContain(claim);
+      expect(card).toContain(claim);
+    }
+  });
+
+  it("counts a still-running run up, and leaves the workflow line out on a workflow's own page", () => {
+    const html = renderToStaticMarkup(
+      <RunCard
+        run={{
+          _id: "e2",
+          workflowId: "w2",
+          status: "running",
+          trigger: { type: "manual" },
+          startedAt: NOW - 4_500,
+        }}
+        now={NOW}
+        onOpen={() => {}}
+      />,
+    );
+
+    expect(html).toContain("Running");
+    expect(html).toContain("4.5s");
+    expect(html).not.toContain("/w/w2");
+  });
+
+  it("names a deleted workflow rather than linking to it", () => {
+    const html = renderToStaticMarkup(
+      <RunCard
+        run={{
+          _id: "e3",
+          workflowId: "gone",
+          status: "completed",
+          trigger: { type: "schedule" },
+          startedAt: NOW - 60_000,
+          finishedAt: NOW - 59_000,
+        }}
+        showWorkflow
+        now={NOW}
+        onOpen={() => {}}
+      />,
+    );
+
+    expect(html).toContain("Deleted workflow");
+    expect(html).not.toContain('href="/w/gone"');
   });
 });

@@ -9,6 +9,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DEFAULT_PLAN, PLAN_LABELS } from "@/lib/plans";
+import { cn } from "@/lib/utils";
 
 import { useClerkAppearance } from "./clerk-appearance";
 import { currentPlan } from "./plan-cta";
@@ -92,13 +93,21 @@ export function CurrentPlanCard() {
         {/* `for="organization"` throws without an active org, so the button waits for both. */}
         {organization ? (
           <Show when="signed-in" fallback={<Skeleton className="h-8 w-44" />}>
-            <div>
+            {/* Stacked and full width on a phone, side by side from `sm` up — so a second action
+                added here lands under this one rather than squeezing it. */}
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
               <SubscriptionDetailsButton
                 for="organization"
                 subscriptionDetailsProps={{ appearance }}
                 onSubscriptionCancel={() => void subscription.revalidate()}
               >
-                <button type="button" className={buttonVariants({ variant: "outline" })}>
+                <button
+                  type="button"
+                  className={cn(
+                    buttonVariants({ variant: "outline" }),
+                    "h-10 w-full sm:h-8 sm:w-auto",
+                  )}
+                >
                   Manage subscription
                 </button>
               </SubscriptionDetailsButton>

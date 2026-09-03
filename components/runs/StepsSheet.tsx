@@ -36,6 +36,7 @@ import {
 } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { FULL_WIDTH_SHEET } from "@/components/workflows/mobile-dialog";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { appOrigin } from "@/lib/app-origin";
@@ -473,7 +474,10 @@ export function StepsSheet({
         if (!isOpen) onClosed?.();
       }}
     >
-      <SheetContent side="right" className="gap-0 data-[side=right]:sm:max-w-3xl">
+      <SheetContent
+        side="right"
+        className={cn(FULL_WIDTH_SHEET, "gap-0 data-[side=right]:sm:max-w-3xl")}
+      >
         <TooltipProvider>
           <SheetHeader className="shrink-0 gap-3 border-b border-border pr-12">
             <SheetTitle className="truncate">{name}</SheetTitle>

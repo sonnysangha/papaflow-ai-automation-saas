@@ -64,7 +64,9 @@ const SKINS: Record<PlanCardVariant, Skin> = {
 export function ctaClass(
   variant: PlanCardVariant,
   emphasised: boolean,
-  className = "h-10 w-full",
+  // 44px on a phone, the smallest comfortable touch target, dropping to the page's own 40px rhythm
+  // from `sm` up where a pointer is doing the aiming.
+  className = "h-11 w-full sm:h-10",
 ): string {
   if (variant === "marketing") {
     return emphasised

@@ -53,7 +53,9 @@ function StatusChip({
       onClick={onSelect}
       aria-pressed={selected}
       className={cn(
-        "inline-flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium whitespace-nowrap transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50",
+        // `shrink-0`: below `sm` the chips live in a scroll strip rather than wrapping, and a
+        // squashed "Cancelled" is worse than one you scroll to.
+        "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium whitespace-nowrap transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 sm:h-7",
         selected
           ? "border-border bg-muted text-foreground"
           : "border-transparent text-muted-foreground hover:bg-muted/50 hover:text-foreground",
@@ -87,7 +89,14 @@ export function RunFiltersRow({
 
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
-      <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Filter by status">
+      {/* One line that scrolls on a phone, a wrapping group from `sm` up: the chips are the fastest
+          way to "show me the failures", so they stay on the first line rather than pushing the
+          table down three rows. */}
+      <div
+        className="-mx-1 flex w-full items-center gap-1 overflow-x-auto px-1 pb-1 sm:mx-0 sm:w-auto sm:flex-wrap sm:overflow-x-visible sm:px-0 sm:pb-0"
+        role="group"
+        aria-label="Filter by status"
+      >
         <StatusChip
           status={ANY}
           count={counts[ANY] ?? 0}
@@ -105,7 +114,7 @@ export function RunFiltersRow({
         ))}
       </div>
 
-      <div className="flex flex-1 flex-wrap items-center justify-end gap-2">
+      <div className="flex flex-1 flex-wrap items-center gap-2 sm:justify-end">
         {workflows && workflows.length > 0 ? (
           <Select
             value={filters.workflow}
@@ -113,7 +122,11 @@ export function RunFiltersRow({
               if (typeof next === "string") onChange({ ...filters, workflow: next });
             }}
           >
-            <SelectTrigger size="sm" className="max-w-52 min-w-0" aria-label="Filter by workflow">
+            <SelectTrigger
+              size="sm"
+              className="h-9 w-full min-w-0 sm:h-7 sm:w-auto sm:max-w-52"
+              aria-label="Filter by workflow"
+            >
               <SelectValue>
                 {(current: unknown) => (
                   <span className="truncate">
@@ -142,7 +155,11 @@ export function RunFiltersRow({
               if (typeof next === "string") onChange({ ...filters, trigger: next });
             }}
           >
-            <SelectTrigger size="sm" className="min-w-0" aria-label="Filter by trigger">
+            <SelectTrigger
+              size="sm"
+              className="h-9 w-full min-w-0 sm:h-7 sm:w-auto"
+              aria-label="Filter by trigger"
+            >
               <SelectValue>
                 {(current: unknown) => (
                   <span className="truncate">
@@ -178,13 +195,18 @@ export function RunFiltersRow({
             value={filters.text}
             aria-label="Search runs by workflow or error"
             placeholder="Search name or error…"
-            className="h-7 pl-7 text-sm"
+            className="h-9 pl-7 text-sm sm:h-7"
             onChange={(event) => onChange({ ...filters, text: event.target.value })}
           />
         </div>
 
         {active ? (
-          <Button variant="ghost" size="sm" onClick={() => onChange(NO_FILTERS)}>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-9 sm:h-7"
+            onClick={() => onChange(NO_FILTERS)}
+          >
             <XIcon />
             Clear
           </Button>

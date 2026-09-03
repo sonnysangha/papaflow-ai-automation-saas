@@ -7,6 +7,7 @@ import { CurrentPlanCard } from "@/components/billing/CurrentPlanCard";
 import { PlanCards } from "@/components/billing/PlanCards";
 import { UpgradedNotice } from "@/components/billing/UpgradedNotice";
 import { buttonVariants } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = {
   title: "Billing",
@@ -29,17 +30,25 @@ export const metadata: Metadata = {
 export default function BillingPage() {
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 p-6">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex flex-col gap-1">
+      {/* On a phone "Back to settings" reads as an up-link above the title rather than a button
+          stranded under two lines of prose; from `sm` up it goes back to the right of the row. */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+        <Link
+          href="/settings"
+          className={cn(
+            buttonVariants({ variant: "outline", size: "sm" }),
+            "self-start sm:order-2",
+          )}
+        >
+          <ArrowLeftIcon />
+          Back to settings
+        </Link>
+        <div className="flex flex-col gap-1 sm:order-1">
           <h1 className="text-xl font-semibold tracking-tight">Plans</h1>
           <p className="text-sm text-muted-foreground">
             Plans apply to the whole organisation, and everyone in it gets the features.
           </p>
         </div>
-        <Link href="/settings" className={buttonVariants({ variant: "outline", size: "sm" })}>
-          <ArrowLeftIcon />
-          Back to settings
-        </Link>
       </div>
 
       {/* `?upgraded=1` comes back from a checkout that started on the public pricing page. */}

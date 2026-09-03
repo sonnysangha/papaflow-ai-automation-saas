@@ -10,6 +10,7 @@ import {
   LayoutTemplateIcon,
   MoreHorizontalIcon,
   PencilIcon,
+  PlusIcon,
   SearchIcon,
   SquarePenIcon,
   Trash2Icon,
@@ -18,7 +19,7 @@ import {
 import { toast } from "sonner";
 
 import { api } from "@/convex/_generated/api";
-import { RunStatusDot, RUN_STATUS_TONE, WorkflowStatusPill } from "@/components/shared/status";
+import { RunStatusDot, WorkflowStatusPill } from "@/components/shared/status";
 import { TriggerChip } from "@/components/shared/TriggerChip";
 import {
   AlertDialog,
@@ -60,17 +61,16 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 
 import { NewWorkflowDialog, PlanWall } from "./NewWorkflowDialog";
 import { TemplateGallery } from "./TemplateDialog";
 import { reportWorkflowError } from "./errors";
-import { formatAbsoluteTime, formatRelativeTime } from "./relative-time";
+import { FULL_WIDTH_DIALOG } from "./mobile-dialog";
+import { workflowRowView, type WorkflowRowView } from "./row-view";
 import { useCreateWorkflow } from "./use-create-workflow";
 import {
-  activityCaption,
   filterWorkflows,
-  formatRunDuration,
-  nextRunLabel,
   statusCounts,
   WORKFLOW_FILTERS,
   type WorkflowStatusFilter,
@@ -126,13 +126,20 @@ export function WorkflowList() {
             <NewWorkflowDialog
               defaultTab="template"
               trigger={
-                <Button variant="outline">
+                <Button variant="outline" className="h-10 flex-1 sm:h-8 sm:flex-none">
                   <LayoutTemplateIcon />
                   Browse templates
                 </Button>
               }
             />
-            <NewWorkflowDialog />
+            <NewWorkflowDialog
+              trigger={
+                <Button className="h-10 flex-1 sm:h-8 sm:flex-none">
+                  <PlusIcon />
+                  New workflow
+                </Button>
+              }
+            />
           </>
         }
       />
@@ -154,6 +161,7 @@ export function WorkflowList() {
           <Button
             variant="outline"
             size="sm"
+            className="h-9 sm:h-7"
             onClick={() => {
               setQuery("");
               setStatus("all");
@@ -163,26 +171,14 @@ export function WorkflowList() {
           </Button>
         </div>
       ) : (
-        <div className="overflow-hidden rounded-xl border border-border">
-          <Table>
-            <TableHeader>
-              <TableRow className="hover:bg-transparent">
-                <TableHead className="px-4">Name</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="hidden md:table-cell">Last run</TableHead>
-                <TableHead className="hidden lg:table-cell">Activity</TableHead>
-                <TableHead className="hidden lg:table-cell">Updated</TableHead>
-                <TableHead className="w-12 px-4">
-                  <span className="sr-only">Actions</span>
-                </TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {visible.map((workflow) => (
-                <WorkflowRow
-                  key={workflow._id}
+        <>
+          {/* Below `md` the five columns unfold into a stack of cards. Same rows, same view model —
+              only the arrangement differs. */}
+          <ul className="flex flex-col gap-2 md:hidden" aria-label="Workflows">
+            {visible.map((workflow) => (
+              <li key={workflow._id}>
+                <WorkflowCard
                   workflow={workflow}
-                  onOpen={() => router.push(`/w/${workflow._id}`)}
                   onRename={() => {
                     setRenameTarget(workflow);
                     setRenameOpen(true);
@@ -192,10 +188,44 @@ export function WorkflowList() {
                     setDeleteOpen(true);
                   }}
                 />
-              ))}
-            </TableBody>
-          </Table>
-        </div>
+              </li>
+            ))}
+          </ul>
+
+          <div className="hidden overflow-hidden rounded-xl border border-border md:block">
+            <Table>
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead className="px-4">Name</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="hidden md:table-cell">Last run</TableHead>
+                  <TableHead className="hidden lg:table-cell">Activity</TableHead>
+                  <TableHead className="hidden lg:table-cell">Updated</TableHead>
+                  <TableHead className="w-12 px-4">
+                    <span className="sr-only">Actions</span>
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {visible.map((workflow) => (
+                  <WorkflowRow
+                    key={workflow._id}
+                    workflow={workflow}
+                    onOpen={() => router.push(`/w/${workflow._id}`)}
+                    onRename={() => {
+                      setRenameTarget(workflow);
+                      setRenameOpen(true);
+                    }}
+                    onDelete={() => {
+                      setDeleteTarget(workflow);
+                      setDeleteOpen(true);
+                    }}
+                  />
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </>
       )}
 
       {filtered && visible.length > 0 ? (
@@ -269,10 +299,12 @@ export function WorkflowToolbar({
           />
         </div>
 
+        {/* Scrolls rather than wraps on a phone: four chips at 40px would otherwise take two lines
+            and push the list below the fold. */}
         <div
           role="group"
           aria-label="Filter by status"
-          className="flex items-center gap-0.5 rounded-lg border border-border bg-card p-0.5"
+          className="flex max-w-full items-center gap-0.5 overflow-x-auto rounded-lg border border-border bg-card p-0.5"
         >
           {WORKFLOW_FILTERS.map((filter) => {
             const active = filter.value === status;
@@ -281,6 +313,7 @@ export function WorkflowToolbar({
                 key={filter.value}
                 type="button"
                 size="sm"
+                className="h-8 sm:h-7"
                 variant={active ? "secondary" : "ghost"}
                 aria-pressed={active}
                 disabled={loading}
@@ -302,7 +335,9 @@ export function WorkflowToolbar({
         )}
       </div>
 
-      {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
+      {actions ? (
+        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">{actions}</div>
+      ) : null}
     </div>
   );
 }
@@ -312,6 +347,91 @@ function onOwnControl(target: EventTarget | null): boolean {
   return target instanceof Element && target.closest("a, button, [role='menuitem']") !== null;
 }
 
+type RowActions = {
+  workflow: Workflow;
+  /** The clock the row reads ages against. Left out in the app; pinned by the tests. */
+  now?: number;
+  onOpen: () => void;
+  onRename: () => void;
+  onDelete: () => void;
+};
+
+/** The name, the trigger chip and the schedule countdown — the row's first line, on both layouts. */
+function WorkflowTitle({
+  workflow,
+  view,
+  className,
+}: {
+  workflow: Workflow;
+  view: WorkflowRowView;
+  className?: string;
+}) {
+  return (
+    <>
+      <Link
+        href={view.href}
+        className={cn(
+          "block truncate font-medium underline-offset-4 outline-none hover:underline focus-visible:underline",
+          className,
+        )}
+      >
+        {workflow.name}
+      </Link>
+      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+        <TriggerChip type={workflow.triggerNodeType} />
+        {view.schedule ? (
+          <span className="font-mono text-xs text-muted-foreground" title={view.schedule.cron}>
+            {view.schedule.label}
+          </span>
+        ) : null}
+      </div>
+    </>
+  );
+}
+
+/** The strip of recent runs, oldest on the left, with the week's count under it. */
+function ActivityStrip({ view }: { view: WorkflowRowView }) {
+  if (view.recentRuns.length === 0) {
+    return <span className="text-xs text-muted-foreground">No runs yet</span>;
+  }
+
+  return (
+    <>
+      <span className="flex items-center gap-1">
+        {view.recentRuns.map((run, index) => (
+          <RunStatusDot key={`${run.title}-${index}`} status={run.status} title={run.title} />
+        ))}
+      </span>
+      <span className="mt-1 block text-xs text-muted-foreground tabular-nums">{view.activity}</span>
+    </>
+  );
+}
+
+/** "2 hours ago · 2.4s", linked to this workflow's history. */
+function LastRunLink({ view, className }: { view: WorkflowRowView; className?: string }) {
+  if (!view.lastRun) return <span className="text-muted-foreground">Never run</span>;
+
+  return (
+    <Link
+      href={view.runsHref}
+      className={cn("group/run inline-flex flex-col gap-0.5 outline-none", className)}
+    >
+      <span className="inline-flex items-center gap-1.5">
+        <RunStatusDot status={view.lastRun.status} title={view.lastRun.title} />
+        <span
+          className="text-muted-foreground underline-offset-4 group-hover/run:text-foreground group-hover/run:underline group-focus-visible/run:underline"
+          title={view.lastRun.title}
+        >
+          {view.lastRun.relative}
+        </span>
+      </span>
+      {view.lastRun.duration ? (
+        <span className="font-mono text-xs text-muted-foreground">{view.lastRun.duration}</span>
+      ) : null}
+    </Link>
+  );
+}
+
 /**
  * One workflow: what it is, whether it is live, how its last run went and how busy it has been.
  *
@@ -319,22 +439,8 @@ function onOwnControl(target: EventTarget | null): boolean {
  * its own — the name is a link to the canvas, the last run is a link to the history, the menu holds
  * the rest — so a keyboard never depends on the row's own click.
  */
-export function WorkflowRow({
-  workflow,
-  now,
-  onOpen,
-  onRename,
-  onDelete,
-}: {
-  workflow: Workflow;
-  /** The clock the row reads ages against. Left out in the app; pinned by the tests. */
-  now?: number;
-  onOpen: () => void;
-  onRename: () => void;
-  onDelete: () => void;
-}) {
-  const { lastRun, recentRuns, schedule } = workflow;
-  const duration = lastRun ? formatRunDuration(lastRun.startedAt, lastRun.finishedAt) : null;
+export function WorkflowRow({ workflow, now, onOpen, onRename, onDelete }: RowActions) {
+  const view = workflowRowView(workflow, now);
 
   return (
     <TableRow
@@ -347,20 +453,7 @@ export function WorkflowRow({
       {/* `w-full max-w-0` is the truncation trick: the name column absorbs the slack the other
           columns leave, and the link inside it clips rather than widening the table. */}
       <TableCell className="w-full max-w-0 px-4 py-3 align-top whitespace-normal">
-        <Link
-          href={`/w/${workflow._id}`}
-          className="block truncate font-medium underline-offset-4 outline-none hover:underline focus-visible:underline"
-        >
-          {workflow.name}
-        </Link>
-        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-          <TriggerChip type={workflow.triggerNodeType} />
-          {schedule ? (
-            <span className="font-mono text-xs text-muted-foreground" title={schedule.cron}>
-              {nextRunLabel(schedule, now)}
-            </span>
-          ) : null}
-        </div>
+        <WorkflowTitle workflow={workflow} view={view} />
       </TableCell>
 
       <TableCell className="py-3 align-top">
@@ -368,59 +461,18 @@ export function WorkflowRow({
       </TableCell>
 
       <TableCell className="hidden py-3 align-top md:table-cell">
-        {lastRun ? (
-          <Link
-            href={`/w/${workflow._id}/runs`}
-            className="group/run inline-flex flex-col gap-0.5 outline-none"
-          >
-            <span className="inline-flex items-center gap-1.5">
-              <RunStatusDot
-                status={lastRun.status}
-                title={`${RUN_STATUS_TONE[lastRun.status].label} · ${formatAbsoluteTime(lastRun.startedAt)}`}
-              />
-              <span
-                className="text-muted-foreground underline-offset-4 group-hover/run:text-foreground group-hover/run:underline group-focus-visible/run:underline"
-                title={formatAbsoluteTime(lastRun.startedAt)}
-              >
-                {formatRelativeTime(lastRun.startedAt, now)}
-              </span>
-            </span>
-            {duration ? (
-              <span className="font-mono text-xs text-muted-foreground">{duration}</span>
-            ) : null}
-          </Link>
-        ) : (
-          <span className="text-muted-foreground">Never run</span>
-        )}
+        <LastRunLink view={view} />
       </TableCell>
 
       <TableCell className="hidden py-3 align-top lg:table-cell">
-        {recentRuns.length > 0 ? (
-          <>
-            {/* Oldest on the left, so the strip reads forwards in time like everything else. */}
-            <span className="flex items-center gap-1">
-              {[...recentRuns].reverse().map((run, index) => (
-                <RunStatusDot
-                  key={`${run.startedAt}-${index}`}
-                  status={run.status}
-                  title={`${RUN_STATUS_TONE[run.status].label} · ${formatAbsoluteTime(run.startedAt)}`}
-                />
-              ))}
-            </span>
-            <span className="mt-1 block text-xs text-muted-foreground tabular-nums">
-              {activityCaption(workflow.runCount7d)}
-            </span>
-          </>
-        ) : (
-          <span className="text-xs text-muted-foreground">No runs yet</span>
-        )}
+        <ActivityStrip view={view} />
       </TableCell>
 
       <TableCell
         className="hidden py-3 align-top text-xs text-muted-foreground lg:table-cell"
-        title={formatAbsoluteTime(workflow.updatedAt)}
+        title={view.updatedTitle}
       >
-        {formatRelativeTime(workflow.updatedAt, now)}
+        {view.updated}
       </TableCell>
 
       <TableCell className="px-4 py-3 text-right align-top">
@@ -429,7 +481,7 @@ export function WorkflowRow({
             <TooltipTrigger
               render={
                 <DropdownMenuTrigger
-                  render={<Button variant="ghost" size="icon-sm" aria-label={`Actions for ${workflow.name}`} />}
+                  render={<Button variant="ghost" size="icon-sm" aria-label={view.menuLabel} />}
                 />
               }
             >
@@ -438,28 +490,94 @@ export function WorkflowRow({
             <TooltipContent>Actions</TooltipContent>
           </Tooltip>
 
-          <DropdownMenuContent align="end" className="min-w-40">
-            <DropdownMenuItem render={<Link href={`/w/${workflow._id}`} />}>
-              <SquarePenIcon />
-              Open
-            </DropdownMenuItem>
-            <DropdownMenuItem render={<Link href={`/w/${workflow._id}/runs`} />}>
-              <HistoryIcon />
-              View runs
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={onRename}>
-              <PencilIcon />
-              Rename
-            </DropdownMenuItem>
-            <DropdownMenuItem variant="destructive" onClick={onDelete}>
-              <Trash2Icon />
-              Delete
-            </DropdownMenuItem>
-          </DropdownMenuContent>
+          <RowMenuItems view={view} onRename={onRename} onDelete={onDelete} />
         </DropdownMenu>
       </TableCell>
     </TableRow>
+  );
+}
+
+/** The four actions, shared by the table row's menu and the card's. */
+function RowMenuItems({
+  view,
+  onRename,
+  onDelete,
+}: {
+  view: WorkflowRowView;
+  onRename: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <DropdownMenuContent align="end" className="min-w-40">
+      <DropdownMenuItem render={<Link href={view.href} />}>
+        <SquarePenIcon />
+        Open
+      </DropdownMenuItem>
+      <DropdownMenuItem render={<Link href={view.runsHref} />}>
+        <HistoryIcon />
+        View runs
+      </DropdownMenuItem>
+      <DropdownMenuSeparator />
+      <DropdownMenuItem onClick={onRename}>
+        <PencilIcon />
+        Rename
+      </DropdownMenuItem>
+      <DropdownMenuItem variant="destructive" onClick={onDelete}>
+        <Trash2Icon />
+        Delete
+      </DropdownMenuItem>
+    </DropdownMenuContent>
+  );
+}
+
+/**
+ * The same workflow as a block, for a phone.
+ *
+ * Five columns will not fit 390px, so the row unfolds: name and trigger on top, the status pill and
+ * the last run underneath, the activity strip and the age last. The menu keeps its corner, and
+ * every link the table row has is still a link here — the card itself is not clickable, because on
+ * a touch screen a whole-card tap target that sits under three real links is a coin toss.
+ */
+export function WorkflowCard({ workflow, now, onRename, onDelete }: Omit<RowActions, "onOpen">) {
+  const view = workflowRowView(workflow, now);
+
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-border bg-card p-3">
+      <div className="flex items-start gap-2">
+        <div className="min-w-0 flex-1">
+          <WorkflowTitle workflow={workflow} view={view} />
+        </div>
+
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={view.menuLabel}
+                // A 32px button with a 44px reach, which is what a thumb actually needs.
+                className="relative -mt-1 shrink-0 after:absolute after:-inset-1.5 after:content-['']"
+              />
+            }
+          >
+            <MoreHorizontalIcon />
+          </DropdownMenuTrigger>
+          <RowMenuItems view={view} onRename={onRename} onDelete={onDelete} />
+        </DropdownMenu>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm">
+        <WorkflowStatusPill status={workflow.status} />
+        <LastRunLink view={view} />
+      </div>
+
+      <div className="flex flex-wrap items-end justify-between gap-x-3 gap-y-1">
+        <ActivityStrip view={view} />
+        <span className="text-xs text-muted-foreground" title={view.updatedTitle}>
+          {view.updated}
+        </span>
+      </div>
+    </div>
   );
 }
 
@@ -568,7 +686,7 @@ function RenameWorkflowDialog({
         if (!isOpen) onClosed();
       }}
     >
-      <DialogContent>
+      <DialogContent className={FULL_WIDTH_DIALOG}>
         <form onSubmit={onSubmit} className="grid gap-4">
           <DialogHeader>
             <DialogTitle>Rename workflow</DialogTitle>
@@ -639,7 +757,7 @@ function DeleteWorkflowDialog({
         if (!isOpen) onClosed();
       }}
     >
-      <AlertDialogContent>
+      <AlertDialogContent className={FULL_WIDTH_DIALOG}>
         <AlertDialogHeader>
           <AlertDialogMedia>
             <Trash2Icon className="text-destructive" />

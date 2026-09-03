@@ -234,13 +234,19 @@ export function PlanCards({ variant, redirectUrl }: PlanCardsProps) {
   return (
     <div className="flex flex-col gap-8">
       <div className="flex items-center gap-3">
+        {/* The switch itself stays 32×18 — its own design — inside a 44px reach, so a thumb has
+            something to hit without the control looking oversized. */}
         <Switch
           id={toggleId}
           checked={annual}
           onCheckedChange={(checked) => setPeriod(checked ? "annual" : "month")}
           aria-describedby={saving === null ? undefined : `${toggleId}-saving`}
+          className="relative after:absolute after:-inset-3 after:content-[''] sm:after:hidden"
         />
-        <label htmlFor={toggleId} className="text-sm font-medium select-none">
+        <label
+          htmlFor={toggleId}
+          className="flex min-h-11 items-center text-sm font-medium select-none sm:min-h-0"
+        >
           Bill yearly
         </label>
         {saving === null ? null : (

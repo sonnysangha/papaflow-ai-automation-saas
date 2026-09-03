@@ -1,7 +1,12 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { WorkflowRow, WorkflowToolbar, type Workflow } from "@/components/workflows/WorkflowList";
+import {
+  WorkflowCard,
+  WorkflowRow,
+  WorkflowToolbar,
+  type Workflow,
+} from "@/components/workflows/WorkflowList";
 import {
   activityCaption,
   filterWorkflows,
@@ -259,6 +264,72 @@ describe("WorkflowRow", () => {
     const cancelled = html.indexOf('aria-label="Cancelled');
     const completed = html.indexOf('aria-label="Completed');
     const failed = html.lastIndexOf('aria-label="Failed');
+
+    expect(cancelled).toBeGreaterThan(-1);
+    expect(cancelled).toBeLessThan(completed);
+    expect(completed).toBeLessThan(failed);
+  });
+});
+
+/**
+ * The phone layout of the same workflow. Both are markup over `workflowRowView`, so the card is
+ * checked against the row's own claims rather than against a second list of expectations.
+ */
+describe("WorkflowCard", () => {
+  const renderCard = (row: Workflow) =>
+    renderToStaticMarkup(
+      <WorkflowCard workflow={row} now={NOW} onRename={() => {}} onDelete={() => {}} />,
+    );
+
+  it("makes every claim the table row makes", () => {
+    const row = renderRow(workflow());
+    const card = renderCard(workflow());
+
+    for (const claim of [
+      "Support autopilot",
+      "Telegram",
+      "Published",
+      "Failed",
+      "2.4s",
+      "2 runs · 7d",
+      'href="/w/wf_1"',
+      'href="/w/wf_1/runs"',
+      "Actions for Support autopilot",
+    ]) {
+      expect(row).toContain(claim);
+      expect(card).toContain(claim);
+    }
+  });
+
+  it("says so plainly when a workflow has never run", () => {
+    const card = renderCard(workflow({ lastRun: null, recentRuns: [], runCount7d: 0 }));
+
+    expect(card).toContain("Never run");
+    expect(card).toContain("No runs yet");
+    expect(card).not.toContain("runs · 7d");
+  });
+
+  it("puts the next occurrence under the name of a scheduled workflow", () => {
+    const card = renderCard(workflow({ schedule: { cron: "0 9 * * *", nextAt: NOW + 2 * HOUR } }));
+
+    expect(card).toContain("Next run in 2h");
+    expect(card).toContain("0 9 * * *");
+  });
+
+  it("draws the activity strip oldest first, exactly as the row does", () => {
+    const row = workflow({
+      recentRuns: [
+        { status: "failed", startedAt: NOW - 5 * MINUTE, finishedAt: NOW - 5 * MINUTE + 900 },
+        { status: "completed", startedAt: NOW - 3 * HOUR, finishedAt: NOW - 3 * HOUR + 900 },
+        { status: "cancelled", startedAt: NOW - 9 * HOUR, finishedAt: undefined },
+      ],
+      runCount7d: 3,
+    });
+    const card = renderCard(row);
+
+    const cancelled = card.indexOf('aria-label="Cancelled');
+    const completed = card.indexOf('aria-label="Completed');
+    const failed = card.lastIndexOf('aria-label="Failed');
 
     expect(cancelled).toBeGreaterThan(-1);
     expect(cancelled).toBeLessThan(completed);

@@ -24,8 +24,10 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { connectorCatalogue, type ConnectorCatalogueEntry } from "@/connectors/registry";
+import { FULL_SCREEN_DIALOG } from "@/components/workflows/mobile-dialog";
 import { api } from "@/convex/_generated/api";
 import { featureLabel } from "@/lib/plans";
+import { cn } from "@/lib/utils";
 
 import { ConnectorSetupSection } from "./ConnectorSetup";
 import { ProviderPicker } from "./ProviderPicker";
@@ -135,34 +137,43 @@ export function AddConnectionDialog({
         </DialogTrigger>
       )}
 
-      <DialogContent className="sm:max-w-md">
-        {definition ? (
-          // Layer one of the plan gate (CLAUDE.md rule 3), read straight from the Clerk session
-          // token rather than from anything this app stores. A connector with no `requiresFeature`
-          // skips it entirely, so the common case never waits on `<Show>` resolving. The real
-          // refusal is `has()` inside `POST /api/connections`.
-          definition.requiresFeature ? (
-            <Show
-              when={{ feature: `org:${definition.requiresFeature}` }}
-              fallback={<ProviderWall entry={definition} onBack={onBack} />}
-            >
-              {form}
-            </Show>
-          ) : (
-            form
-          )
-        ) : (
-          <>
-            <DialogHeader>
-              <DialogTitle>Add connection</DialogTitle>
-              <DialogDescription>
-                Pick the app to connect. You bring your own API keys — they are encrypted before
-                they are stored.
-              </DialogDescription>
-            </DialogHeader>
-            <ProviderPicker entries={entries} onSelect={setPicked} />
-          </>
+      <DialogContent
+        className={cn(
+          FULL_SCREEN_DIALOG,
+          "max-sm:grid-rows-[minmax(0,1fr)] max-sm:overflow-hidden sm:max-w-md",
         )}
+      >
+        {/* One scrolling region below `sm`, so the close button — absolute on the popup — stays put
+            while a long form (Slack's manifest, six fields and a footer) scrolls under it. */}
+        <div className="flex min-h-0 min-w-0 flex-col gap-4 max-sm:overflow-y-auto">
+          {definition ? (
+            // Layer one of the plan gate (CLAUDE.md rule 3), read straight from the Clerk session
+            // token rather than from anything this app stores. A connector with no `requiresFeature`
+            // skips it entirely, so the common case never waits on `<Show>` resolving. The real
+            // refusal is `has()` inside `POST /api/connections`.
+            definition.requiresFeature ? (
+              <Show
+                when={{ feature: `org:${definition.requiresFeature}` }}
+                fallback={<ProviderWall entry={definition} onBack={onBack} />}
+              >
+                {form}
+              </Show>
+            ) : (
+              form
+            )
+          ) : (
+            <>
+              <DialogHeader className="min-w-0 pr-8">
+                <DialogTitle>Add connection</DialogTitle>
+                <DialogDescription>
+                  Pick the app to connect. You bring your own API keys — they are encrypted before
+                  they are stored.
+                </DialogDescription>
+              </DialogHeader>
+              <ProviderPicker entries={entries} onSelect={setPicked} />
+            </>
+          )}
+        </div>
       </DialogContent>
     </Dialog>
   );
@@ -181,8 +192,8 @@ function ProviderWall({
   onBack?: () => void;
 }) {
   return (
-    <div className="grid gap-4">
-      <DialogHeader>
+    <div className="grid gap-4 max-sm:flex max-sm:min-h-full max-sm:flex-col">
+      <DialogHeader className="min-w-0 pr-8">
         <DialogTitle className="flex items-center gap-2">
           <NodeIcon name={entry.icon} className="size-4 shrink-0 text-muted-foreground" />
           Connect {entry.name}
@@ -196,7 +207,7 @@ function ProviderWall({
 
       <UpgradeCard feature={entry.requiresFeature ?? undefined} />
 
-      <DialogFooter>
+      <DialogFooter className="max-sm:mt-auto">
         {onBack ? (
           <Button type="button" variant="outline" onClick={onBack}>
             <ArrowLeftIcon />
@@ -271,8 +282,8 @@ function ConnectionForm({
   }
 
   return (
-    <form onSubmit={onSubmit} className="grid gap-4">
-      <DialogHeader>
+    <form onSubmit={onSubmit} className="grid gap-4 max-sm:flex max-sm:min-h-full max-sm:flex-col">
+      <DialogHeader className="min-w-0 pr-8">
         <DialogTitle className="flex items-center gap-2">
           <NodeIcon name={entry.icon} className="size-4 shrink-0 text-muted-foreground" />
           Connect {entry.name}
@@ -371,7 +382,7 @@ function ConnectionForm({
         </p>
       )}
 
-      <DialogFooter>
+      <DialogFooter className="max-sm:mt-auto">
         {onBack ? (
           <Button type="button" variant="outline" disabled={pending} onClick={onBack}>
             <ArrowLeftIcon />

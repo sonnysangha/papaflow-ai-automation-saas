@@ -94,14 +94,17 @@ export function Header() {
 
   return (
     <header className="sticky top-0 z-40 border-b border-border bg-background">
-      <div className="flex h-14 items-center gap-3 px-4">
+      {/* Tight at 320px on purpose: the trigger, the wordmark and Clerk's two widgets have to share
+          one row, so the gaps and the page padding both grow only from `sm` up. */}
+      <div className="flex h-14 items-center gap-2 px-3 sm:gap-3 sm:px-4">
         <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
           <SheetTrigger
             render={
               <Button
                 variant="ghost"
                 size="icon-sm"
-                className="sm:hidden"
+                // A 28px button with a 44px reach.
+                className="relative shrink-0 after:absolute after:-inset-2 after:content-[''] sm:hidden"
                 aria-label="Open the main menu"
               />
             }
@@ -118,25 +121,36 @@ export function Header() {
               className="flex flex-col gap-1 px-4 text-sm"
               itemClassName="px-3 py-2"
             />
+            {/* The header row has no width left for it at 320px, so the toggle lives here instead
+                — still one tap from anywhere, and never the thing that pushes the org switcher
+                off the screen. */}
+            <div className="mt-2 flex items-center gap-2 px-4 text-sm text-muted-foreground">
+              <ThemeToggle />
+              Theme
+            </div>
           </SheetContent>
         </Sheet>
 
         <Link
           href="/w"
-          className="rounded-md px-1 text-sm font-semibold tracking-tight text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          className="shrink-0 rounded-md px-1 text-sm font-semibold tracking-tight text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
         >
           PapaFlow
         </Link>
 
         <NavLinks pathname={pathname} className="hidden items-center gap-1 text-sm sm:flex" />
 
-        <div className="ml-auto flex items-center gap-3">
-          <ThemeToggle />
-          <OrganizationSwitcher
-            hidePersonal
-            afterSelectOrganizationUrl="/w"
-            afterCreateOrganizationUrl="/w"
-          />
+        <div className="ml-auto flex min-w-0 items-center gap-2 sm:gap-3">
+          <ThemeToggle className="hidden sm:inline-flex" />
+          {/* Clerk renders the org name in here; letting it shrink is what keeps the user button
+              on screen at 320px. */}
+          <div className="min-w-0 overflow-hidden">
+            <OrganizationSwitcher
+              hidePersonal
+              afterSelectOrganizationUrl="/w"
+              afterCreateOrganizationUrl="/w"
+            />
+          </div>
           <UserButton />
         </div>
       </div>

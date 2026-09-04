@@ -4,7 +4,8 @@
 > everything below the horizontal rule as the first message. It is self-contained: it does not
 > assume access to the original repository. Where it says "verbatim", copy the block exactly.
 > Expect the full build to take a long session with many phases; the prompt tells the agent
-> where it must stop and wait for you.
+> where it must stop and wait for you. A two-paragraph version lives in
+> [`REBUILD-PROMPT-SHORT.md`](REBUILD-PROMPT-SHORT.md).
 
 ---
 
